@@ -2,6 +2,7 @@ licenses(["notice"])  # Apache 2
 
 load(
     "//bazel:envoy_build_system.bzl",
+    "envoy_cc_binary",
     "envoy_cc_test",
     "envoy_package",
 )
@@ -14,6 +15,18 @@ envoy_cc_test(
     deps = [
         "//source/common/stats:stats_lib",
         "//test/test_common:utility_lib",
+    ],
+)
+
+# This is broken out as a separate library because envoy_cc_binary does
+# not allow for external_deps.
+envoy_cc_binary(
+    name = "stats_speed_test",
+    srcs = ["stats_speed_test.cc"],
+    external_deps = ["benchmark"],
+    deps = [
+        "//source/common/common:utility_lib",
+        "//source/common/stats:stats_lib",
     ],
 )
 
