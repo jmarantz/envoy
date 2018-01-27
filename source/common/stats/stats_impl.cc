@@ -11,6 +11,10 @@
 #include "common/common/utility.h"
 #include "common/config/well_known_names.h"
 
+#include "absl/strings/ascii.h"
+#include "absl/strings/match.h"
+#include "absl/strings/string_view.h"
+
 namespace Envoy {
 namespace Stats {
 
@@ -62,7 +66,22 @@ std::string Utility::sanitizeStatsName(const std::string& name) {
 }
 
 TagExtractorImpl::TagExtractorImpl(const std::string& name, const std::string& regex)
-    : name_(name), regex_(RegexUtil::parseRegex(regex)) {}
+    : name_(name), prefix_(std::string(extractRegexPrefix(regex))),
+      regex_(RegexUtil::parseRegex(regex)) {
+}
+
+absl::string_view TagExtractorImpl::extractRegexPrefix(absl::string_view regex) {
+  absl::string_view::size_type start_pos = absl::StartsWith(regex, "^") ? 1 : 0;
+  for (absl::string_view::size_type i = start_pos; i < regex.size(); ++i) {
+    if (!absl::ascii_isalnum(regex[i]) && (regex[i] != '_')) {
+      if (i > start_pos) {
+        return regex.substr(0, i);
+      }
+      break;
+    }
+  }
+  return absl::string_view(nullptr, 0);
+}
 
 TagExtractorPtr TagExtractorImpl::createTagExtractor(const std::string& name,
                                                      const std::string& regex) {
@@ -91,6 +110,16 @@ TagExtractorPtr TagExtractorImpl::createTagExtractor(const std::string& name,
 
 std::string TagExtractorImpl::extractTag(const std::string& tag_extracted_name,
                                          std::vector<Tag>& tags) const {
+  if (!prefix_.empty()) {
+    if (prefix_[0] == '^') {
+      if (!absl::StartsWith(tag_extracted_name, prefix_.substr(1))) {
+        return tag_extracted_name;
+      }
+    } else if (absl::string_view(tag_extracted_name).find(prefix_) == absl::string_view::npos) {
+      return tag_extracted_name;
+    }
+  }
+
   std::smatch match;
   // The regex must match and contain one or more subexpressions (all after the first are ignored).
   if (std::regex_search(tag_extracted_name, match, regex_) && match.size() > 1) {
@@ -154,6 +183,7 @@ std::string TagProducerImpl::produceTags(const std::string& name, std::vector<Ta
 
   std::string tag_extracted_name = name;
   for (const TagExtractorPtr& tag_extractor : tag_extractors_) {
+
     tag_extracted_name = tag_extractor->extractTag(tag_extracted_name, tags);
   }
   return tag_extracted_name;

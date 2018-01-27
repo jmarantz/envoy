@@ -40,9 +40,11 @@ public:
   std::string name() const override { return name_; }
   std::string extractTag(const std::string& tag_extracted_name,
                          std::vector<Tag>& tags) const override;
+  static absl::string_view extractRegexPrefix(absl::string_view regex);
 
 private:
   const std::string name_;
+  const std::string prefix_;
   const std::regex regex_;
 };
 
