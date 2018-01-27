@@ -367,6 +367,14 @@ TEST(TagExtractorTest, DefaultTagExtractors) {
                          {fault_connection_manager, fault_downstream_cluster});
 }
 
+TEST(TagExtractorTest, ExtractRegexPrefix) {
+  EXPECT_EQ("^prefix", TagExtractorImpl::extractRegexPrefix("^prefix(foo"));
+  EXPECT_EQ("^prefix", TagExtractorImpl::extractRegexPrefix("^prefix\\.foo"));
+  EXPECT_EQ("", TagExtractorImpl::extractRegexPrefix("(prefix"));
+  EXPECT_EQ("", TagExtractorImpl::extractRegexPrefix("^(prefix"));
+  EXPECT_EQ("prefix", TagExtractorImpl::extractRegexPrefix("prefix(foo"));
+}
+
 TEST(TagProducerTest, CheckConstructor) {
   envoy::api::v2::StatsConfig stats_config;
 
