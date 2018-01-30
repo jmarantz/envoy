@@ -86,6 +86,8 @@ int main_common(OptionsImpl& options) {
   try {
     Server::InstanceImpl server(options, local_address, default_test_hooks, *restarter, stats_store,
                                 access_log_lock, component_factory, tls);
+    Stats::DumpRegexStats();
+    //exit(0);
     server.run();
   } catch (const EnvoyException& e) {
     ares_library_cleanup();

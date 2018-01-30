@@ -25,6 +25,8 @@
 namespace Envoy {
 namespace Stats {
 
+void DumpRegexStats();
+
 class TagExtractorImpl : public TagExtractor {
 public:
   /**
@@ -41,6 +43,8 @@ public:
   std::string extractTag(const std::string& tag_extracted_name,
                          std::vector<Tag>& tags) const override;
   static absl::string_view extractRegexPrefix(absl::string_view regex);
+
+  void Dump();
 
 private:
   const std::string name_;

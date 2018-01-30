@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <chrono>
+#include <string>
 
 #include "envoy/config/metrics/v2/stats.pb.h"
 #include "envoy/stats/stats_macros.h"

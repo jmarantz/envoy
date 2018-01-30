@@ -1,7 +1,11 @@
 #include "common/config/well_known_names.h"
 
+#include "absl/strings/str_cat.h"
+
 namespace Envoy {
 namespace Config {
+
+// excluding dot: [^.]
 
 std::vector<std::pair<std::string, std::string>> TagNameValues::getRegexMapping() {
   std::vector<std::pair<std::string, std::string>> name_regex_pairs;
@@ -72,8 +76,15 @@ std::vector<std::pair<std::string, std::string>> TagNameValues::getRegexMapping(
   name_regex_pairs.push_back(
       {FAULT_DOWNSTREAM_CLUSTER, "^http(?=\\.).*?\\.fault\\.((.*?)\\.)\\w+?$"});
 
+  //static const char address_regex[] = "\\.\\[[0-9_]+\\]_[0-9]+";
+
   // listener.[<address>.]ssl.cipher.(<cipher>)
-  name_regex_pairs.push_back({SSL_CIPHER, "^listener(?=\\.).*?\\.ssl\\.cipher(\\.(.*?))$"});
+  //name_regex_pairs.push_back({SSL_CIPHER, "^listener(?=\\.).*?\\.ssl\\.cipher(\\.(.*?))$"});
+  name_regex_pairs.push_back({SSL_CIPHER,
+          "^listener(?=\\.\\[[0-9_]+\\]_[0-9]+).*?\\.ssl\\.cipher(\\.(.*?))$"});
+  /*
+            absl::StrCat(
+              "^listener", address_regex, "\\.ssl\\.cipher(\\.(.*?))$")});*/
 
   // cluster.[<cluster_name>.]ssl.ciphers.(<cipher>)
   name_regex_pairs.push_back({SSL_CIPHER_SUITE, "^cluster(?=\\.).*?\\.ssl\\.ciphers(\\.(.*?))$"});
