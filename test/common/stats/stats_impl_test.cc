@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <chrono>
+#include <string>
 
 #include "envoy/stats/stats_macros.h"
 

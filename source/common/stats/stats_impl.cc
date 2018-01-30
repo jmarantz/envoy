@@ -2,8 +2,13 @@
 
 #include <string.h>
 
+#include <sys/time.h>
+#include <unistd.h>
+#include <cerrno>
+
 #include <algorithm>
 #include <chrono>
+#include <iostream>
 #include <string>
 
 #include "envoy/common/exception.h"
@@ -13,12 +18,49 @@
 
 #include "absl/strings/ascii.h"
 #include "absl/strings/match.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 
 namespace Envoy {
 namespace Stats {
 
 namespace {
+
+uint64_t NowUs() {
+  struct timeval tv;
+  struct timezone tz = { 0, 0 };  // UTC
+  RELEASE_ASSERT(gettimeofday(&tv, &tz) == 0);
+  return (static_cast<uint64_t>(tv.tv_sec) * 1000000) + tv.tv_usec;
+}
+
+struct RegexTimeCache {
+  typedef std::map<std::string, int64_t> RegexTimeMap;
+
+  void report(uint64_t start_time_us, const char* category, const std::string& description) {
+    uint64_t end_time_us = NowUs();
+    uint64_t duration_us = end_time_us - start_time_us;
+    std::string key = absl::StrCat(category, " / ", description);
+    {
+      std::unique_lock<std::mutex> lock(mutex);
+      regex_map[key] += duration_us;
+    }
+  }
+
+  void Dump() {
+    std::unique_lock<std::mutex> lock(mutex);
+    for (const auto& p : regex_map) {
+      std::cout << p.second << ": " << p.first << std::endl;
+    }
+  }
+
+  static RegexTimeCache* getOrCreate() {
+    static RegexTimeCache* cache = new RegexTimeCache;
+    return cache;
+  }
+
+  RegexTimeMap regex_map;
+  std::mutex mutex;
+};
 
 // Round val up to the next multiple of the natural alignment.
 // Note: this implementation only works because 8 is a power of 2.
@@ -110,12 +152,17 @@ TagExtractorPtr TagExtractorImpl::createTagExtractor(const std::string& name,
 
 std::string TagExtractorImpl::extractTag(const std::string& tag_extracted_name,
                                          std::vector<Tag>& tags) const {
+  RegexTimeCache* cache = RegexTimeCache::getOrCreate();
+
+  uint64_t start_time_us = NowUs();
   if (!prefix_.empty()) {
     if (prefix_[0] == '^') {
       if (!absl::StartsWith(tag_extracted_name, prefix_.substr(1))) {
+        cache->report(start_time_us, "prefix-discard", name_);
         return tag_extracted_name;
       }
     } else if (absl::string_view(tag_extracted_name).find(prefix_) == absl::string_view::npos) {
+      cache->report(start_time_us, "embedded-discard", name_);
       return tag_extracted_name;
     }
   }
@@ -138,9 +185,11 @@ std::string TagExtractorImpl::extractTag(const std::string& tag_extracted_name,
     tag.value_ = value_subexpr.str();
 
     // Reconstructs the tag_extracted_name without remove_subexpr.
+    cache->report(start_time_us, "success", name_);
     return std::string(match.prefix().first, remove_subexpr.first)
         .append(remove_subexpr.second, match.suffix().second);
   }
+  cache->report(start_time_us, "miss", name_);
   return tag_extracted_name;
 }
 
@@ -225,6 +274,10 @@ void RawStatData::initialize(absl::string_view key) {
   size_t xfer_size = std::min(nameSize() - 1, key.size());
   memcpy(name_, key.data(), xfer_size);
   name_[xfer_size] = '\0';
+}
+
+void DumpRegexStats() {
+  return RegexTimeCache::getOrCreate()->Dump();
 }
 
 } // namespace Stats
