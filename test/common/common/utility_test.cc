@@ -308,4 +308,27 @@ TEST(RegexUtil, parseRegex) {
   }
 }
 
+TEST(IntervalSet, testIntervals) {
+  IntervalSet interval_set;
+  auto insert_and_print = [&interval_set](int left, int right) -> std::string {
+    interval_set.insert(left, right);
+    return interval_set.toString();
+  };
+  EXPECT_EQ("[7, 10)", insert_and_print(7, 10));
+  EXPECT_EQ("[-2, -1), [7, 10)", insert_and_print(-2, -1));  // disjoint left
+  EXPECT_EQ("[-2, -1), [7, 10), [22, 23)", insert_and_print(22, 23));  // disjoint right
+  EXPECT_EQ("[-2, -1), [7, 15), [22, 23)", insert_and_print(8, 15));   // right overhang
+  EXPECT_EQ("[-2, -1), [5, 15), [22, 23)", insert_and_print(5, 12));   // left overhang
+  EXPECT_EQ("[-2, -1), [2, 4), [5, 15), [22, 23)", insert_and_print(2, 4));    // disjoint in middle
+  EXPECT_EQ("[-2, -1), [2, 15), [22, 23)", insert_and_print(3, 6));    // merge two ranges
+  EXPECT_EQ("[-2, -1), [2, 15), [18, 19), [22, 23)", insert_and_print(18, 19));  // right disjoint
+  EXPECT_EQ("[-2, -1), [2, 15), [16, 17), [18, 19), [22, 23)", insert_and_print(16, 17));  // middle disjoint
+  EXPECT_EQ("[-2, -1), [2, 15), [16, 17), [18, 20), [22, 23)", insert_and_print(19, 20));  // merge [18,19) and [19,20)
+  EXPECT_EQ("[-2, -1), [2, 15), [16, 17), [18, 20), [22, 23)", insert_and_print(3, 6));    // fully enclosed; no effect
+  EXPECT_EQ("[-2, -1), [2, 20), [22, 23)", insert_and_print(3, 20));   // merge across 3 ranges
+  EXPECT_EQ("[-2, -1), [2, 23)", insert_and_print(3, 22));   // merge all via overlap
+  EXPECT_EQ("[-2, 23)", insert_and_print(-2, 23));  // merge all covering exact
+  EXPECT_EQ("[-3, 24)", insert_and_print(-3, 24));  // merge all with overhand on both sides
+}
+
 } // namespace Envoy

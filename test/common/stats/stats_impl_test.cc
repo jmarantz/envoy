@@ -86,10 +86,12 @@ TEST(StatsMacros, All) {
 }
 
 TEST(TagExtractorTest, TwoSubexpressions) {
-  TagExtractorImpl tag_extractor("cluster_name", "^cluster\\.((.+?)\\.)");
+  TagExtractorRegexImpl tag_extractor("cluster_name", "^cluster\\.((.+?)\\.)");
   std::string name = "cluster.test_cluster.upstream_cx_total";
   std::vector<Tag> tags;
-  std::string tag_extracted_name = tag_extractor.extractTag(name, tags);
+  IntervalSet remove_characters;
+  ASSERT_TRUE(tag_extractor.extractTag(name, tags, remove_characters));
+  std::string tag_extracted_name = TagExtractorImpl::applyRemovals(name, remove_characters);
   EXPECT_EQ("cluster.upstream_cx_total", tag_extracted_name);
   ASSERT_EQ(1, tags.size());
   EXPECT_EQ("test_cluster", tags.at(0).value_);
@@ -97,10 +99,12 @@ TEST(TagExtractorTest, TwoSubexpressions) {
 }
 
 TEST(TagExtractorTest, SingleSubexpression) {
-  TagExtractorImpl tag_extractor("listner_port", "^listener\\.(\\d+?\\.)");
+  TagExtractorRegexImpl tag_extractor("listner_port", "^listener\\.(\\d+?\\.)");
   std::string name = "listener.80.downstream_cx_total";
   std::vector<Tag> tags;
-  std::string tag_extracted_name = tag_extractor.extractTag(name, tags);
+  IntervalSet remove_characters;
+  ASSERT_TRUE(tag_extractor.extractTag(name, tags, remove_characters));
+  std::string tag_extracted_name = TagExtractorImpl::applyRemovals(name, remove_characters);
   EXPECT_EQ("listener.downstream_cx_total", tag_extracted_name);
   ASSERT_EQ(1, tags.size());
   EXPECT_EQ("80.", tags.at(0).value_);
@@ -120,21 +124,20 @@ TEST(TagExtractorTest, BadRegex) {
 class DefaultTagRegexTester {
 public:
   DefaultTagRegexTester() {
-    const auto& tag_names = Config::TagNames::get();
-
-    for (const std::pair<std::string, std::string>& name_and_regex : tag_names.name_regex_pairs_) {
-      tag_extractors_.emplace_back(TagExtractorImpl::createTagExtractor(name_and_regex.first, ""));
-    }
+    Config::TagNames::get().forEach([this](const Config::TagNameValues::Descriptor& desc) {
+        tag_extractors_.emplace_back(TagExtractorImpl::createTagExtractor(desc.name, ""));
+      });
   }
   void testRegex(const std::string& stat_name, const std::string& expected_tag_extracted_name,
                  const std::vector<Tag>& expected_tags) {
 
     // Test forward iteration through the regexes
-    std::string tag_extracted_name = stat_name;
     std::vector<Tag> tags;
+    IntervalSet remove_characters;
     for (const TagExtractorPtr& tag_extractor : tag_extractors_) {
-      tag_extracted_name = tag_extractor->extractTag(tag_extracted_name, tags);
+      tag_extractor->extractTag(stat_name, tags, remove_characters);
     }
+    std::string tag_extracted_name = TagExtractorImpl::applyRemovals(stat_name, remove_characters);
 
     auto cmp = [](const Tag& lhs, const Tag& rhs) {
       return lhs.name_ == rhs.name_ && lhs.value_ == rhs.value_;
@@ -147,11 +150,13 @@ public:
         << fmt::format("Stat name '{}' did not produce the expected tags", stat_name);
 
     // Reverse iteration through regexes to ensure ordering invariance
-    std::string rev_tag_extracted_name = stat_name;
     std::vector<Tag> rev_tags;
+    IntervalSet rev_remove_characters;
     for (auto it = tag_extractors_.rbegin(); it != tag_extractors_.rend(); ++it) {
-      rev_tag_extracted_name = (*it)->extractTag(rev_tag_extracted_name, rev_tags);
+      (*it)->extractTag(stat_name, rev_tags, rev_remove_characters);
     }
+    std::string rev_tag_extracted_name = TagExtractorImpl::applyRemovals(
+        stat_name, rev_remove_characters);
 
     EXPECT_EQ(expected_tag_extracted_name, rev_tag_extracted_name);
     ASSERT_EQ(expected_tags.size(), rev_tags.size())
@@ -369,11 +374,11 @@ TEST(TagExtractorTest, DefaultTagExtractors) {
 }
 
 TEST(TagExtractorTest, ExtractRegexPrefix) {
-  EXPECT_EQ("^prefix", TagExtractorImpl::extractRegexPrefix("^prefix(foo"));
-  EXPECT_EQ("^prefix", TagExtractorImpl::extractRegexPrefix("^prefix\\.foo"));
-  EXPECT_EQ("", TagExtractorImpl::extractRegexPrefix("(prefix"));
-  EXPECT_EQ("", TagExtractorImpl::extractRegexPrefix("^(prefix"));
-  EXPECT_EQ("prefix", TagExtractorImpl::extractRegexPrefix("prefix(foo"));
+  EXPECT_EQ("^prefix", TagExtractorRegexImpl::extractRegexPrefix("^prefix(foo"));
+  EXPECT_EQ("^prefix", TagExtractorRegexImpl::extractRegexPrefix("^prefix\\.foo"));
+  EXPECT_EQ("", TagExtractorRegexImpl::extractRegexPrefix("(prefix"));
+  EXPECT_EQ("", TagExtractorRegexImpl::extractRegexPrefix("^(prefix"));
+  EXPECT_EQ("prefix", TagExtractorRegexImpl::extractRegexPrefix("prefix(foo"));
 }
 
 TEST(TagProducerTest, CheckConstructor) {

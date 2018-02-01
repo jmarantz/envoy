@@ -11,6 +11,7 @@
 #include "envoy/common/exception.h"
 
 #include "absl/strings/ascii.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/str_split.h"
 #include "fmt/format.h"
 #include "spdlog/spdlog.h"
@@ -270,4 +271,45 @@ std::regex RegexUtil::parseRegex(const std::string& regex, std::regex::flag_type
   }
 }
 
-} // namespace Envoy
+void IntervalSet::insert(int left, int right) {
+  RangeSet::iterator left_pos = ranges_.lower_bound(Range(left, left));
+  // upper_bound is exclusive, and we want to be inclusive.
+  RangeSet::iterator right_pos = ranges_.upper_bound(Range(right, right));
+  if (!ranges_.empty()) {
+    --right_pos;
+  }
+
+  if ((left_pos == ranges_.end()) || (right_pos == ranges_.end()) ||
+      (right < left_pos->first) || (right_pos->second < left)) {
+    // Fully disjoint.  Simply insert.
+    ranges_.insert(Range(left, right));
+  } else {
+    // Both bounds overlap.
+    left = std::min(left_pos->first, left);
+    right = std::max(right_pos->second, right);
+    ++right_pos;              // erase is non-inclusive on upper bound.
+    ranges_.erase(left_pos, right_pos);
+    ranges_.insert(Range(left, right));
+  }
+}
+
+std::string IntervalSet::toString() const {
+  std::string out;
+  const char* prefix = "";
+  for (const Range& range : toVector()) {
+    absl::StrAppend(&out, prefix, "[", range.first, ", ", range.second, ")");
+    prefix = ", ";
+  }
+  return out;
+}
+
+std::vector<IntervalSet::Range> IntervalSet::toVector() const {
+  std::vector<Range> out;
+  out.reserve(ranges_.size());
+  for (RangeSet::iterator p = ranges_.begin(); p != ranges_.end(); ++p) {
+    out.push_back(*p);
+  }
+  return out;
+}
+
+}  // namespace Envoy

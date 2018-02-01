@@ -17,6 +17,8 @@
 
 #include "common/common/assert.h"
 #include "common/common/hash.h"
+#include "common/common/utility.h"
+#include "common/config/well_known_names.h"
 #include "common/protobuf/protobuf.h"
 
 #include "absl/strings/string_view.h"
@@ -37,19 +39,39 @@ public:
    * @return TagExtractorPtr newly constructed TagExtractor.
    */
   static TagExtractorPtr createTagExtractor(const std::string& name, const std::string& regex);
+  static TagExtractorPtr createTagExtractor(const Config::TagNameValues::Descriptor& desc);
 
-  TagExtractorImpl(const std::string& name, const std::string& regex);
+  static std::string applyRemovals(const std::string& str, const IntervalSet& remove_characters);
+
+  TagExtractorImpl(const std::string& name);
   std::string name() const override { return name_; }
-  std::string extractTag(const std::string& tag_extracted_name,
-                         std::vector<Tag>& tags) const override;
-  static absl::string_view extractRegexPrefix(absl::string_view regex);
-
-  void Dump();
-
 private:
   const std::string name_;
+};
+
+class TagExtractorRegexImpl : public TagExtractorImpl {
+public:
+  TagExtractorRegexImpl(const std::string& name, const std::string& regex);
+  bool extractTag(const std::string& stat_name, std::vector<Tag>& tags,
+                  IntervalSet& remove_characters) const override;
+  static absl::string_view extractRegexPrefix(absl::string_view regex);
+
+private:
   const std::string prefix_;
   const std::regex regex_;
+};
+
+class TagExtractorTokenImpl : public TagExtractorImpl {
+public:
+  TagExtractorTokenImpl(const std::string& name, const std::string& pattern);
+  bool extractTag(const std::string& stat_name, std::vector<Tag>& tags,
+                  IntervalSet& remove_characters) const override;
+
+private:
+  const std::string pattern_;
+  std::string prefix_;
+  std::string suffix_;
+  const std::vector<absl::string_view> tokens_;
 };
 
 class TagProducerImpl : public TagProducer {

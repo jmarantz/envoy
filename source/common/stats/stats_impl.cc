@@ -19,6 +19,7 @@
 #include "absl/strings/ascii.h"
 #include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/str_join.h"
 #include "absl/strings/string_view.h"
 
 namespace Envoy {
@@ -107,12 +108,32 @@ std::string Utility::sanitizeStatsName(const std::string& name) {
   return stats_name;
 }
 
-TagExtractorImpl::TagExtractorImpl(const std::string& name, const std::string& regex)
-    : name_(name), prefix_(std::string(extractRegexPrefix(regex))),
+TagExtractorImpl::TagExtractorImpl(const std::string& name) : name_(name) {
+}
+
+TagExtractorRegexImpl::TagExtractorRegexImpl(const std::string& name, const std::string& regex)
+    : TagExtractorImpl(name), prefix_(std::string(extractRegexPrefix(regex))),
       regex_(RegexUtil::parseRegex(regex)) {
 }
 
-absl::string_view TagExtractorImpl::extractRegexPrefix(absl::string_view regex) {
+std::string TagExtractorImpl::applyRemovals(const std::string& str,
+                                            const IntervalSet& remove_characters) {
+  std::string ret;
+  int pos = 0;
+  for (IntervalSet::Range range : remove_characters.toVector()) {
+    if (range.first != pos) {
+      ret += str.substr(pos, range.first - pos);
+    }
+    pos = range.second;
+  }
+  if (pos != static_cast<int>(str.size())) {
+    ret += str.substr(pos);
+  }
+
+  return ret;
+}
+
+absl::string_view TagExtractorRegexImpl::extractRegexPrefix(absl::string_view regex) {
   absl::string_view::size_type start_pos = absl::StartsWith(regex, "^") ? 1 : 0;
   for (absl::string_view::size_type i = start_pos; i < regex.size(); ++i) {
     if (!absl::ascii_isalnum(regex[i]) && (regex[i] != '_')) {
@@ -127,49 +148,52 @@ absl::string_view TagExtractorImpl::extractRegexPrefix(absl::string_view regex) 
 
 TagExtractorPtr TagExtractorImpl::createTagExtractor(const std::string& name,
                                                      const std::string& regex) {
-
   if (name.empty()) {
     throw EnvoyException("tag_name cannot be empty");
   }
 
   if (!regex.empty()) {
-    return TagExtractorPtr{new TagExtractorImpl(name, regex)};
+    return TagExtractorPtr{new TagExtractorRegexImpl(name, regex)};
+  }
+
+  // Look up the default for that name.
+  const Config::TagNameValues::Descriptor* desc = Config::TagNames::get().find(name);
+  if (desc == nullptr) {
+    throw EnvoyException(fmt::format(
+        "No regex specified for tag specifier and no default regex for name: '{}'", name));
+  }
+  return createTagExtractor(*desc);
+}
+
+TagExtractorPtr TagExtractorImpl::createTagExtractor(
+    const Config::TagNameValues::Descriptor& desc) {
+  if (desc.is_regex) {
+    return TagExtractorPtr{new TagExtractorRegexImpl(desc.name, desc.pattern)};
   } else {
-    // Look up the default for that name.
-    const auto& name_regex_pairs = Config::TagNames::get().name_regex_pairs_;
-    auto it = std::find_if(name_regex_pairs.begin(), name_regex_pairs.end(),
-                           [&name](const std::pair<std::string, std::string>& name_regex_pair) {
-                             return name == name_regex_pair.first;
-                           });
-    if (it != name_regex_pairs.end()) {
-      return TagExtractorPtr{new TagExtractorImpl(name, it->second)};
-    } else {
-      throw EnvoyException(fmt::format(
-          "No regex specified for tag specifier and no default regex for name: '{}'", name));
-    }
+    return TagExtractorPtr{new TagExtractorTokenImpl(desc.name, desc.pattern)};
   }
 }
 
-std::string TagExtractorImpl::extractTag(const std::string& tag_extracted_name,
-                                         std::vector<Tag>& tags) const {
+bool TagExtractorRegexImpl::extractTag(const std::string& stat_name, std::vector<Tag>& tags,
+                                       IntervalSet& remove_characters) const {
   RegexTimeCache* cache = RegexTimeCache::getOrCreate();
 
   uint64_t start_time_us = NowUs();
   if (!prefix_.empty()) {
     if (prefix_[0] == '^') {
-      if (!absl::StartsWith(tag_extracted_name, prefix_.substr(1))) {
-        cache->report(start_time_us, "prefix-discard", name_);
-        return tag_extracted_name;
+      if (!absl::StartsWith(stat_name, prefix_.substr(1))) {
+        cache->report(start_time_us, "prefix-discard", name());
+        return false;
       }
-    } else if (absl::string_view(tag_extracted_name).find(prefix_) == absl::string_view::npos) {
-      cache->report(start_time_us, "embedded-discard", name_);
-      return tag_extracted_name;
+    } else if (absl::string_view(stat_name).find(prefix_) == absl::string_view::npos) {
+      cache->report(start_time_us, "embedded-discard", name());
+      return false;
     }
   }
 
   std::smatch match;
   // The regex must match and contain one or more subexpressions (all after the first are ignored).
-  if (std::regex_search(tag_extracted_name, match, regex_) && match.size() > 1) {
+  if (std::regex_search(stat_name, match, regex_) && match.size() > 1) {
     // remove_subexpr is the first submatch. It represents the portion of the string to be removed.
     const auto& remove_subexpr = match[1];
 
@@ -181,16 +205,146 @@ std::string TagExtractorImpl::extractTag(const std::string& tag_extracted_name,
 
     tags.emplace_back();
     Tag& tag = tags.back();
-    tag.name_ = name_;
+    tag.name_ = name();
     tag.value_ = value_subexpr.str();
 
     // Reconstructs the tag_extracted_name without remove_subexpr.
-    cache->report(start_time_us, "success", name_);
-    return std::string(match.prefix().first, remove_subexpr.first)
-        .append(remove_subexpr.second, match.suffix().second);
+    std::string::size_type start = remove_subexpr.first - stat_name.begin();
+    std::string::size_type end = remove_subexpr.second - stat_name.begin();
+    remove_characters.insert(start, end);
+    cache->report(start_time_us, "success", name());
+    return true;
   }
-  cache->report(start_time_us, "miss", name_);
-  return tag_extracted_name;
+  cache->report(start_time_us, "miss", name());
+  return false;
+}
+
+TagExtractorTokenImpl::TagExtractorTokenImpl(const std::string& name, const std::string& pattern)
+    : TagExtractorImpl(name),
+      tokens_(StringUtil::splitToken(pattern, ".", false)) {
+  bool found = false;
+  size_t tokens_size = tokens_.size();
+  for (size_t i = 0; i < tokens_size; ++i) {
+    RELEASE_ASSERT(!tokens_[i].empty());
+    if (tokens_[i][0] == '$') {
+      if (i != 0) {
+        prefix_ = absl::StrJoin(&tokens_[0], &tokens_[i], ".") + ".";
+      }
+      found = true;
+      break;
+    }
+  }
+  if (!found) {
+    // No variable field was found; this must be a simple exact match, so we can just
+    // compare the input to the pattern.
+    prefix_ = pattern;
+  } else {
+    for (size_t i = tokens_size; i >= 1; --i) {
+      if (tokens_[i - 1][0] == '$') {
+        if (i != tokens_size) {
+          suffix_ = absl::StrCat(".", absl::StrJoin(&tokens_[i], &tokens_[tokens_size], "."));
+        }
+        found = true;
+        break;
+      }
+    }
+  }
+}
+
+bool TagExtractorTokenImpl::extractTag(const std::string& stat_name, std::vector<Tag>& tags,
+                                       IntervalSet& remove_characters) const {
+  RegexTimeCache* cache = RegexTimeCache::getOrCreate();
+
+  uint64_t start_time_us = NowUs();
+  if (!prefix_.empty() && !absl::StartsWith(stat_name, prefix_)) {
+    cache->report(start_time_us, "Prefix-discard", name());
+    return false;
+  } else if (!suffix_.empty() && !absl::EndsWith(stat_name, suffix_)) {
+    cache->report(start_time_us, "Suffix-discard", name());
+    return false;
+  }
+
+  std::vector<absl::string_view> split_vec = StringUtil::splitToken(stat_name, ".");
+
+  // In general a match may cover a span of tokens from split_vec.
+  absl::string_view::size_type match_start_index = absl::string_view::npos;
+  bool capture = false;
+  std::string match;
+  const auto capture_match = [&](absl::string_view::size_type pos) {
+    if (match_start_index != absl::string_view::npos) {
+      if (capture) {
+        match = absl::StrJoin(&split_vec[match_start_index], &split_vec[pos], ".");
+        capture = false;
+
+        // TODO(jmarantz): if we eliminate the regex path completely we can specify
+        // this range in terms of token indexes rather than characters, which will
+        // eliminate this rather expensive calculation.
+        std::string::size_type start =
+            absl::StrJoin(&split_vec[0], &split_vec[match_start_index], ".").size();
+        remove_characters.insert(start, start + match.size() + 1 /* leading dot */);
+      }
+      match_start_index = absl::string_view::npos;
+    }
+  };
+
+  // In general, the number of tokens in the split will be >= the number of tokens in
+  // the pattern, because some of the tokens may include addresses with embedded dots.
+  // So we loop over the larger array, and conditionally advance over the smaller one.
+  absl::string_view::size_type t = 0;
+  absl::string_view::size_type num_tokens = tokens_.size();
+  for (absl::string_view::size_type s = 0; s < split_vec.size() && t < num_tokens; ++s) {
+    const absl::string_view split = split_vec[s];
+    const absl::string_view token = tokens_[t];
+    if (split == token) {  // TODO(jmarantz): make comparison aware of $$.
+      capture_match(s);
+      ++t;
+      /*
+    } else if ((t - 1 < num_tokens) && (token == "$0") && (split == tokens_[t + 1])) {
+      // A $0 pattern can be skipped entirely if the following token matches as a literal.
+      t += 2;
+      */
+    } else if (match_start_index == absl::string_view::npos) {
+      // Here are the capture-keywords:
+      //   $1 -- swallow one token
+      //   $c1 -- copy one token
+      //   $* -- swallow N tokens.
+      //   $c* -- capture N tokens.
+      if (token[0] == '$') {  // token guaranteed to be non-empty due to SkipWhitespace in ctor.
+        ++t;
+        if (token == "$1") {
+          // nothing to do
+        } else if (token == "$*") {
+          match_start_index = s;
+        } else {
+          match_start_index = s;
+          capture = true;
+          if (token == "$c1") {
+            capture_match(s + 1);
+          } else {
+            RELEASE_ASSERT(token == "$c*");
+          }
+        }
+      } else {
+        cache->report(start_time_us, "literal mismatch", name());
+        return false;
+      }
+    }
+  }
+  if (t != num_tokens) {
+    cache->report(start_time_us, "not enough tokens", name());
+    return false;
+  }
+  if (match_start_index != absl::string_view::npos) {
+    capture_match(split_vec.size());
+  }
+  if (!match.empty()) {
+    tags.emplace_back();
+    Tag& tag = tags.back();
+    tag.name_ = name();
+    tag.value_.swap(match);
+  }
+  cache->report(start_time_us, "Success", name());
+  return true;
 }
 
 RawStatData* HeapRawStatDataAllocator::alloc(const std::string& name) {
@@ -227,34 +381,38 @@ TagProducerImpl::TagProducerImpl(const envoy::api::v2::StatsConfig& config) : Ta
 std::string TagProducerImpl::produceTags(const std::string& name, std::vector<Tag>& tags) const {
   tags.insert(tags.end(), default_tags_.begin(), default_tags_.end());
 
-  std::string tag_extracted_name = name;
+  IntervalSet remove_characters;
+  bool needs_removal = false;
   for (const TagExtractorPtr& tag_extractor : tag_extractors_) {
-
-    tag_extracted_name = tag_extractor->extractTag(tag_extracted_name, tags);
+    needs_removal |= tag_extractor->extractTag(name, tags, remove_characters);
   }
-  return tag_extracted_name;
+  if (!needs_removal) {
+    return name;
+  }
+  return TagExtractorImpl::applyRemovals(name, remove_characters);
 }
 
 // Roughly estimate the size of the vectors.
 void TagProducerImpl::reserveResources(const envoy::api::v2::StatsConfig& config) {
   default_tags_.reserve(config.stats_tags().size());
 
+  /*
   if (!config.has_use_all_default_tags() || config.use_all_default_tags().value()) {
     tag_extractors_.reserve(Config::TagNames::get().name_regex_pairs_.size() +
                             config.stats_tags().size());
   } else {
     tag_extractors_.reserve(config.stats_tags().size());
   }
+  */
 }
 
 void TagProducerImpl::addDefaultExtractors(const envoy::api::v2::StatsConfig& config,
                                            std::unordered_set<std::string>& names) {
   if (!config.has_use_all_default_tags() || config.use_all_default_tags().value()) {
-    for (const auto& extractor : Config::TagNames::get().name_regex_pairs_) {
-      names.emplace(extractor.first);
-      tag_extractors_.emplace_back(
-          Stats::TagExtractorImpl::createTagExtractor(extractor.first, extractor.second));
-    }
+    Config::TagNames::get().forEach([this, &names](const Config::TagNameValues::Descriptor& desc) {
+        names.emplace(desc.name);
+        tag_extractors_.emplace_back(Stats::TagExtractorImpl::createTagExtractor(desc));
+      });
   }
 }
 
