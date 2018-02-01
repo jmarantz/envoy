@@ -35,17 +35,17 @@ TagNameValues::TagNameValues() {
 
   // http.[<stat_prefix>.]dynamodb.table.[<table_name>.]capacity.[<operation_name>.](__partition_id=<last_seven_characters_from_partition_id>)
   addRegex(DYNAMO_PARTITION_ID, "^http(?=\\.).*?\\.dynamodb\\.table(?=\\.).*?\\."
-                     "capacity(?=\\.).*?(\\.__partition_id=(\\w{7}))"
-                     "$");
+                                "capacity(?=\\.).*?(\\.__partition_id=(\\w{7}))"
+                                "$");
 
   // http.[<stat_prefix>.]dynamodb.operation.(<operation_name>.)<base_stat> or
   // http.[<stat_prefix>.]dynamodb.table.[<table_name>.]capacity.(<operation_name>.)[<partition_id>]
   addRegex(DYNAMO_OPERATION, "^http(?=\\.).*?\\.dynamodb.(?:operation|table(?="
-                                                "\\.).*?\\.capacity)(\\.(.*?))(?:\\.|$)");
+                             "\\.).*?\\.capacity)(\\.(.*?))(?:\\.|$)");
 
   // mongo.[<stat_prefix>.]collection.[<collection>.]callsite.(<callsite>.)query.<base_stat>
   addRegex(MONGO_CALLSITE,
-       "^mongo(?=\\.).*?\\.collection(?=\\.).*?\\.callsite\\.((.*?)\\.).*?query.\\w+?$");
+           "^mongo(?=\\.).*?\\.collection(?=\\.).*?\\.callsite\\.((.*?)\\.).*?query.\\w+?$");
 
   // http.[<stat_prefix>.]dynamodb.table.(<table_name>.) or
   // http.[<stat_prefix>.]dynamodb.error.(<table_name>.)*
@@ -58,7 +58,7 @@ TagNameValues::TagNameValues() {
   addRegex(MONGO_CMD, "^mongo(?=\\.).*?\\.cmd\\.((.*?)\\.)\\w+?$");
 
   // cluster.[<route_target_cluster>.]grpc.[<grpc_service>.](<grpc_method>.)<base_stat>
-  //addRegex(GRPC_BRIDGE_METHOD, "^cluster(?=\\.).*?\\.grpc(?=\\.).*\\.((.*?)\\.)\\w+?$");
+  // addRegex(GRPC_BRIDGE_METHOD, "^cluster(?=\\.).*?\\.grpc(?=\\.).*\\.((.*?)\\.)\\w+?$");
   addTokenized(GRPC_BRIDGE_METHOD, "cluster.$1.grpc.$1.$c1");
 
   // http.[<stat_prefix>.]user_agent.(<user_agent>.)<base_stat>
@@ -70,10 +70,10 @@ TagNameValues::TagNameValues() {
   // http.[<stat_prefix>.]fault.(<downstream_cluster>.)<base_stat>
   addRegex(FAULT_DOWNSTREAM_CLUSTER, "^http(?=\\.).*?\\.fault\\.((.*?)\\.)\\w+?$");
 
-  //static const char address_regex[] = "\\.\\[[0-9_]+\\]_[0-9]+";
+  // static const char address_regex[] = "\\.\\[[0-9_]+\\]_[0-9]+";
 
   // listener.[<address>.]ssl.cipher.(<cipher>)
-  //addRegex(SSL_CIPHER, "^listener(?=\\.).*?\\.ssl\\.cipher(\\.(.*?))$");
+  // addRegex(SSL_CIPHER, "^listener(?=\\.).*?\\.ssl\\.cipher(\\.(.*?))$");
   addTokenized(SSL_CIPHER, "listener.$*.ssl.cipher.$c1");
   /*addRegex(SSL_CIPHER,
                      "^listener(?=\\.\\[[0-9_]+\\]_[0-9]+).*?\\.ssl\\.cipher(\\.(.*?))$");
@@ -81,11 +81,11 @@ TagNameValues::TagNameValues() {
               "^listener", address_regex, "\\.ssl\\.cipher(\\.(.*?))$")});*/
 
   // cluster.[<cluster_name>.]ssl.ciphers.(<cipher>)
-  //addRegex(SSL_CIPHER_SUITE, "^cluster(?=\\.).*?\\.ssl\\.ciphers(\\.(.*?))$");
+  // addRegex(SSL_CIPHER_SUITE, "^cluster(?=\\.).*?\\.ssl\\.ciphers(\\.(.*?))$");
   addTokenized(SSL_CIPHER_SUITE, "cluster.$1.ssl.ciphers.$c1");
 
   // cluster.[<route_target_cluster>.]grpc.(<grpc_service>.)*
-  //addRegex(GRPC_BRIDGE_SERVICE, "^cluster(?=\\.).*?\\.grpc\\.((.*?)\\.)");
+  // addRegex(GRPC_BRIDGE_SERVICE, "^cluster(?=\\.).*?\\.grpc\\.((.*?)\\.)");
   addTokenized(GRPC_BRIDGE_SERVICE, "cluster.$1.grpc.$c1.$*");
 
   // tcp.(<stat_prefix>.)<base_stat>
@@ -98,11 +98,11 @@ TagNameValues::TagNameValues() {
   addRegex(RATELIMIT_PREFIX, "^ratelimit\\.((.*?)\\.)\\w+?$");
 
   // cluster.(<cluster_name>.)*
-  //addRegex(CLUSTER_NAME, "^cluster\\.((.*?)\\.)");
+  // addRegex(CLUSTER_NAME, "^cluster\\.((.*?)\\.)");
   addTokenized(CLUSTER_NAME, "cluster.$c1");
 
   // http.(<stat_prefix>.)* or listener.[<address>.]http.(<stat_prefix>.)*
-  //addRegex(HTTP_CONN_MANAGER_PREFIX, "^(?:|listener(?=\\.).*?\\.)http\\.((.*?)\\.)");
+  // addRegex(HTTP_CONN_MANAGER_PREFIX, "^(?:|listener(?=\\.).*?\\.)http\\.((.*?)\\.)");
   addTokenized(HTTP_CONN_MANAGER_PREFIX, "listener.$*.http.$c1.$*");
   addTokenized(HTTP_CONN_MANAGER_PREFIX, "http.$c1.$*");
 
@@ -118,13 +118,13 @@ TagNameValues::TagNameValues() {
 }
 
 void TagNameValues::add(const std::string& name, const std::string& pattern, bool is_regex) {
-  //Descriptor& descriptor = descriptor_map_[name];
+  // Descriptor& descriptor = descriptor_map_[name];
   descriptor_vec_.emplace_back();
   Descriptor& descriptor = descriptor_vec_.back();
   descriptor.name = name;
   descriptor.pattern = pattern;
   descriptor.is_regex = is_regex;
-  //descriptor_vec_.push_back(&descriptor);
+  // descriptor_vec_.push_back(&descriptor);
 }
 
 /*

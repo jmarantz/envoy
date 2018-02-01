@@ -125,8 +125,8 @@ class DefaultTagRegexTester {
 public:
   DefaultTagRegexTester() {
     Config::TagNames::get().forEach([this](const Config::TagNameValues::Descriptor& desc) {
-        tag_extractors_.emplace_back(TagExtractorImpl::createTagExtractor(desc));
-      });
+      tag_extractors_.emplace_back(TagExtractorImpl::createTagExtractor(desc));
+    });
   }
   void testRegex(const std::string& stat_name, const std::string& expected_tag_extracted_name,
                  const std::vector<Tag>& expected_tags) {
@@ -155,8 +155,8 @@ public:
     for (auto it = tag_extractors_.rbegin(); it != tag_extractors_.rend(); ++it) {
       (*it)->extractTag(stat_name, rev_tags, rev_remove_characters);
     }
-    std::string rev_tag_extracted_name = TagExtractorImpl::applyRemovals(
-        stat_name, rev_remove_characters);
+    std::string rev_tag_extracted_name =
+        TagExtractorImpl::applyRemovals(stat_name, rev_remove_characters);
 
     EXPECT_EQ(expected_tag_extracted_name, rev_tag_extracted_name);
     ASSERT_EQ(expected_tags.size(), rev_tags.size())

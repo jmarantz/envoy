@@ -280,15 +280,15 @@ void IntervalSet::insert(int left, int right) {
     --right_pos;
   }
 
-  if ((left_pos == ranges_.end()) || (right_pos == ranges_.end()) ||
-      (right < left_pos->first) || (right_pos->second < left)) {
-    // Fully disjoint.  Simply insert.
+  if ((left_pos == ranges_.end()) || (right_pos == ranges_.end()) || (right < left_pos->first) ||
+      (right_pos->second < left)) {
+    // Fully disjoint. Simply insert.
     ranges_.insert(Range(left, right));
   } else {
     // Both bounds overlap.
     left = std::min(left_pos->first, left);
     right = std::max(right_pos->second, right);
-    ++right_pos;              // erase is non-inclusive on upper bound.
+    ++right_pos; // erase is non-inclusive on upper bound.
     ranges_.erase(left_pos, right_pos);
     ranges_.insert(Range(left, right));
   }
@@ -313,4 +313,4 @@ std::vector<IntervalSet::Range> IntervalSet::toVector() const {
   return out;
 }
 
-}  // namespace Envoy
+} // namespace Envoy

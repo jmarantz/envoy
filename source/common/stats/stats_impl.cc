@@ -1,12 +1,11 @@
 #include "common/stats/stats_impl.h"
 
 #include <string.h>
-
 #include <sys/time.h>
 #include <unistd.h>
-#include <cerrno>
 
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
 #include <iostream>
 #include <string>
@@ -30,7 +29,7 @@ namespace {
 
 uint64_t NowUs() {
   struct timeval tv;
-  struct timezone tz = { 0, 0 };  // UTC
+  struct timezone tz = {0, 0}; // UTC
   RELEASE_ASSERT(gettimeofday(&tv, &tz) == 0);
   return (static_cast<uint64_t>(tv.tv_sec) * 1000000) + tv.tv_usec;
 }
@@ -109,13 +108,11 @@ std::string Utility::sanitizeStatsName(const std::string& name) {
   return stats_name;
 }
 
-TagExtractorImpl::TagExtractorImpl(const std::string& name) : name_(name) {
-}
+TagExtractorImpl::TagExtractorImpl(const std::string& name) : name_(name) {}
 
 TagExtractorRegexImpl::TagExtractorRegexImpl(const std::string& name, const std::string& regex)
     : TagExtractorImpl(name), prefix_(std::string(extractRegexPrefix(regex))),
-      regex_(RegexUtil::parseRegex(regex)) {
-}
+      regex_(RegexUtil::parseRegex(regex)) {}
 
 std::string TagExtractorImpl::applyRemovals(const std::string& str,
                                             const IntervalSet& remove_characters) {
@@ -185,8 +182,8 @@ TagExtractorPtr TagExtractorImpl::createTagExtractor(const std::string& name,
   */
 }
 
-TagExtractorPtr TagExtractorImpl::createTagExtractor(
-    const Config::TagNameValues::Descriptor& desc) {
+TagExtractorPtr
+TagExtractorImpl::createTagExtractor(const Config::TagNameValues::Descriptor& desc) {
   if (desc.is_regex) {
     return TagExtractorPtr{new TagExtractorRegexImpl(desc.name, desc.pattern)};
   } else {
@@ -242,8 +239,7 @@ bool TagExtractorRegexImpl::extractTag(const std::string& stat_name, std::vector
 }
 
 TagExtractorTokenImpl::TagExtractorTokenImpl(const std::string& name, const std::string& pattern)
-    : TagExtractorImpl(name),
-      tokens_(StringUtil::splitToken(pattern, ".", false)) {
+    : TagExtractorImpl(name), tokens_(StringUtil::splitToken(pattern, ".", false)) {
   bool found = false;
   size_t tokens_size = tokens_.size();
   for (size_t i = 0; i < tokens_size; ++i) {
@@ -314,7 +310,7 @@ bool TagExtractorTokenImpl::extractTag(const std::string& stat_name, std::vector
   for (absl::string_view::size_type s = 0; s < split_vec.size() && t < num_tokens; ++s) {
     const absl::string_view split = split_vec[s];
     const absl::string_view token = tokens_[t];
-    if (split == token) {  // TODO(jmarantz): make comparison aware of $$.
+    if (split == token) { // TODO(jmarantz): make comparison aware of $$.
       if (capture) {
         capture_end_index = s;
         capture = false;
@@ -327,7 +323,7 @@ bool TagExtractorTokenImpl::extractTag(const std::string& stat_name, std::vector
       //   $c1 -- copy one token
       //   $* -- greedily swallow N tokens until a literal match or dend of string.
       //   $c* -- greedily capture N tokens.
-      if (token[0] == '$') {  // token guaranteed to be non-empty due to SkipWhitespace in ctor.
+      if (token[0] == '$') { // token guaranteed to be non-empty due to SkipWhitespace in ctor.
         ++t;
         if (token == "$1") {
           // nothing to do
@@ -366,7 +362,7 @@ bool TagExtractorTokenImpl::extractTag(const std::string& stat_name, std::vector
     // TODO(jmarantz): if we eliminate the regex path completely we can specify
     // this range in terms of token indexes rather than characters, which will
     // eliminate this rather expensive calculation.
-    std::string::size_type start = capture_start_index - 1;  // n-1 dots between n tokens.
+    std::string::size_type start = capture_start_index - 1; // n-1 dots between n tokens.
     for (size_t i = 0; i < capture_start_index; ++i) {
       start += split_vec[i].size();
     }
@@ -403,8 +399,8 @@ TagProducerImpl::TagProducerImpl(const envoy::config::metrics::v2::StatsConfig& 
       if (tag_specifier.regex().empty()) {
         addExtractorsMatching(tag_specifier.tag_name());
       } else {
-        addExtractor(Stats::TagExtractorImpl::createTagExtractor(
-            tag_specifier.tag_name(), tag_specifier.regex()));
+        addExtractor(Stats::TagExtractorImpl::createTagExtractor(tag_specifier.tag_name(),
+                                                                 tag_specifier.regex()));
       }
     } else if (tag_specifier.tag_value_case() ==
                envoy::config::metrics::v2::TagSpecifier::kFixedValue) {
@@ -416,13 +412,13 @@ TagProducerImpl::TagProducerImpl(const envoy::config::metrics::v2::StatsConfig& 
 
 void TagProducerImpl::addExtractorsMatching(absl::string_view name) {
   int num_found = 0;
-  Config::TagNames::get().forEach([this, name, &num_found](
-      const Config::TagNameValues::Descriptor& desc) {
-      if (desc.name == name) {
-        addExtractor(Stats::TagExtractorImpl::createTagExtractor(desc));
-        ++num_found;
-      }
-    });
+  Config::TagNames::get().forEach(
+      [this, name, &num_found](const Config::TagNameValues::Descriptor& desc) {
+        if (desc.name == name) {
+          addExtractor(Stats::TagExtractorImpl::createTagExtractor(desc));
+          ++num_found;
+        }
+      });
   if (num_found == 0) {
     throw EnvoyException(fmt::format(
         "No regex specified for tag specifier and no default regex for name: '{}'", name));
@@ -480,9 +476,9 @@ void TagProducerImpl::addDefaultExtractors(const envoy::config::metrics::v2::Sta
                                            std::unordered_set<std::string>& names) {
   if (!config.has_use_all_default_tags() || config.use_all_default_tags().value()) {
     Config::TagNames::get().forEach([this, &names](const Config::TagNameValues::Descriptor& desc) {
-        names.emplace(desc.name);
-        addExtractor(Stats::TagExtractorImpl::createTagExtractor(desc));
-      });
+      names.emplace(desc.name);
+      addExtractor(Stats::TagExtractorImpl::createTagExtractor(desc));
+    });
   }
 }
 
@@ -504,9 +500,7 @@ void RawStatData::initialize(absl::string_view key) {
   name_[xfer_size] = '\0';
 }
 
-void DumpRegexStats() {
-  return RegexTimeCache::getOrCreate()->Dump();
-}
+void DumpRegexStats() { return RegexTimeCache::getOrCreate()->Dump(); }
 
 } // namespace Stats
 } // namespace Envoy

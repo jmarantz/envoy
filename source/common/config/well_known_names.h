@@ -217,7 +217,7 @@ public:
   // A tag-name can be described with a regex or with a simple string split
   // delimited by ".", with $0 and $1 specified -- $0 would be the stripped
   // from the string during tag extraction, and $1 would be returned as the
-  // tag.  The is_regexp field indicates whether the pattern should be parsed
+  // tag. The is_regexp field indicates whether the pattern should be parsed
   // as a regexp, or just split into an array of tokens using ".".
   struct Descriptor {
     std::string name;
@@ -273,7 +273,7 @@ public:
   const std::string RESPONSE_CODE_CLASS = "envoy.response_code_class";
 
   // Returns the descriptor, or null if none found.
-  //const Descriptor* find(const std::string& name) const;
+  // const Descriptor* find(const std::string& name) const;
 
   void forEach(std::function<void(const Descriptor&)>) const;
 
@@ -285,8 +285,8 @@ private:
   void add(const std::string& name, const std::string& pattern, bool is_regex);
 
   // Mapping from the names above to their respective regex strings.
-  //std::unordered_map<std::string, Descriptor> descriptor_map_;
-  //std::vector<const Descriptor* /* owned by descriptor_map_ */> descriptor_vec_;
+  // std::unordered_map<std::string, Descriptor> descriptor_map_;
+  // std::vector<const Descriptor* /* owned by descriptor_map_ */> descriptor_vec_;
   std::vector<Descriptor> descriptor_vec_;
 };
 

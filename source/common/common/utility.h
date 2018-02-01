@@ -10,8 +10,9 @@
 #include <string>
 #include <vector>
 
-#include "common/common/hash.h"
 #include "envoy/common/time.h"
+
+#include "common/common/hash.h"
 
 #include "absl/strings/string_view.h"
 
@@ -291,27 +292,23 @@ public:
 };
 
 class IntervalSet {
- public:
+public:
   typedef std::pair<int, int> Range;
 
   void insert(int left, int right);
   std::string toString() const;
   std::vector<Range> toVector() const;
 
- private:
+private:
   struct Compare {
-    bool operator()(const Range& a, const Range& b) const {
-      return a.second < b.first;
-    }
+    bool operator()(const Range& a, const Range& b) const { return a.second < b.first; }
   };
   typedef std::set<Range, Compare> RangeSet;
-  RangeSet ranges_;             // Ranges do not overlap.
+  RangeSet ranges_; // Ranges do not overlap.
 };
 
 struct StringViewHash {
-  std::size_t operator()(const absl::string_view& k) const {
-    return HashUtil::xxHash64(k);
-  }
+  std::size_t operator()(const absl::string_view& k) const { return HashUtil::xxHash64(k); }
 };
 
 } // namespace Envoy
