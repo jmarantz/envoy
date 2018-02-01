@@ -131,7 +131,6 @@ envoy_cc_library(
     deps = [
         ":hash_lib",
         "//include/envoy/common:time_interface",
-        "//include/envoy/common:time_interface",
     ],
 )
 

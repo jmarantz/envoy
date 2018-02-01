@@ -346,12 +346,21 @@ bool TagExtractorTokenImpl::extractTag(const std::string& stat_name, std::vector
         return false;
       }
     }
+<<<<<<< HEAD
   }
 
   if (t != num_tokens) {
     cache->report(start_time_us, "not enough tokens", name());
     return false;
   }
+=======
+  }
+
+  if (t != num_tokens) {
+    cache->report(start_time_us, "not enough tokens", name());
+    return false;
+  }
+>>>>>>> 862ad979d458045ec9267d1d3c3b165be8c4a5e9
   if (capture_start_index != absl::string_view::npos) {
     if (capture_end_index == absl::string_view::npos) {
       capture_end_index = split_vec.size();
