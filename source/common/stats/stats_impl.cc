@@ -13,6 +13,7 @@
 
 #include "envoy/common/exception.h"
 
+#include "common/common/fmt.h"
 #include "common/common/utility.h"
 #include "common/config/well_known_names.h"
 
@@ -396,13 +397,32 @@ TagProducerImpl::TagProducerImpl(const envoy::config::metrics::v2::StatsConfig& 
     if (tag_specifier.tag_value_case() ==
             envoy::config::metrics::v2::TagSpecifier::TAG_VALUE_NOT_SET ||
         tag_specifier.tag_value_case() == envoy::config::metrics::v2::TagSpecifier::kRegex) {
-      addExtractor(Stats::TagExtractorImpl::createTagExtractor(
-          tag_specifier.tag_name(), tag_specifier.regex()));
+      if (tag_specifier.regex().empty()) {
+        addExtractorsMatching(tag_specifier.tag_name());
+      } else {
+        addExtractor(Stats::TagExtractorImpl::createTagExtractor(
+            tag_specifier.tag_name(), tag_specifier.regex()));
+      }
     } else if (tag_specifier.tag_value_case() ==
                envoy::config::metrics::v2::TagSpecifier::kFixedValue) {
       default_tags_.emplace_back(
           Stats::Tag{.name_ = tag_specifier.tag_name(), .value_ = tag_specifier.fixed_value()});
     }
+  }
+}
+
+void TagProducerImpl::addExtractorsMatching(absl::string_view name) {
+  int num_found = 0;
+  Config::TagNames::get().forEach([this, name, &num_found](
+      const Config::TagNameValues::Descriptor& desc) {
+      if (desc.name == name) {
+        addExtractor(Stats::TagExtractorImpl::createTagExtractor(desc));
+        ++num_found;
+      }
+    });
+  if (num_found == 0) {
+    throw EnvoyException(fmt::format(
+        "No regex specified for tag specifier and no default regex for name: '{}'", name));
   }
 }
 

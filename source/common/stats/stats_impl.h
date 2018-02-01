@@ -91,6 +91,7 @@ public:
   std::string produceTags(const std::string& metric_name, std::vector<Tag>& tags) const override;
 
   void addExtractor(TagExtractorPtr extractor);
+  void addExtractorsMatching(absl::string_view name);
 
 private:
   void reserveResources(const envoy::config::metrics::v2::StatsConfig& config);
