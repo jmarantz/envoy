@@ -9,6 +9,10 @@
 
 #include "envoy/common/pure.h"
 
+namespace absl {
+class string_view;
+}
+
 namespace Envoy {
 namespace Event {
 class Dispatcher;
@@ -57,6 +61,8 @@ public:
    */
   virtual bool extractTag(const std::string& name, std::vector<Tag>& tags,
                           IntervalSet& remove_characters) const PURE;
+
+  virtual absl::string_view prefixToken() const PURE;
 };
 
 typedef std::unique_ptr<const TagExtractor> TagExtractorPtr;
