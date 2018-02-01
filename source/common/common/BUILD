@@ -123,7 +123,10 @@ envoy_cc_library(
     external_deps = [
         "abseil_strings",
     ],
-    deps = ["//include/envoy/common:time_interface"],
+    deps = [
+        ":hash_lib",
+        "//include/envoy/common:time_interface",
+    ],
 )
 
 genrule(

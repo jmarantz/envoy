@@ -98,7 +98,8 @@ private:
                             std::unordered_set<std::string>& names);
 
   std::vector<TagExtractorPtr> tag_extractors_;
-  std::map<absl::string_view, std::vector<TagExtractorPtr>> tag_extractor_prefix_map_;
+  std::unordered_map<absl::string_view, std::vector<TagExtractorPtr>,
+                     StringViewHash> tag_extractor_prefix_map_;
   std::vector<Tag> default_tags_;
 };
 

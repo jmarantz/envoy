@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "common/common/hash.h"
 #include "envoy/common/time.h"
 
 #include "absl/strings/string_view.h"
@@ -305,6 +306,12 @@ class IntervalSet {
   };
   typedef std::set<Range, Compare> RangeSet;
   RangeSet ranges_;             // Ranges do not overlap.
+};
+
+struct StringViewHash {
+  std::size_t operator()(const absl::string_view& k) const {
+    return HashUtil::xxHash64(k);
+  }
 };
 
 } // namespace Envoy

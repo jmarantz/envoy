@@ -103,7 +103,6 @@ TagNameValues::TagNameValues() {
 
   // http.(<stat_prefix>.)* or listener.[<address>.]http.(<stat_prefix>.)*
   //addRegex(HTTP_CONN_MANAGER_PREFIX, "^(?:|listener(?=\\.).*?\\.)http\\.((.*?)\\.)");
-  //addTokenized(HTTP_CONN_MANAGER_PREFIX, "listener.http.$c*");
   addTokenized(HTTP_CONN_MANAGER_PREFIX, "listener.$*.http.$c1.$*");
   addTokenized(HTTP_CONN_MANAGER_PREFIX, "http.$c1.$*");
 

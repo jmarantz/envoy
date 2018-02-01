@@ -362,11 +362,11 @@ bool TagExtractorTokenImpl::extractTag(const std::string& stat_name, std::vector
     // TODO(jmarantz): if we eliminate the regex path completely we can specify
     // this range in terms of token indexes rather than characters, which will
     // eliminate this rather expensive calculation.
-    std::string::size_type start =
-        absl::StrJoin(&split_vec[0], &split_vec[capture_start_index], ".").size();
-    std::string::size_type size =
-        absl::StrJoin(&split_vec[capture_start_index], &split_vec[capture_end_index], ".").size()
-        + 1 /* trailing dot */;
+    std::string::size_type start = capture_start_index - 1;  // n-1 dots between n tokens.
+    for (size_t i = 0; i < capture_start_index; ++i) {
+      start += split_vec[i].size();
+    }
+    std::string::size_type size = tag.value_.size() + 1 /* trailing dot */;
     remove_characters.insert(start, start + size);
   }
   cache->report(start_time_us, "Success", name());
