@@ -212,6 +212,19 @@ typedef ConstSingleton<MetadataEnvoyLbKeyValues> MetadataEnvoyLbKeys;
  */
 class TagNameValues {
 public:
+  TagNameValues();
+
+  // A tag-name can be described with a regex or with a simple string split
+  // delimited by ".", with $0 and $1 specified -- $0 would be the stripped
+  // from the string during tag extraction, and $1 would be returned as the
+  // tag.  The is_regexp field indicates whether the pattern should be parsed
+  // as a regexp, or just split into an array of tokens using ".".
+  struct Descriptor {
+    std::string name;
+    std::string pattern;
+    bool is_regex;
+  };
+
   // Cluster name tag
   const std::string CLUSTER_NAME = "envoy.cluster_name";
   // Listener port tag
@@ -259,15 +272,21 @@ public:
   // Request response code class
   const std::string RESPONSE_CODE_CLASS = "envoy.response_code_class";
 
-  // Mapping from the names above to their respective regex strings.
-  const std::vector<std::pair<std::string, std::string>> name_regex_pairs_;
+  // Returns the descriptor, or null if none found.
+  const Descriptor* find(const std::string& name) const;
 
-  // Constructor to fill map.
-  TagNameValues() : name_regex_pairs_(getRegexMapping()) {}
+  void forEach(std::function<void(const Descriptor&)>) const;
 
 private:
-  // Creates a regex mapping for all tag names.
-  std::vector<std::pair<std::string, std::string>> getRegexMapping();
+  void addRegex(const std::string& name, const std::string& regex) { add(name, regex, true); }
+  void addTokenized(const std::string& name, const std::string& pattern) {
+    add(name, pattern, false);
+  }
+  void add(const std::string& name, const std::string& pattern, bool is_regex);
+
+  // Mapping from the names above to their respective regex strings.
+  std::unordered_map<std::string, Descriptor> descriptor_map_;
+  std::vector<const Descriptor* /* owned by descriptor_map_ */> descriptor_vec_;
 };
 
 typedef ConstSingleton<TagNameValues> TagNames;

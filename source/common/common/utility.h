@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstdint>
 #include <regex>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -286,6 +287,24 @@ public:
    */
   static std::regex parseRegex(const std::string& regex,
                                std::regex::flag_type flags = std::regex::optimize);
+};
+
+class IntervalSet {
+ public:
+  typedef std::pair<int, int> Range;
+
+  void insert(int left, int right);
+  std::string toString() const;
+  std::vector<Range> toVector() const;
+
+ private:
+  struct Compare {
+    bool operator()(const Range& a, const Range& b) const {
+      return a.second < b.first;
+    }
+  };
+  typedef std::set<Range, Compare> RangeSet;
+  RangeSet ranges_;             // Ranges do not overlap.
 };
 
 } // namespace Envoy

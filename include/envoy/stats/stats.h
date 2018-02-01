@@ -18,6 +18,8 @@ namespace ThreadLocal {
 class Instance;
 }
 
+class IntervalSet;
+
 namespace Stats {
 
 /**
@@ -53,7 +55,8 @@ public:
    * @param tags list of tags updated with the tag name and value if found in the name.
    * @return std::string modified name with the tag removed.
    */
-  virtual std::string extractTag(const std::string& name, std::vector<Tag>& tags) const PURE;
+  virtual bool extractTag(const std::string& name, std::vector<Tag>& tags,
+                          IntervalSet& remove_characters) const PURE;
 };
 
 typedef std::unique_ptr<const TagExtractor> TagExtractorPtr;
