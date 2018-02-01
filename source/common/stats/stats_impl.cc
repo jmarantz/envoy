@@ -197,10 +197,12 @@ bool TagExtractorRegexImpl::extractTag(const std::string& stat_name, std::vector
   uint64_t start_time_us = NowUs();
   if (!prefix_.empty()) {
     if (prefix_[0] == '^') {
+      /*
       if (!absl::StartsWith(stat_name, prefix_.substr(1))) {
         cache->report(start_time_us, "prefix-discard", name());
         return false;
       }
+      */
     } else if (absl::string_view(stat_name).find(prefix_) == absl::string_view::npos) {
       cache->report(start_time_us, "embedded-discard", name());
       return false;
@@ -282,6 +284,7 @@ bool TagExtractorTokenImpl::extractTag(const std::string& stat_name, std::vector
   RegexTimeCache* cache = RegexTimeCache::getOrCreate();
 
   uint64_t start_time_us = NowUs();
+  /*
   if (!prefix_.empty() && !absl::StartsWith(stat_name, prefix_)) {
     cache->report(start_time_us, "Prefix-discard", name());
     return false;
@@ -289,29 +292,15 @@ bool TagExtractorTokenImpl::extractTag(const std::string& stat_name, std::vector
     cache->report(start_time_us, "Suffix-discard", name());
     return false;
   }
+  */
 
   std::vector<absl::string_view> split_vec = StringUtil::splitToken(stat_name, ".");
 
   // In general a match may cover a span of tokens from split_vec.
   absl::string_view::size_type match_start_index = absl::string_view::npos;
+  absl::string_view::size_type capture_start_index = absl::string_view::npos;
+  absl::string_view::size_type capture_end_index = absl::string_view::npos;
   bool capture = false;
-  std::string match;
-  const auto capture_match = [&](absl::string_view::size_type pos) {
-    if (match_start_index != absl::string_view::npos) {
-      if (capture) {
-        match = absl::StrJoin(&split_vec[match_start_index], &split_vec[pos], ".");
-        capture = false;
-
-        // TODO(jmarantz): if we eliminate the regex path completely we can specify
-        // this range in terms of token indexes rather than characters, which will
-        // eliminate this rather expensive calculation.
-        std::string::size_type start =
-            absl::StrJoin(&split_vec[0], &split_vec[match_start_index], ".").size();
-        remove_characters.insert(start, start + match.size() + 1 /* leading dot */);
-      }
-      match_start_index = absl::string_view::npos;
-    }
-  };
 
   // In general, the number of tokens in the split will be >= the number of tokens in
   // the pattern, because some of the tokens may include addresses with embedded dots.
@@ -322,7 +311,11 @@ bool TagExtractorTokenImpl::extractTag(const std::string& stat_name, std::vector
     const absl::string_view split = split_vec[s];
     const absl::string_view token = tokens_[t];
     if (split == token) {  // TODO(jmarantz): make comparison aware of $$.
-      capture_match(s);
+      if (capture) {
+        capture_end_index = s;
+        capture = false;
+      }
+      match_start_index = absl::string_view::npos;
       ++t;
     } else if (match_start_index == absl::string_view::npos) {
       // Here are the capture-keywords:
@@ -337,11 +330,13 @@ bool TagExtractorTokenImpl::extractTag(const std::string& stat_name, std::vector
         } else if (token == "$*") {
           match_start_index = s;
         } else {
-          match_start_index = s;
-          capture = true;
           if (token == "$c1") {
-            capture_match(s + 1);
+            capture_start_index = s;
+            capture_end_index = s + 1;
           } else {
+            match_start_index = s;
+            capture_start_index = s;
+            capture = true;
             RELEASE_ASSERT(token == "$c*");
           }
         }
@@ -351,18 +346,28 @@ bool TagExtractorTokenImpl::extractTag(const std::string& stat_name, std::vector
       }
     }
   }
+
   if (t != num_tokens) {
     cache->report(start_time_us, "not enough tokens", name());
     return false;
   }
-  if (match_start_index != absl::string_view::npos) {
-    capture_match(split_vec.size());
-  }
-  if (!match.empty()) {
+  if (capture_start_index != absl::string_view::npos) {
+    if (capture_end_index == absl::string_view::npos) {
+      capture_end_index = split_vec.size();
+    }
     tags.emplace_back();
     Tag& tag = tags.back();
     tag.name_ = name();
-    tag.value_.swap(match);
+    tag.value_ = absl::StrJoin(&split_vec[capture_start_index], &split_vec[capture_end_index], ".");
+    // TODO(jmarantz): if we eliminate the regex path completely we can specify
+    // this range in terms of token indexes rather than characters, which will
+    // eliminate this rather expensive calculation.
+    std::string::size_type start =
+        absl::StrJoin(&split_vec[0], &split_vec[capture_start_index], ".").size();
+    std::string::size_type size =
+        absl::StrJoin(&split_vec[capture_start_index], &split_vec[capture_end_index], ".").size()
+        + 1 /* trailing dot */;
+    remove_characters.insert(start, start + size);
   }
   cache->report(start_time_us, "Success", name());
   return true;

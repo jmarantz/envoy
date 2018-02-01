@@ -375,7 +375,7 @@ TEST(TagExtractorTest, DefaultTagExtractors) {
 
 TEST(TagExtractorTest, ExtractRegexPrefix) {
   EXPECT_EQ("^prefix", TagExtractorRegexImpl::extractRegexPrefix("^prefix(foo"));
-  EXPECT_EQ("^prefix", TagExtractorRegexImpl::extractRegexPrefix("^prefix\\.foo"));
+  EXPECT_EQ("^prefix.", TagExtractorRegexImpl::extractRegexPrefix("^prefix\\.foo"));
   EXPECT_EQ("", TagExtractorRegexImpl::extractRegexPrefix("(prefix"));
   EXPECT_EQ("", TagExtractorRegexImpl::extractRegexPrefix("^(prefix"));
   EXPECT_EQ("prefix", TagExtractorRegexImpl::extractRegexPrefix("prefix(foo"));
