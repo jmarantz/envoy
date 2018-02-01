@@ -320,8 +320,5 @@ envoy_cc_library(
     name = "well_known_names",
     srcs = ["well_known_names.cc"],
     hdrs = ["well_known_names.h"],
-    external_deps = [
-        "abseil_strings",
-    ],
     deps = ["//source/common/singleton:const_singleton"],
 )

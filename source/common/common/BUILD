@@ -125,10 +125,6 @@ envoy_cc_library(
     srcs = ["utility.cc"],
     hdrs = ["utility.h"],
     deps = [
-    external_deps = [
-        "abseil_strings",
-    ],
-    deps = [
         ":hash_lib",
         "//include/envoy/common:time_interface",
     ],

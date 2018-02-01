@@ -152,11 +152,14 @@ std::string TagExtractorRegexImpl::extractRegexPrefix(absl::string_view regex) {
 }
 
 absl::string_view TagExtractorRegexImpl::prefixToken() const {
-  if (prefix_.empty() || !absl::EndsWith(prefix_, ".") ||
-      (prefix_.find('.') != prefix_.size() - 1)) {
-    return absl::string_view(nullptr, 0);
+  if (absl::StartsWith(prefix_, "^")) {
+    std::string::size_type dot = prefix_.find('.');
+    if (dot != std::string::npos) {
+      // Remove the leading ^ and trailing .
+      return absl::string_view(prefix_.data() + 1, prefix_.size() - 2);
+    }
   }
-  return absl::string_view(prefix_).substr(0, prefix_.size() - 1);
+  return absl::string_view(nullptr, 0);
 }
 
 TagExtractorPtr TagExtractorImpl::createTagExtractor(const std::string& name,
@@ -346,21 +349,12 @@ bool TagExtractorTokenImpl::extractTag(const std::string& stat_name, std::vector
         return false;
       }
     }
-<<<<<<< HEAD
   }
 
   if (t != num_tokens) {
     cache->report(start_time_us, "not enough tokens", name());
     return false;
   }
-=======
-  }
-
-  if (t != num_tokens) {
-    cache->report(start_time_us, "not enough tokens", name());
-    return false;
-  }
->>>>>>> 862ad979d458045ec9267d1d3c3b165be8c4a5e9
   if (capture_start_index != absl::string_view::npos) {
     if (capture_end_index == absl::string_view::npos) {
       capture_end_index = split_vec.size();
