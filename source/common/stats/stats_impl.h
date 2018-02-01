@@ -45,6 +45,7 @@ public:
 
   TagExtractorImpl(const std::string& name);
   std::string name() const override { return name_; }
+
 private:
   const std::string name_;
 };
@@ -54,7 +55,8 @@ public:
   TagExtractorRegexImpl(const std::string& name, const std::string& regex);
   bool extractTag(const std::string& stat_name, std::vector<Tag>& tags,
                   IntervalSet& remove_characters) const override;
-  static absl::string_view extractRegexPrefix(absl::string_view regex);
+  absl::string_view prefixToken() const override;
+  static std::string extractRegexPrefix(absl::string_view regex);
 
 private:
   const std::string prefix_;
@@ -66,6 +68,7 @@ public:
   TagExtractorTokenImpl(const std::string& name, const std::string& pattern);
   bool extractTag(const std::string& stat_name, std::vector<Tag>& tags,
                   IntervalSet& remove_characters) const override;
+  absl::string_view prefixToken() const override;
 
 private:
   const std::string pattern_;
@@ -87,12 +90,15 @@ public:
    */
   std::string produceTags(const std::string& metric_name, std::vector<Tag>& tags) const override;
 
+  void addExtractor(TagExtractorPtr extractor);
+
 private:
   void reserveResources(const envoy::config::metrics::v2::StatsConfig& config);
   void addDefaultExtractors(const envoy::config::metrics::v2::StatsConfig& config,
                             std::unordered_set<std::string>& names);
 
   std::vector<TagExtractorPtr> tag_extractors_;
+  std::map<absl::string_view, std::vector<TagExtractorPtr>> tag_extractor_prefix_map_;
   std::vector<Tag> default_tags_;
 };
 

@@ -133,17 +133,29 @@ std::string TagExtractorImpl::applyRemovals(const std::string& str,
   return ret;
 }
 
-absl::string_view TagExtractorRegexImpl::extractRegexPrefix(absl::string_view regex) {
+std::string TagExtractorRegexImpl::extractRegexPrefix(absl::string_view regex) {
   absl::string_view::size_type start_pos = absl::StartsWith(regex, "^") ? 1 : 0;
   for (absl::string_view::size_type i = start_pos; i < regex.size(); ++i) {
     if (!absl::ascii_isalnum(regex[i]) && (regex[i] != '_')) {
       if (i > start_pos) {
-        return regex.substr(0, i);
+        std::string prefix{regex.substr(0, i)};
+        if ((regex.substr(i, 2) == "\\.") || (regex.substr(i, 5) == "(?=\\.")) {
+          prefix += ".";
+        }
+        return prefix;
       }
       break;
     }
   }
-  return absl::string_view(nullptr, 0);
+  return "";
+}
+
+absl::string_view TagExtractorRegexImpl::prefixToken() const {
+  if (prefix_.empty() || !absl::EndsWith(prefix_, ".") ||
+      (prefix_.find('.') != prefix_.size() - 1)) {
+    return absl::string_view(nullptr, 0);
+  }
+  return absl::string_view(prefix_).substr(0, prefix_.size() - 1);
 }
 
 TagExtractorPtr TagExtractorImpl::createTagExtractor(const std::string& name,
@@ -253,6 +265,16 @@ TagExtractorTokenImpl::TagExtractorTokenImpl(const std::string& name, const std:
       }
     }
   }
+}
+
+absl::string_view TagExtractorTokenImpl::prefixToken() const {
+  if (!tokens_.empty()) {
+    absl::string_view prefix = tokens_[0];
+    if (!prefix.empty() && (prefix[0] != '$')) {
+      return prefix;
+    }
+  }
+  return absl::string_view(nullptr, 0);
 }
 
 bool TagExtractorTokenImpl::extractTag(const std::string& stat_name, std::vector<Tag>& tags,
@@ -369,14 +391,22 @@ TagProducerImpl::TagProducerImpl(const envoy::config::metrics::v2::StatsConfig& 
     if (tag_specifier.tag_value_case() ==
             envoy::config::metrics::v2::TagSpecifier::TAG_VALUE_NOT_SET ||
         tag_specifier.tag_value_case() == envoy::config::metrics::v2::TagSpecifier::kRegex) {
-      tag_extractors_.emplace_back(Stats::TagExtractorImpl::createTagExtractor(
+      addExtractor(Stats::TagExtractorImpl::createTagExtractor(
           tag_specifier.tag_name(), tag_specifier.regex()));
-
     } else if (tag_specifier.tag_value_case() ==
                envoy::config::metrics::v2::TagSpecifier::kFixedValue) {
       default_tags_.emplace_back(
           Stats::Tag{.name_ = tag_specifier.tag_name(), .value_ = tag_specifier.fixed_value()});
     }
+  }
+}
+
+void TagProducerImpl::addExtractor(TagExtractorPtr extractor) {
+  absl::string_view prefix = extractor->prefixToken();
+  if (prefix.empty()) {
+    tag_extractors_.emplace_back(std::move(extractor));
+  } else {
+    tag_extractor_prefix_map_[prefix].emplace_back(std::move(extractor));
   }
 }
 
@@ -387,6 +417,16 @@ std::string TagProducerImpl::produceTags(const std::string& name, std::vector<Ta
   bool needs_removal = false;
   for (const TagExtractorPtr& tag_extractor : tag_extractors_) {
     needs_removal |= tag_extractor->extractTag(name, tags, remove_characters);
+  }
+  std::string::size_type dot = name.find('.');
+  if (dot != std::string::npos) {
+    absl::string_view token = absl::string_view(name.data(), dot);
+    auto p = tag_extractor_prefix_map_.find(token);
+    if (p != tag_extractor_prefix_map_.end()) {
+      for (const TagExtractorPtr& tag_extractor : p->second) {
+        needs_removal |= tag_extractor->extractTag(name, tags, remove_characters);
+      }
+    }
   }
   if (!needs_removal) {
     return name;
@@ -413,7 +453,7 @@ void TagProducerImpl::addDefaultExtractors(const envoy::config::metrics::v2::Sta
   if (!config.has_use_all_default_tags() || config.use_all_default_tags().value()) {
     Config::TagNames::get().forEach([this, &names](const Config::TagNameValues::Descriptor& desc) {
         names.emplace(desc.name);
-        tag_extractors_.emplace_back(Stats::TagExtractorImpl::createTagExtractor(desc));
+        addExtractor(Stats::TagExtractorImpl::createTagExtractor(desc));
       });
   }
 }
