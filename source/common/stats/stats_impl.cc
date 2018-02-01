@@ -152,10 +152,13 @@ TagExtractorPtr TagExtractorImpl::createTagExtractor(const std::string& name,
     throw EnvoyException("tag_name cannot be empty");
   }
 
-  if (!regex.empty()) {
-    return TagExtractorPtr{new TagExtractorRegexImpl(name, regex)};
+  if (regex.empty()) {
+    throw EnvoyException(fmt::format(
+        "No regex specified for tag specifier and no default regex for name: '{}'", name));
   }
+  return TagExtractorPtr{new TagExtractorRegexImpl(name, regex)};
 
+  /*
   // Look up the default for that name.
   const Config::TagNameValues::Descriptor* desc = Config::TagNames::get().find(name);
   if (desc == nullptr) {
@@ -163,6 +166,7 @@ TagExtractorPtr TagExtractorImpl::createTagExtractor(const std::string& name,
         "No regex specified for tag specifier and no default regex for name: '{}'", name));
   }
   return createTagExtractor(*desc);
+  */
 }
 
 TagExtractorPtr TagExtractorImpl::createTagExtractor(
@@ -298,17 +302,12 @@ bool TagExtractorTokenImpl::extractTag(const std::string& stat_name, std::vector
     if (split == token) {  // TODO(jmarantz): make comparison aware of $$.
       capture_match(s);
       ++t;
-      /*
-    } else if ((t - 1 < num_tokens) && (token == "$0") && (split == tokens_[t + 1])) {
-      // A $0 pattern can be skipped entirely if the following token matches as a literal.
-      t += 2;
-      */
     } else if (match_start_index == absl::string_view::npos) {
       // Here are the capture-keywords:
       //   $1 -- swallow one token
       //   $c1 -- copy one token
-      //   $* -- swallow N tokens.
-      //   $c* -- capture N tokens.
+      //   $* -- greedily swallow N tokens until a literal match or dend of string.
+      //   $c* -- greedily capture N tokens.
       if (token[0] == '$') {  // token guaranteed to be non-empty due to SkipWhitespace in ctor.
         ++t;
         if (token == "$1") {

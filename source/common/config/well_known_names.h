@@ -259,7 +259,7 @@ public:
   const std::string RESPONSE_CODE_CLASS = "envoy.response_code_class";
 
   // Returns the descriptor, or null if none found.
-  const Descriptor* find(const std::string& name) const;
+  //const Descriptor* find(const std::string& name) const;
 
   void forEach(std::function<void(const Descriptor&)>) const;
 
@@ -271,8 +271,9 @@ private:
   void add(const std::string& name, const std::string& pattern, bool is_regex);
 
   // Mapping from the names above to their respective regex strings.
-  std::unordered_map<std::string, Descriptor> descriptor_map_;
-  std::vector<const Descriptor* /* owned by descriptor_map_ */> descriptor_vec_;
+  //std::unordered_map<std::string, Descriptor> descriptor_map_;
+  //std::vector<const Descriptor* /* owned by descriptor_map_ */> descriptor_vec_;
+  std::vector<Descriptor> descriptor_vec_;
 };
 
 typedef ConstSingleton<TagNameValues> TagNames;

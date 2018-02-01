@@ -102,7 +102,10 @@ TagNameValues::TagNameValues() {
   addTokenized(CLUSTER_NAME, "cluster.$c1");
 
   // http.(<stat_prefix>.)* or listener.[<address>.]http.(<stat_prefix>.)*
-  addRegex(HTTP_CONN_MANAGER_PREFIX, "^(?:|listener(?=\\.).*?\\.)http\\.((.*?)\\.)");
+  //addRegex(HTTP_CONN_MANAGER_PREFIX, "^(?:|listener(?=\\.).*?\\.)http\\.((.*?)\\.)");
+  //addTokenized(HTTP_CONN_MANAGER_PREFIX, "listener.http.$c*");
+  addTokenized(HTTP_CONN_MANAGER_PREFIX, "listener.$*.http.$c1.$*");
+  addTokenized(HTTP_CONN_MANAGER_PREFIX, "http.$c1.$*");
 
   // listener.(<address>.)*
   addRegex(LISTENER_ADDRESS,
@@ -116,13 +119,16 @@ TagNameValues::TagNameValues() {
 }
 
 void TagNameValues::add(const std::string& name, const std::string& pattern, bool is_regex) {
-  Descriptor& descriptor = descriptor_map_[name];
+  //Descriptor& descriptor = descriptor_map_[name];
+  descriptor_vec_.emplace_back();
+  Descriptor& descriptor = descriptor_vec_.back();
   descriptor.name = name;
   descriptor.pattern = pattern;
   descriptor.is_regex = is_regex;
-  descriptor_vec_.push_back(&descriptor);
+  //descriptor_vec_.push_back(&descriptor);
 }
 
+/*
 const TagNameValues::Descriptor* TagNameValues::find(const std::string& name) const {
   auto p = descriptor_map_.find(name);
   if (p == descriptor_map_.end()) {
@@ -130,10 +136,11 @@ const TagNameValues::Descriptor* TagNameValues::find(const std::string& name) co
   }
   return &p->second;
 }
+*/
 
 void TagNameValues::forEach(std::function<void(const Descriptor&)> f) const {
-  for (const Descriptor* desc : descriptor_vec_) {
-    f(*desc);
+  for (const Descriptor& desc : descriptor_vec_) {
+    f(desc);
   }
 }
 

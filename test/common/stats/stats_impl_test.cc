@@ -125,7 +125,7 @@ class DefaultTagRegexTester {
 public:
   DefaultTagRegexTester() {
     Config::TagNames::get().forEach([this](const Config::TagNameValues::Descriptor& desc) {
-        tag_extractors_.emplace_back(TagExtractorImpl::createTagExtractor(desc.name, ""));
+        tag_extractors_.emplace_back(TagExtractorImpl::createTagExtractor(desc));
       });
   }
   void testRegex(const std::string& stat_name, const std::string& expected_tag_extracted_name,
