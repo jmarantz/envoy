@@ -192,7 +192,7 @@ TagExtractorImpl::createTagExtractor(const Config::TagNameValues::Descriptor& de
 }
 
 bool TagExtractorRegexImpl::extractTag(const std::string& stat_name, std::vector<Tag>& tags,
-                                       IntervalSet& remove_characters) const {
+                                       IntervalSet<size_t>& remove_characters) const {
   RegexTimeCache* cache = RegexTimeCache::getOrCreate();
 
   uint64_t start_time_us = NowUs();
@@ -227,14 +227,12 @@ bool TagExtractorRegexImpl::extractTag(const std::string& stat_name, std::vector
     tag.name_ = name();
     tag.value_ = value_subexpr.str();
 
-    // Reconstructs the tag_extracted_name without remove_subexpr.
+    // Determines which characters to remove from stat_name to elide remove_subexpr.
     std::string::size_type start = remove_subexpr.first - stat_name.begin();
     std::string::size_type end = remove_subexpr.second - stat_name.begin();
     remove_characters.insert(start, end);
-    cache->report(start_time_us, "success", name());
     return true;
   }
-  cache->report(start_time_us, "miss", name());
   return false;
 }
 
@@ -456,6 +454,17 @@ std::string TagProducerImpl::produceTags(const std::string& name, std::vector<Ta
     return name;
   }
   return TagExtractorImpl::applyRemovals(name, remove_characters);
+}
+
+std::string TagProducerImpl::produceTags(const std::string& stat_name,
+                                         std::vector<Tag>& tags) const {
+  tags.insert(tags.end(), default_tags_.begin(), default_tags_.end());
+
+  IntervalSetImpl<size_t> remove_characters;
+  for (const TagExtractorPtr& tag_extractor : tag_extractors_) {
+    tag_extractor->extractTag(stat_name, tags, remove_characters);
+  }
+  return StringUtil::removeCharacters(stat_name, remove_characters);
 }
 
 // Roughly estimate the size of the vectors.

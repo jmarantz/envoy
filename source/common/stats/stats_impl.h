@@ -45,6 +45,8 @@ public:
 
   TagExtractorImpl(const std::string& name);
   std::string name() const override { return name_; }
+  bool extractTag(const std::string& tag_extracted_name, std::vector<Tag>& tags,
+                  IntervalSet<size_t>& remove_characters) const override;
 
 private:
   const std::string name_;
