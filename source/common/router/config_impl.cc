@@ -229,7 +229,8 @@ RouteEntryImplBase::RouteEntryImplBase(const VirtualHostImpl& vhost,
       timeout_(PROTOBUF_GET_MS_OR_DEFAULT(route.route(), timeout, DEFAULT_ROUTE_TIMEOUT_MS)),
       runtime_(loadRuntimeData(route.match())), loader_(loader),
       host_redirect_(route.redirect().host_redirect()),
-      path_redirect_(route.redirect().path_redirect()), retry_policy_(route.route()),
+      path_redirect_(route.redirect().path_redirect()),
+      https_redirect_(route.redirect().https_redirect()), retry_policy_(route.route()),
       rate_limit_policy_(route.route().rate_limits()), shadow_policy_(route.route()),
       priority_(ConfigUtility::parsePriority(route.route().priority())),
       total_cluster_weight_(
@@ -388,6 +389,7 @@ std::string RouteEntryImplBase::newPath(const Http::HeaderMap& headers) const {
 
   const char* final_host;
   const char* final_path;
+  const char* final_scheme;
   if (!host_redirect_.empty()) {
     final_host = host_redirect_.c_str();
   } else {
@@ -402,9 +404,14 @@ std::string RouteEntryImplBase::newPath(const Http::HeaderMap& headers) const {
     final_path = headers.Path()->value().c_str();
   }
 
-  ASSERT(headers.ForwardedProto());
-  return fmt::format("{}://{}{}", headers.ForwardedProto()->value().c_str(), final_host,
-                     final_path);
+  if (https_redirect_) {
+    final_scheme = Http::Headers::get().SchemeValues.Https.c_str();
+  } else {
+    ASSERT(headers.ForwardedProto());
+    final_scheme = headers.ForwardedProto()->value().c_str();
+  }
+
+  return fmt::format("{}://{}{}", final_scheme, final_host, final_path);
 }
 
 std::multimap<std::string, std::string>
@@ -585,7 +592,8 @@ RegexRouteEntryImpl::RegexRouteEntryImpl(const VirtualHostImpl& vhost,
                                          const envoy::api::v2::route::Route& route,
                                          Runtime::Loader& loader)
     : RouteEntryImplBase(vhost, route, loader),
-      regex_(RegexUtil::parseRegex(route.match().regex().c_str())) {}
+      regex_(RegexUtil::parseRegex(route.match().regex().c_str())),
+      regex_str_(route.match().regex()) {}
 
 void RegexRouteEntryImpl::finalizeRequestHeaders(
     Http::HeaderMap& headers, const RequestInfo::RequestInfo& request_info) const {
@@ -671,14 +679,16 @@ VirtualHostImpl::VirtualHostImpl(const envoy::api::v2::route::VirtualHost& virtu
 
 VirtualHostImpl::VirtualClusterEntry::VirtualClusterEntry(
     const envoy::api::v2::route::VirtualCluster& virtual_cluster) {
-  if (virtual_cluster.method() != envoy::api::v2::RequestMethod::METHOD_UNSPECIFIED) {
-    method_ = envoy::api::v2::RequestMethod_Name(virtual_cluster.method());
+  if (virtual_cluster.method() != envoy::api::v2::core::RequestMethod::METHOD_UNSPECIFIED) {
+    method_ = envoy::api::v2::core::RequestMethod_Name(virtual_cluster.method());
   }
 
   const std::string pattern = virtual_cluster.pattern();
   pattern_ = RegexUtil::parseRegex(pattern);
   name_ = virtual_cluster.name();
 }
+
+const Config& VirtualHostImpl::routeConfig() const { return global_route_config_; }
 
 const VirtualHostImpl* RouteMatcher::findWildcardVirtualHost(const std::string& host) const {
   // We do a longest wildcard suffix match against the host that's passed in.
@@ -804,7 +814,8 @@ VirtualHostImpl::virtualClusterFromEntries(const Http::HeaderMap& headers) const
 }
 
 ConfigImpl::ConfigImpl(const envoy::api::v2::RouteConfiguration& config, Runtime::Loader& runtime,
-                       Upstream::ClusterManager& cm, bool validate_clusters_default) {
+                       Upstream::ClusterManager& cm, bool validate_clusters_default)
+    : name_(config.name()) {
   route_matcher_.reset(new RouteMatcher(
       config, *this, runtime, cm,
       PROTOBUF_GET_WRAPPED_OR_DEFAULT(config, validate_clusters, validate_clusters_default)));
