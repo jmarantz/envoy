@@ -115,7 +115,6 @@ public:
   AdminImpl admin_;
   AdminFilter filter_;
   Http::TestHeaderMapImpl request_headers_;
-  Thread::MutexBasicLockable lock_;
 };
 
 INSTANTIATE_TEST_CASE_P(IpVersions, AdminInstanceTest,
