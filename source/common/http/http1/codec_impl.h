@@ -33,6 +33,7 @@ class StreamEncoderImpl : public StreamEncoder,
                           public StreamCallbackHelper {
 public:
   // Http::StreamEncoder
+  void encode100ContinueHeaders(const HeaderMap& headers) override;
   void encodeHeaders(const HeaderMap& headers, bool end_stream) override;
   void encodeData(Buffer::Instance& data, bool end_stream) override;
   void encodeTrailers(const HeaderMap& trailers) override;
@@ -69,6 +70,7 @@ private:
   void endEncode();
 
   bool chunk_encoding_{true};
+  bool processing_100_continue_{false};
 };
 
 /**
@@ -148,6 +150,7 @@ public:
 
   void readDisable(bool disable) { connection_.readDisable(disable); }
   uint32_t bufferLimit() { return connection_.bufferLimit(); }
+  virtual bool supports_http_10() { return false; }
 
 protected:
   ConnectionImpl(Network::Connection& connection, http_parser_type type);
@@ -266,6 +269,8 @@ public:
   ServerConnectionImpl(Network::Connection& connection, ServerConnectionCallbacks& callbacks,
                        Http1Settings settings);
 
+  virtual bool supports_http_10() override { return codec_settings_.accept_http_10_; }
+
 private:
   /**
    * An active HTTP/1.1 request.
@@ -340,6 +345,8 @@ private:
 
   std::unique_ptr<RequestStreamEncoderImpl> request_encoder_;
   std::list<PendingResponse> pending_responses_;
+  // Set true between receiving 100-Continue headers and receiving the spurious onMessageComplete.
+  bool ignore_message_complete_for_100_continue_{};
 };
 
 } // namespace Http1

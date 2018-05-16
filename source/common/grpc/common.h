@@ -4,24 +4,26 @@
 #include <string>
 
 #include "envoy/common/exception.h"
-#include "envoy/common/optional.h"
 #include "envoy/grpc/status.h"
 #include "envoy/http/filter.h"
 #include "envoy/http/header_map.h"
 #include "envoy/http/message.h"
 #include "envoy/stats/stats.h"
 
+#include "common/grpc/status.h"
 #include "common/protobuf/protobuf.h"
+
+#include "absl/types/optional.h"
 
 namespace Envoy {
 namespace Grpc {
 
 class Exception : public EnvoyException {
 public:
-  Exception(const Optional<uint64_t>& grpc_status, const std::string& message)
+  Exception(const absl::optional<uint64_t>& grpc_status, const std::string& message)
       : EnvoyException(message), grpc_status_(grpc_status) {}
 
-  const Optional<uint64_t> grpc_status_;
+  const absl::optional<uint64_t> grpc_status_;
 };
 
 class Common {
@@ -33,12 +35,19 @@ public:
   static bool hasGrpcContentType(const Http::HeaderMap& headers);
 
   /**
+   * @param headers the headers to parse.
+   * @param bool indicating wether the header is at end_stream.
+   * @return bool indicating whether the header is a gRPC reseponse header
+   */
+  static bool isGrpcResponseHeader(const Http::HeaderMap& headers, bool end_stream);
+
+  /**
    * Returns the GrpcStatus code from a given set of trailers, if present.
    * @param trailers the trailers to parse.
-   * @return Optional<Status::GrpcStatus> the parsed status code or InvalidCode if no valid status
-   *         is found.
+   * @return absl::optional<Status::GrpcStatus> the parsed status code or InvalidCode if no valid
+   * status is found.
    */
-  static Optional<Status::GrpcStatus> getGrpcStatus(const Http::HeaderMap& trailers);
+  static absl::optional<Status::GrpcStatus> getGrpcStatus(const Http::HeaderMap& trailers);
 
   /**
    * Returns the grpc-message from a given set of trailers, if present.
@@ -47,21 +56,6 @@ public:
    *         trailers.
    */
   static std::string getGrpcMessage(const Http::HeaderMap& trailers);
-
-  /**
-   * Returns the gRPC status code from a given HTTP response status code. Ordinarily, it is expected
-   * that a 200 response is provided, but gRPC defines a mapping for intermediaries that are not
-   * gRPC aware, see https://github.com/grpc/grpc/blob/master/doc/http-grpc-status-mapping.md.
-   * @param http_response_status HTTP status code.
-   * @return Status::GrpcStatus corresponding gRPC status code.
-   */
-  static Status::GrpcStatus httpToGrpcStatus(uint64_t http_response_status);
-
-  /**
-   * @param grpc_status gRPC status from grpc-status header.
-   * @return uint64_t the canonical HTTP status code corresponding to a gRPC status code.
-   */
-  static uint64_t grpcToHttpStatus(Status::GrpcStatus grpc_status);
 
   /**
    * Charge a success/failure stat to a cluster/service/method.

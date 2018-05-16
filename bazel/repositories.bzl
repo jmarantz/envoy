@@ -89,6 +89,39 @@ def _build_recipe_repository_impl(ctxt):
         # This error message doesn't appear to the user :( https://github.com/bazelbuild/bazel/issues/3683
         fail("External dep build failed")
 
+def _default_envoy_build_config_impl(ctx):
+    ctx.file("WORKSPACE", "")
+    ctx.file("BUILD.bazel", "")
+    ctx.symlink(ctx.attr.config, "extensions_build_config.bzl")
+
+_default_envoy_build_config = repository_rule(
+    implementation = _default_envoy_build_config_impl,
+    attrs = {
+        "config": attr.label(default="@envoy//source/extensions:extensions_build_config.bzl"),
+    },
+)
+
+def _default_envoy_api_impl(ctx):
+    ctx.file("WORKSPACE", "")
+    ctx.file("BUILD.bazel", "")
+    api_dirs = [
+        "bazel",
+        "docs",
+        "envoy",
+        "examples",
+        "test",
+        "tools",
+    ]
+    for d in api_dirs:
+      ctx.symlink(ctx.path(ctx.attr.api).dirname.get_child(d), d)
+
+_default_envoy_api = repository_rule(
+    implementation = _default_envoy_api_impl,
+    attrs = {
+        "api": attr.label(default="@envoy//api:BUILD"),
+    },
+)
+
 # Python dependencies. If these become non-trivial, we might be better off using a virtualenv to
 # wrap them, but for now we can treat them as first-class Bazel.
 def _python_deps():
@@ -128,69 +161,22 @@ def _go_deps(skip_targets):
         _repository_impl("io_bazel_rules_go")
 
 def _envoy_api_deps():
-    _repository_impl("envoy_api")
+    # Treat the data plane API as an external repo, this simplifies exporting the API to
+    # https://github.com/envoyproxy/data-plane-api.
+    if "envoy_api" not in native.existing_rules().keys():
+        _default_envoy_api(name="envoy_api")
 
-    api_bind_targets = [
-        "address",
-        "base",
-        "bootstrap",
-        "discovery",
-        "cds",
-        "discovery",
-        "eds",
-        "health_check",
-        "lds",
-        "protocol",
-        "rds",
-        "sds",
-        "stats",
-        "trace",
-    ]
-    for t in api_bind_targets:
-        native.bind(
-            name = "envoy_" + t,
-            actual = "@envoy_api//api:" + t + "_cc",
-        )
-    filter_bind_targets = [
-        "accesslog",
-        "fault",
-    ]
-    for t in filter_bind_targets:
-        native.bind(
-            name = "envoy_filter_" + t,
-            actual = "@envoy_api//api/filter:" + t + "_cc",
-        )
-    http_filter_bind_targets = [
-        "buffer",
-        "fault",
-        "health_check",
-        "ip_tagging",
-        "lua",
-        "rate_limit",
-        "router",
-        "transcoder",
-    ]
-    for t in http_filter_bind_targets:
-        native.bind(
-            name = "envoy_filter_http_" + t,
-            actual = "@envoy_api//api/filter/http:" + t + "_cc",
-        )
-    network_filter_bind_targets = [
-        "http_connection_manager",
-        "tcp_proxy",
-        "mongo_proxy",
-        "redis_proxy",
-        "rate_limit",
-        "client_ssl_auth",
-    ]
-    for t in network_filter_bind_targets:
-        native.bind(
-            name = "envoy_filter_network_" + t,
-            actual = "@envoy_api//api/filter/network:" + t + "_cc",
-        )
     native.bind(
         name = "http_api_protos",
         actual = "@googleapis//:http_api_protos",
+    )
+    _repository_impl(
+        name = "six_archive",
+        build_file = "@com_google_protobuf//:six.BUILD",
+    )
+    native.bind(
+        name = "six",
+        actual = "@six_archive//:six",
     )
 
 def envoy_dependencies(path = "@envoy_deps//", skip_targets = []):
@@ -199,6 +185,8 @@ def envoy_dependencies(path = "@envoy_deps//", skip_targets = []):
         environ = [
             "CC",
             "CXX",
+            "CFLAGS",
+            "CXXFLAGS",
             "LD_LIBRARY_PATH"
         ],
         # Don't pretend we're in the sandbox, we do some evil stuff with envoy_dep_cache.
@@ -227,18 +215,27 @@ def envoy_dependencies(path = "@envoy_deps//", skip_targets = []):
                 actual = path + ":" + t,
             )
 
+    # Treat Envoy's overall build config as an external repo, so projects that
+    # build Envoy as a subcomponent can easily override the config.
+    if "envoy_build_config" not in native.existing_rules().keys():
+        _default_envoy_build_config(name = "envoy_build_config")
+
     # The long repo names (`com_github_fmtlib_fmt` instead of `fmtlib`) are
     # semi-standard in the Bazel community, intended to avoid both duplicate
     # dependencies and name conflicts.
+    _boringssl()
     _com_google_absl()
     _com_github_bombela_backward()
+    _com_github_circonus_labs_libcircllhist()
     _com_github_cyan4973_xxhash()
     _com_github_eile_tclap()
     _com_github_fmtlib_fmt()
     _com_github_gabime_spdlog()
     _com_github_gcovr_gcovr()
+    _com_github_google_libprotobuf_mutator()
     _io_opentracing_cpp()
     _com_lightstep_tracer_cpp()
+    _com_github_grpc_grpc()
     _com_github_nodejs_http_parser()
     _com_github_tencent_rapidjson()
     _com_google_googletest()
@@ -252,6 +249,13 @@ def envoy_dependencies(path = "@envoy_deps//", skip_targets = []):
     _go_deps(skip_targets)
     _envoy_api_deps()
 
+def _boringssl():
+    _repository_impl("boringssl")
+    native.bind(
+        name = "ssl",
+        actual = "@boringssl//:ssl",
+    )
+
 def _com_github_bombela_backward():
     _repository_impl(
         name = "com_github_bombela_backward",
@@ -260,6 +264,16 @@ def _com_github_bombela_backward():
     native.bind(
         name = "backward",
         actual = "@com_github_bombela_backward//:backward",
+    )
+
+def _com_github_circonus_labs_libcircllhist():
+    _repository_impl(
+        name = "com_github_circonus_labs_libcircllhist",
+        build_file = "@envoy//bazel/external:libcircllhist.BUILD",
+    )
+    native.bind(
+        name = "libcircllhist",
+        actual = "@com_github_circonus_labs_libcircllhist//:libcircllhist",
     )
 
 def _com_github_cyan4973_xxhash():
@@ -312,6 +326,16 @@ def _com_github_gcovr_gcovr():
         actual = "@com_github_gcovr_gcovr//:gcovr",
     )
 
+def _com_github_google_libprotobuf_mutator():
+    _repository_impl(
+        name = "com_github_google_libprotobuf_mutator",
+        build_file = "@envoy//bazel/external:libprotobuf_mutator.BUILD",
+    )
+    native.bind(
+        name = "libprotobuf_mutator",
+        actual = "@com_github_google_libprotobuf_mutator//:libprotobuf_mutator",
+    )
+
 def _io_opentracing_cpp():
     _repository_impl("io_opentracing_cpp")
     native.bind(
@@ -357,6 +381,10 @@ def _com_google_googletest():
         actual = "@com_google_googletest//:gtest",
     )
 
+# TODO(jmarantz): replace the use of bind and external_deps with just
+# the direct Bazel path at all sites.  This will make it easier to
+# pull in more bits of abseil as needed, and is now the preferred
+# method for pure Bazel deps.
 def _com_google_absl():
     _repository_impl("com_google_absl")
     native.bind(
@@ -366,6 +394,18 @@ def _com_google_absl():
     native.bind(
         name = "abseil_strings",
         actual = "@com_google_absl//absl/strings:strings",
+    )
+    native.bind(
+        name = "abseil_int128",
+        actual = "@com_google_absl//absl/numeric:int128",
+    )
+    native.bind(
+        name = "abseil_optional",
+        actual = "@com_google_absl//absl/types:optional",
+    )
+    native.bind(
+        name = "abseil_synchronization",
+        actual = "@com_google_absl//absl/synchronization:synchronization",
     )
 
 def _com_google_protobuf():
@@ -383,4 +423,31 @@ def _com_google_protobuf():
     native.bind(
         name = "protoc",
         actual = "@com_google_protobuf_cc//:protoc",
+    )
+
+def _com_github_grpc_grpc():
+    _repository_impl("com_github_grpc_grpc")
+
+    # Rebind some stuff to match what the gRPC Bazel is expecting.
+    native.bind(
+      name = "protobuf_headers",
+      actual = "@com_google_protobuf//:protobuf_headers",
+    )
+    native.bind(
+      name = "libssl",
+      actual = "//external:ssl",
+    )
+    native.bind(
+      name = "cares",
+      actual = "//external:ares",
+    )
+
+    native.bind(
+      name = "grpc",
+      actual = "@com_github_grpc_grpc//:grpc++"
+    )
+
+    native.bind(
+      name = "grpc_health_proto",
+      actual = "@envoy//bazel:grpc_health_proto",
     )

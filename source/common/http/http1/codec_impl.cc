@@ -8,12 +8,11 @@
 #include "envoy/network/connection.h"
 
 #include "common/common/enum_to_int.h"
+#include "common/common/fmt.h"
 #include "common/common/utility.h"
 #include "common/http/exception.h"
 #include "common/http/headers.h"
 #include "common/http/utility.h"
-
-#include "fmt/format.h"
 
 namespace Envoy {
 namespace Http {
@@ -34,6 +33,13 @@ void StreamEncoderImpl::encodeHeader(const char* key, uint32_t key_size, const c
   connection_.copyToBuffer(value, value_size);
   connection_.addCharToBuffer('\r');
   connection_.addCharToBuffer('\n');
+}
+
+void StreamEncoderImpl::encode100ContinueHeaders(const HeaderMap& headers) {
+  ASSERT(headers.Status()->value() == "100");
+  processing_100_continue_ = true;
+  encodeHeaders(headers, false);
+  processing_100_continue_ = false;
 }
 
 void StreamEncoderImpl::encodeHeaders(const HeaderMap& headers, bool end_stream) {
@@ -71,9 +77,14 @@ void StreamEncoderImpl::encodeHeaders(const HeaderMap& headers, bool end_stream)
   if (saw_content_length) {
     chunk_encoding_ = false;
   } else {
-    if (end_stream) {
+    if (processing_100_continue_) {
+      // Make sure we don't serialize chunk information with 100-Continue headers.
+      chunk_encoding_ = false;
+    } else if (end_stream) {
       encodeHeader(Headers::get().ContentLength.get().c_str(),
                    Headers::get().ContentLength.get().size(), "0", 1);
+      chunk_encoding_ = false;
+    } else if (connection_.protocol() == Protocol::Http10) {
       chunk_encoding_ = false;
     } else {
       encodeHeader(Headers::get().TransferEncoding.get().c_str(),
@@ -135,7 +146,7 @@ void ConnectionImpl::flushOutput() {
     reserved_current_ = nullptr;
   }
 
-  connection().write(output_buffer_);
+  connection().write(output_buffer_, false);
   ASSERT(0UL == output_buffer_.length());
 }
 
@@ -183,13 +194,18 @@ void StreamEncoderImpl::readDisable(bool disable) { connection_.readDisable(disa
 uint32_t StreamEncoderImpl::bufferLimit() { return connection_.bufferLimit(); }
 
 static const char RESPONSE_PREFIX[] = "HTTP/1.1 ";
+static const char HTTP_10_RESPONSE_PREFIX[] = "HTTP/1.0 ";
 
 void ResponseStreamEncoderImpl::encodeHeaders(const HeaderMap& headers, bool end_stream) {
   started_response_ = true;
   uint64_t numeric_status = Utility::getResponseStatus(headers);
 
   connection_.reserveBuffer(4096);
-  connection_.copyToBuffer(RESPONSE_PREFIX, sizeof(RESPONSE_PREFIX) - 1);
+  if (connection_.protocol() == Protocol::Http10 && connection_.supports_http_10()) {
+    connection_.copyToBuffer(HTTP_10_RESPONSE_PREFIX, sizeof(HTTP_10_RESPONSE_PREFIX) - 1);
+  } else {
+    connection_.copyToBuffer(RESPONSE_PREFIX, sizeof(RESPONSE_PREFIX) - 1);
+  }
   connection_.addIntToBuffer(numeric_status);
   connection_.addCharToBuffer(' ');
 
@@ -475,16 +491,6 @@ int ServerConnectionImpl::onHeadersComplete(HeaderMapImplPtr&& headers) {
 
     headers->insertMethod().value(method_string, strlen(method_string));
 
-    // Deal with expect: 100-continue here since higher layers are never going to do anything other
-    // than say to continue so that we can respond before request complete if necessary.
-    if (headers->Expect() &&
-        0 == StringUtil::caseInsensitiveCompare(headers->Expect()->value().c_str(),
-                                                Headers::get().ExpectValues._100Continue.c_str())) {
-      Buffer::OwnedImpl continue_response("HTTP/1.1 100 Continue\r\n\r\n");
-      connection_.write(continue_response);
-      headers->removeExpect();
-    }
-
     // Determine here whether we have a body or not. This uses the new RFC semantics where the
     // presence of content-length or chunked transfer-encoding indicates a body vs. a particular
     // method. If there is no body, we defer raising decodeHeaders() until the parser is flushed
@@ -569,7 +575,7 @@ void ServerConnectionImpl::sendProtocolError() {
         fmt::format("HTTP/1.1 {} {}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
                     std::to_string(enumToInt(error_code_)), CodeUtility::toString(error_code_)));
 
-    connection_.write(bad_request_response);
+    connection_.write(bad_request_response, false);
   }
 }
 
@@ -626,7 +632,12 @@ int ClientConnectionImpl::onHeadersComplete(HeaderMapImplPtr&& headers) {
   if (pending_responses_.empty() && !resetStreamCalled()) {
     throw PrematureResponseException(std::move(headers));
   } else if (!pending_responses_.empty()) {
-    if (cannotHaveBody()) {
+    if (parser_.status_code == 100) {
+      // http-parser treats 100 continue headers as their own complete response.
+      // Swallow the spurious onMessageComplete and continue processing.
+      ignore_message_complete_for_100_continue_ = true;
+      pending_responses_.front().decoder_->decode100ContinueHeaders(std::move(headers));
+    } else if (cannotHaveBody()) {
       deferred_end_stream_headers_ = std::move(headers);
     } else {
       pending_responses_.front().decoder_->decodeHeaders(std::move(headers), false);
@@ -648,6 +659,10 @@ void ClientConnectionImpl::onBody(const char* data, size_t length) {
 }
 
 void ClientConnectionImpl::onMessageComplete() {
+  if (ignore_message_complete_for_100_continue_) {
+    ignore_message_complete_for_100_continue_ = false;
+    return;
+  }
   if (!pending_responses_.empty()) {
     // After calling decodeData() with end stream set to true, we should no longer be able to reset.
     PendingResponse response = pending_responses_.front();

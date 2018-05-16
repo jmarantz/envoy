@@ -20,7 +20,7 @@ void CdsJson::translateRingHashLbConfig(
 }
 
 void CdsJson::translateHealthCheck(const Json::Object& json_health_check,
-                                   envoy::api::v2::HealthCheck& health_check) {
+                                   envoy::api::v2::core::HealthCheck& health_check) {
   json_health_check.validateSchema(Json::Schema::CLUSTER_HEALTH_CHECK_SCHEMA);
 
   JSON_UTIL_SET_DURATION(json_health_check, health_check, timeout);
@@ -53,13 +53,16 @@ void CdsJson::translateHealthCheck(const Json::Object& json_health_check,
     }
   } else {
     ASSERT(hc_type == "redis");
-    health_check.mutable_redis_health_check();
+    auto* redis_health_check = health_check.mutable_redis_health_check();
+    if (json_health_check.hasObject("redis_key")) {
+      redis_health_check->set_key(json_health_check.getString("redis_key"));
+    }
   }
 }
 
-void CdsJson::translateThresholds(const Json::Object& json_thresholds,
-                                  const envoy::api::v2::RoutingPriority& priority,
-                                  envoy::api::v2::CircuitBreakers::Thresholds& thresholds) {
+void CdsJson::translateThresholds(
+    const Json::Object& json_thresholds, const envoy::api::v2::core::RoutingPriority& priority,
+    envoy::api::v2::cluster::CircuitBreakers::Thresholds& thresholds) {
   thresholds.set_priority(priority);
   JSON_UTIL_SET_INTEGER(json_thresholds, thresholds, max_connections);
   JSON_UTIL_SET_INTEGER(json_thresholds, thresholds, max_pending_requests);
@@ -68,18 +71,18 @@ void CdsJson::translateThresholds(const Json::Object& json_thresholds,
 }
 
 void CdsJson::translateCircuitBreakers(const Json::Object& json_circuit_breakers,
-                                       envoy::api::v2::CircuitBreakers& circuit_breakers) {
+                                       envoy::api::v2::cluster::CircuitBreakers& circuit_breakers) {
   translateThresholds(*json_circuit_breakers.getObject("default", true),
-                      envoy::api::v2::RoutingPriority::DEFAULT,
+                      envoy::api::v2::core::RoutingPriority::DEFAULT,
                       *circuit_breakers.mutable_thresholds()->Add());
   translateThresholds(*json_circuit_breakers.getObject("high", true),
-                      envoy::api::v2::RoutingPriority::HIGH,
+                      envoy::api::v2::core::RoutingPriority::HIGH,
                       *circuit_breakers.mutable_thresholds()->Add());
 }
 
 void CdsJson::translateOutlierDetection(
     const Json::Object& json_outlier_detection,
-    envoy::api::v2::Cluster::OutlierDetection& outlier_detection) {
+    envoy::api::v2::cluster::OutlierDetection& outlier_detection) {
   JSON_UTIL_SET_DURATION(json_outlier_detection, outlier_detection, interval);
   JSON_UTIL_SET_DURATION(json_outlier_detection, outlier_detection, base_ejection_time);
   JSON_UTIL_SET_INTEGER(json_outlier_detection, outlier_detection, consecutive_5xx);
@@ -95,7 +98,7 @@ void CdsJson::translateOutlierDetection(
 }
 
 void CdsJson::translateCluster(const Json::Object& json_cluster,
-                               const Optional<envoy::api::v2::ConfigSource>& eds_config,
+                               const absl::optional<envoy::api::v2::core::ConfigSource>& eds_config,
                                envoy::api::v2::Cluster& cluster) {
   json_cluster.validateSchema(Json::Schema::CLUSTER_SCHEMA);
 
@@ -109,7 +112,7 @@ void CdsJson::translateCluster(const Json::Object& json_cluster,
     std::transform(hosts.cbegin(), hosts.cend(),
                    Protobuf::RepeatedPtrFieldBackInserter(cluster.mutable_hosts()),
                    [](const Json::ObjectSharedPtr& host) {
-                     envoy::api::v2::Address address;
+                     envoy::api::v2::core::Address address;
                      AddressJson::translateAddress(host->getString("url"), true, false, address);
                      return address;
                    });
@@ -120,7 +123,7 @@ void CdsJson::translateCluster(const Json::Object& json_cluster,
     std::transform(hosts.cbegin(), hosts.cend(),
                    Protobuf::RepeatedPtrFieldBackInserter(cluster.mutable_hosts()),
                    [](const Json::ObjectSharedPtr& host) {
-                     envoy::api::v2::Address address;
+                     envoy::api::v2::core::Address address;
                      AddressJson::translateAddress(host->getString("url"), true, true, address);
                      return address;
                    });
@@ -137,6 +140,9 @@ void CdsJson::translateCluster(const Json::Object& json_cluster,
     cluster.set_type(envoy::api::v2::Cluster::ORIGINAL_DST);
   } else {
     ASSERT(string_type == "sds");
+    if (!eds_config) {
+      throw EnvoyException("cannot create sds cluster with no sds config");
+    }
     cluster.set_type(envoy::api::v2::Cluster::EDS);
     cluster.mutable_eds_cluster_config()->mutable_eds_config()->CopyFrom(eds_config.value());
     JSON_UTIL_SET_STRING(json_cluster, *cluster.mutable_eds_cluster_config(), service_name);
@@ -202,7 +208,7 @@ void CdsJson::translateCluster(const Json::Object& json_cluster,
     std::transform(dns_resolvers.cbegin(), dns_resolvers.cend(),
                    Protobuf::RepeatedPtrFieldBackInserter(cluster.mutable_dns_resolvers()),
                    [](const std::string& json_address) {
-                     envoy::api::v2::Address address;
+                     envoy::api::v2::core::Address address;
                      AddressJson::translateAddress(json_address, false, true, address);
                      return address;
                    });

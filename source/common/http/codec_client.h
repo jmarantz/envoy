@@ -5,9 +5,11 @@
 #include <memory>
 
 #include "envoy/event/deferred_deletable.h"
+#include "envoy/event/timer.h"
 #include "envoy/http/codec.h"
 #include "envoy/network/connection.h"
 #include "envoy/network/filter.h"
+#include "envoy/upstream/upstream.h"
 
 #include "common/common/assert.h"
 #include "common/common/linked_object.h"
@@ -112,7 +114,7 @@ protected:
    * @param host supplies the owning host.
    */
   CodecClient(Type type, Network::ClientConnectionPtr&& connection,
-              Upstream::HostDescriptionConstSharedPtr host);
+              Upstream::HostDescriptionConstSharedPtr host, Event::Dispatcher& dispatcher);
 
   // Http::ConnectionCallbacks
   void onGoAway() override {
@@ -121,10 +123,29 @@ protected:
     }
   }
 
+  void onIdleTimeout() {
+    host_->cluster().stats().upstream_cx_idle_timeout_.inc();
+    close();
+  }
+
+  void disableIdleTimer() {
+    if (idle_timer_ != nullptr) {
+      idle_timer_->disableTimer();
+    }
+  }
+
+  void enableIdleTimer() {
+    if (idle_timer_ != nullptr) {
+      idle_timer_->enableTimer(idle_timeout_.value());
+    }
+  }
+
   const Type type_;
   ClientConnectionPtr codec_;
   Network::ClientConnectionPtr connection_;
   Upstream::HostDescriptionConstSharedPtr host_;
+  Event::TimerPtr idle_timer_;
+  const absl::optional<std::chrono::milliseconds> idle_timeout_;
 
 private:
   /**
@@ -135,7 +156,7 @@ private:
     CodecReadFilter(CodecClient& parent) : parent_(parent) {}
 
     // Network::ReadFilter
-    Network::FilterStatus onData(Buffer::Instance& data) override {
+    Network::FilterStatus onData(Buffer::Instance& data, bool) override {
       parent_.onData(data);
       return Network::FilterStatus::StopIteration;
     }
@@ -206,7 +227,7 @@ typedef std::unique_ptr<CodecClient> CodecClientPtr;
 class CodecClientProd : public CodecClient {
 public:
   CodecClientProd(Type type, Network::ClientConnectionPtr&& connection,
-                  Upstream::HostDescriptionConstSharedPtr host);
+                  Upstream::HostDescriptionConstSharedPtr host, Event::Dispatcher& dispatcher);
 };
 
 } // namespace Http

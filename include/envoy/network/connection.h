@@ -9,6 +9,7 @@
 #include "envoy/event/deferred_deletable.h"
 #include "envoy/network/address.h"
 #include "envoy/network/filter.h"
+#include "envoy/network/listen_socket.h"
 #include "envoy/ssl/connection.h"
 
 namespace Envoy {
@@ -100,6 +101,13 @@ public:
   virtual void addBytesSentCallback(BytesSentCb cb) PURE;
 
   /**
+   * Enable half-close semantics on this connection. Reading a remote half-close
+   * will not fully close the connection. This is off by default.
+   * @param enabled Whether to set half-close semantics as enabled or disabled.
+   */
+  virtual void enableHalfClose(bool enabled) PURE;
+
+  /**
    * Close the connection.
    */
   virtual void close(ConnectionCloseType type) PURE;
@@ -186,8 +194,12 @@ public:
   /**
    * Write data to the connection. Will iterate through downstream filters with the buffer if any
    * are installed.
+   * @param data Supplies the data to write to the connection.
+   * @param end_stream If true, this indicates that this is the last write to the connection. If
+   *        end_stream is true, the connection is half-closed. This may only be set to true if
+   *        enableHalfClose(true) has been set on this connection.
    */
-  virtual void write(Buffer::Instance& data) PURE;
+  virtual void write(Buffer::Instance& data, bool end_stream) PURE;
 
   /**
    * Set a soft limit on the size of buffers for the connection.
@@ -207,15 +219,20 @@ public:
   virtual uint32_t bufferLimit() const PURE;
 
   /**
-   * @return boolean telling if the connection's local address is an original destination address,
-   * rather than the listener's address.
+   * @return boolean telling if the connection's local address has been restored to an original
+   *         destination address, rather than the address the connection was accepted at.
    */
-  virtual bool usingOriginalDst() const PURE;
+  virtual bool localAddressRestored() const PURE;
 
   /**
    * @return boolean telling if the connection is currently above the high watermark.
    */
   virtual bool aboveHighWatermark() const PURE;
+
+  /**
+   * Get the socket options set on this connection.
+   */
+  virtual const ConnectionSocket::OptionsSharedPtr& socketOptions() const PURE;
 };
 
 typedef std::unique_ptr<Connection> ConnectionPtr;
@@ -227,7 +244,7 @@ class ClientConnection : public virtual Connection {
 public:
   /**
    * Connect to a remote host. Errors or connection events are reported via the event callback
-   * registered via setConnectionEventCb().
+   * registered via addConnectionCallbacks().
    */
   virtual void connect() PURE;
 };

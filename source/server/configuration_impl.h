@@ -9,6 +9,8 @@
 #include <unordered_map>
 #include <utility>
 
+#include "envoy/config/bootstrap/v2/bootstrap.pb.h"
+#include "envoy/config/trace/v2/trace.pb.h"
 #include "envoy/http/filter.h"
 #include "envoy/network/filter.h"
 #include "envoy/server/configuration.h"
@@ -21,22 +23,17 @@
 #include "common/network/resolver_impl.h"
 #include "common/network/utility.h"
 
-#include "server/lds_api.h"
-
-#include "api/bootstrap.pb.h"
-#include "api/trace.pb.h"
-
 namespace Envoy {
 namespace Server {
 namespace Configuration {
 
 /**
- * Implemented by each HttpTracer and registered via Registry::registerFactory() or
- * the convenience class RegisterFactory.
+ * Implemented by each Tracer and registered via Registry::registerFactory() or the convenience
+ * class RegisterFactory.
  */
-class HttpTracerFactory {
+class TracerFactory {
 public:
-  virtual ~HttpTracerFactory() {}
+  virtual ~TracerFactory() {}
 
   /**
    * Create a particular HttpTracer implementation. If the implementation is unable to produce an
@@ -45,13 +42,12 @@ public:
    * pointer should always be valid.
    * @param json_config supplies the general json configuration for the HttpTracer
    * @param server supplies the server instance
-   * @param cluster_manager supplies the cluster_manager instance
    */
-  virtual Tracing::HttpTracerPtr createHttpTracer(const Json::Object& json_config, Instance& server,
-                                                  Upstream::ClusterManager& cluster_manager) PURE;
+  virtual Tracing::HttpTracerPtr createHttpTracer(const Json::Object& json_config,
+                                                  Instance& server) PURE;
 
   /**
-   * Returns the identifying name for a particular implementation of HttpTracer produced by the
+   * Returns the identifying name for a particular implementation of tracer produced by the
    * factory.
    */
   virtual std::string name() PURE;
@@ -98,7 +94,14 @@ public:
    * exit early if any filters immediately close the connection.
    */
   static bool buildFilterChain(Network::FilterManager& filter_manager,
-                               const std::vector<NetworkFilterFactoryCb>& factories);
+                               const std::vector<Network::FilterFactoryCb>& factories);
+
+  /**
+   * Given a ListenerFilterManager and a list of factories, create a new filter chain. Chain
+   * creation will exit early if any filters immediately close the connection.
+   */
+  static bool buildFilterChain(Network::ListenerFilterManager& filter_manager,
+                               const std::vector<Network::ListenerFilterFactoryCb>& factories);
 };
 
 /**
@@ -114,11 +117,11 @@ public:
    * @param server supplies the owning server.
    * @param cluster_manager_factory supplies the cluster manager creation factory.
    */
-  void initialize(const envoy::api::v2::Bootstrap& bootstrap, Instance& server,
+  void initialize(const envoy::config::bootstrap::v2::Bootstrap& bootstrap, Instance& server,
                   Upstream::ClusterManagerFactory& cluster_manager_factory);
 
   // Server::Configuration::Main
-  Upstream::ClusterManager& clusterManager() override { return *cluster_manager_; }
+  Upstream::ClusterManager* clusterManager() override { return cluster_manager_.get(); }
   Tracing::HttpTracer& httpTracer() override { return *http_tracer_; }
   RateLimit::ClientFactory& rateLimitClientFactory() override { return *ratelimit_client_factory_; }
   std::list<Stats::SinkPtr>& statsSinks() override { return stats_sinks_; }
@@ -136,12 +139,12 @@ private:
   /**
    * Initialize tracers and corresponding sinks.
    */
-  void initializeTracers(const envoy::api::v2::Tracing& configuration, Instance& server);
+  void initializeTracers(const envoy::config::trace::v2::Tracing& configuration, Instance& server);
 
-  void initializeStatsSinks(const envoy::api::v2::Bootstrap& bootstrap, Instance& server);
+  void initializeStatsSinks(const envoy::config::bootstrap::v2::Bootstrap& bootstrap,
+                            Instance& server);
 
   std::unique_ptr<Upstream::ClusterManager> cluster_manager_;
-  std::unique_ptr<LdsApi> lds_api_;
   Tracing::HttpTracerPtr http_tracer_;
   std::list<Stats::SinkPtr> stats_sinks_;
   RateLimit::ClientFactoryPtr ratelimit_client_factory_;
@@ -157,11 +160,11 @@ private:
  */
 class InitialImpl : public Initial {
 public:
-  InitialImpl(const envoy::api::v2::Bootstrap& bootstrap);
+  InitialImpl(const envoy::config::bootstrap::v2::Bootstrap& bootstrap);
 
   // Server::Configuration::Initial
   Admin& admin() override { return admin_; }
-  Optional<std::string> flagsPath() override { return flags_path_; }
+  absl::optional<std::string> flagsPath() override { return flags_path_; }
   Runtime* runtime() override { return runtime_.get(); }
 
 private:
@@ -188,7 +191,7 @@ private:
   };
 
   AdminImpl admin_;
-  Optional<std::string> flags_path_;
+  absl::optional<std::string> flags_path_;
   std::unique_ptr<RuntimeImpl> runtime_;
 };
 

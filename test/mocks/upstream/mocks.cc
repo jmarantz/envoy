@@ -22,8 +22,15 @@ MockHostSet::MockHostSet(uint32_t priority) : priority_(priority) {
   ON_CALL(*this, priority()).WillByDefault(Return(priority_));
   ON_CALL(*this, hosts()).WillByDefault(ReturnRef(hosts_));
   ON_CALL(*this, healthyHosts()).WillByDefault(ReturnRef(healthy_hosts_));
-  ON_CALL(*this, hostsPerLocality()).WillByDefault(ReturnRef(hosts_per_locality_));
-  ON_CALL(*this, healthyHostsPerLocality()).WillByDefault(ReturnRef(healthy_hosts_per_locality_));
+  ON_CALL(*this, hostsPerLocality()).WillByDefault(Invoke([this]() -> const HostsPerLocality& {
+    return *hosts_per_locality_;
+  }));
+  ON_CALL(*this, healthyHostsPerLocality())
+      .WillByDefault(
+          Invoke([this]() -> const HostsPerLocality& { return *healthy_hosts_per_locality_; }));
+  ON_CALL(*this, localityWeights()).WillByDefault(Invoke([this]() -> LocalityWeightsConstSharedPtr {
+    return locality_weights_;
+  }));
 }
 
 MockPrioritySet::MockPrioritySet() {
@@ -41,18 +48,16 @@ HostSet& MockPrioritySet::getHostSet(uint32_t priority) {
     for (size_t i = host_sets_.size(); i <= priority; ++i) {
       auto host_set = new NiceMock<MockHostSet>(i);
       host_sets_.push_back(HostSetPtr{host_set});
-      host_set->addMemberUpdateCb([this](uint32_t priority,
-                                         const std::vector<HostSharedPtr>& hosts_added,
-                                         const std::vector<HostSharedPtr>& hosts_removed) {
+      host_set->addMemberUpdateCb([this](uint32_t priority, const HostVector& hosts_added,
+                                         const HostVector& hosts_removed) {
         runUpdateCallbacks(priority, hosts_added, hosts_removed);
       });
     }
   }
   return *host_sets_[priority];
 }
-void MockPrioritySet::runUpdateCallbacks(uint32_t priority,
-                                         const std::vector<HostSharedPtr>& hosts_added,
-                                         const std::vector<HostSharedPtr>& hosts_removed) {
+void MockPrioritySet::runUpdateCallbacks(uint32_t priority, const HostVector& hosts_added,
+                                         const HostVector& hosts_removed) {
   member_update_cb_helper_.runCallbacks(priority, hosts_added, hosts_removed);
 }
 
@@ -82,11 +87,12 @@ MockThreadLocalCluster::MockThreadLocalCluster() {
 MockThreadLocalCluster::~MockThreadLocalCluster() {}
 
 MockClusterManager::MockClusterManager() {
-  ON_CALL(*this, httpConnPoolForCluster(_, _, _)).WillByDefault(Return(&conn_pool_));
+  ON_CALL(*this, httpConnPoolForCluster(_, _, _, _)).WillByDefault(Return(&conn_pool_));
   ON_CALL(*this, httpAsyncClientForCluster(_)).WillByDefault(ReturnRef(async_client_));
   ON_CALL(*this, httpAsyncClientForCluster(_)).WillByDefault((ReturnRef(async_client_)));
-  ON_CALL(*this, sourceAddress()).WillByDefault(ReturnRef(source_address_));
+  ON_CALL(*this, bindConfig()).WillByDefault(ReturnRef(bind_config_));
   ON_CALL(*this, adsMux()).WillByDefault(ReturnRef(ads_mux_));
+  ON_CALL(*this, grpcAsyncClientManager()).WillByDefault(ReturnRef(async_client_manager_));
   ON_CALL(*this, localClusterName()).WillByDefault((ReturnRef(local_cluster_name_)));
 
   // Matches are LIFO so "" will match first.
@@ -109,6 +115,10 @@ MockCdsApi::MockCdsApi() {
 }
 
 MockCdsApi::~MockCdsApi() {}
+
+MockClusterUpdateCallbacks::MockClusterUpdateCallbacks() {}
+
+MockClusterUpdateCallbacks::~MockClusterUpdateCallbacks() {}
 
 } // namespace Upstream
 } // namespace Envoy

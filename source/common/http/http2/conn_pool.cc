@@ -15,23 +15,26 @@ namespace Http {
 namespace Http2 {
 
 ConnPoolImpl::ConnPoolImpl(Event::Dispatcher& dispatcher, Upstream::HostConstSharedPtr host,
-                           Upstream::ResourcePriority priority)
-    : dispatcher_(dispatcher), host_(host), priority_(priority) {}
+                           Upstream::ResourcePriority priority,
+                           const Network::ConnectionSocket::OptionsSharedPtr& options)
+    : dispatcher_(dispatcher), host_(host), priority_(priority), socket_options_(options) {}
 
 ConnPoolImpl::~ConnPoolImpl() {
-  closeConnections();
-
-  // Make sure all clients are destroyed before we are destroyed.
-  dispatcher_.clearDeferredDeleteList();
-}
-
-void ConnPoolImpl::ConnPoolImpl::closeConnections() {
   if (primary_client_) {
     primary_client_->client_->close();
   }
 
   if (draining_client_) {
     draining_client_->client_->close();
+  }
+
+  // Make sure all clients are destroyed before we are destroyed.
+  dispatcher_.clearDeferredDeleteList();
+}
+
+void ConnPoolImpl::ConnPoolImpl::drainConnections() {
+  if (primary_client_ != nullptr) {
+    movePrimaryClientToDraining();
   }
 }
 
@@ -218,7 +221,8 @@ ConnPoolImpl::ActiveClient::ActiveClient(ConnPoolImpl& parent)
 
   parent_.conn_connect_ms_.reset(
       new Stats::Timespan(parent_.host_->cluster().stats().upstream_cx_connect_ms_));
-  Upstream::Host::CreateConnectionData data = parent_.host_->createConnection(parent_.dispatcher_);
+  Upstream::Host::CreateConnectionData data =
+      parent_.host_->createConnection(parent_.dispatcher_, parent_.socket_options_);
   real_host_description_ = data.host_description_;
   client_ = parent_.createCodecClient(data);
   client_->addConnectionCallbacks(*this);
@@ -248,7 +252,7 @@ ConnPoolImpl::ActiveClient::~ActiveClient() {
 
 CodecClientPtr ProdConnPoolImpl::createCodecClient(Upstream::Host::CreateConnectionData& data) {
   CodecClientPtr codec{new CodecClientProd(CodecClient::Type::HTTP2, std::move(data.connection_),
-                                           data.host_description_)};
+                                           data.host_description_, dispatcher_)};
   return codec;
 }
 

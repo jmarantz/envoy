@@ -3,8 +3,8 @@
 #include <string>
 
 #include "common/common/assert.h"
+#include "common/config/datasource.h"
 #include "common/config/tls_context_json.h"
-#include "common/filesystem/filesystem_impl.h"
 #include "common/protobuf/utility.h"
 
 #include "openssl/ssl.h"
@@ -15,39 +15,48 @@ namespace Ssl {
 const std::string ContextConfigImpl::DEFAULT_CIPHER_SUITES =
     "[ECDHE-ECDSA-AES128-GCM-SHA256|ECDHE-ECDSA-CHACHA20-POLY1305]:"
     "[ECDHE-RSA-AES128-GCM-SHA256|ECDHE-RSA-CHACHA20-POLY1305]:"
-    "ECDHE-ECDSA-AES128-SHA256:"
-    "ECDHE-RSA-AES128-SHA256:"
     "ECDHE-ECDSA-AES128-SHA:"
     "ECDHE-RSA-AES128-SHA:"
     "AES128-GCM-SHA256:"
-    "AES128-SHA256:"
     "AES128-SHA:"
     "ECDHE-ECDSA-AES256-GCM-SHA384:"
     "ECDHE-RSA-AES256-GCM-SHA384:"
-    "ECDHE-ECDSA-AES256-SHA384:"
-    "ECDHE-RSA-AES256-SHA384:"
     "ECDHE-ECDSA-AES256-SHA:"
     "ECDHE-RSA-AES256-SHA:"
     "AES256-GCM-SHA384:"
-    "AES256-SHA256:"
     "AES256-SHA";
 
 const std::string ContextConfigImpl::DEFAULT_ECDH_CURVES = "X25519:P-256";
 
-ContextConfigImpl::ContextConfigImpl(const envoy::api::v2::CommonTlsContext& config)
+ContextConfigImpl::ContextConfigImpl(const envoy::api::v2::auth::CommonTlsContext& config)
     : alpn_protocols_(RepeatedPtrUtil::join(config.alpn_protocols(), ",")),
       alt_alpn_protocols_(config.deprecated_v1().alt_alpn_protocols()),
       cipher_suites_(StringUtil::nonEmptyStringOrDefault(
           RepeatedPtrUtil::join(config.tls_params().cipher_suites(), ":"), DEFAULT_CIPHER_SUITES)),
       ecdh_curves_(StringUtil::nonEmptyStringOrDefault(
           RepeatedPtrUtil::join(config.tls_params().ecdh_curves(), ":"), DEFAULT_ECDH_CURVES)),
-      ca_cert_file_(config.validation_context().trusted_ca().filename()),
-      cert_chain_file_(config.tls_certificates().empty()
-                           ? ""
-                           : config.tls_certificates()[0].certificate_chain().filename()),
-      private_key_file_(config.tls_certificates().empty()
-                            ? ""
-                            : config.tls_certificates()[0].private_key().filename()),
+      ca_cert_(Config::DataSource::read(config.validation_context().trusted_ca(), true)),
+      ca_cert_path_(Config::DataSource::getPath(config.validation_context().trusted_ca())),
+      certificate_revocation_list_(
+          Config::DataSource::read(config.validation_context().crl(), true)),
+      certificate_revocation_list_path_(
+          Config::DataSource::getPath(config.validation_context().crl())),
+      cert_chain_(
+          config.tls_certificates().empty()
+              ? ""
+              : Config::DataSource::read(config.tls_certificates()[0].certificate_chain(), true)),
+      cert_chain_path_(
+          config.tls_certificates().empty()
+              ? ""
+              : Config::DataSource::getPath(config.tls_certificates()[0].certificate_chain())),
+      private_key_(
+          config.tls_certificates().empty()
+              ? ""
+              : Config::DataSource::read(config.tls_certificates()[0].private_key(), true)),
+      private_key_path_(
+          config.tls_certificates().empty()
+              ? ""
+              : Config::DataSource::getPath(config.tls_certificates()[0].private_key())),
       verify_subject_alt_name_list_(config.validation_context().verify_subject_alt_name().begin(),
                                     config.validation_context().verify_subject_alt_name().end()),
       verify_certificate_hash_(config.validation_context().verify_certificate_hash().empty()
@@ -58,22 +67,27 @@ ContextConfigImpl::ContextConfigImpl(const envoy::api::v2::CommonTlsContext& con
       max_protocol_version_(
           tlsVersionFromProto(config.tls_params().tls_maximum_protocol_version(), TLS1_2_VERSION)) {
   // TODO(htuch): Support multiple hashes.
-  ASSERT(config.validation_context().verify_certificate_hash().size() <= 1);
+  if (config.validation_context().verify_certificate_hash().size() > 1) {
+    throw EnvoyException("Multiple TLS certificate verification hashes are not supported");
+  }
+  if (ca_cert_.empty() && !certificate_revocation_list_.empty()) {
+    throw EnvoyException(fmt::format("Failed to load CRL from {} without trusted CA certificates",
+                                     certificateRevocationListPath()));
+  }
 }
 
-unsigned
-ContextConfigImpl::tlsVersionFromProto(const envoy::api::v2::TlsParameters_TlsProtocol& version,
-                                       unsigned default_version) {
+unsigned ContextConfigImpl::tlsVersionFromProto(
+    const envoy::api::v2::auth::TlsParameters_TlsProtocol& version, unsigned default_version) {
   switch (version) {
-  case envoy::api::v2::TlsParameters::TLS_AUTO:
+  case envoy::api::v2::auth::TlsParameters::TLS_AUTO:
     return default_version;
-  case envoy::api::v2::TlsParameters::TLSv1_0:
+  case envoy::api::v2::auth::TlsParameters::TLSv1_0:
     return TLS1_VERSION;
-  case envoy::api::v2::TlsParameters::TLSv1_1:
+  case envoy::api::v2::auth::TlsParameters::TLSv1_1:
     return TLS1_1_VERSION;
-  case envoy::api::v2::TlsParameters::TLSv1_2:
+  case envoy::api::v2::auth::TlsParameters::TLSv1_2:
     return TLS1_2_VERSION;
-  case envoy::api::v2::TlsParameters::TLSv1_3:
+  case envoy::api::v2::auth::TlsParameters::TLSv1_3:
     return TLS1_3_VERSION;
   default:
     NOT_IMPLEMENTED;
@@ -82,20 +96,29 @@ ContextConfigImpl::tlsVersionFromProto(const envoy::api::v2::TlsParameters_TlsPr
   NOT_REACHED;
 }
 
-ClientContextConfigImpl::ClientContextConfigImpl(const envoy::api::v2::UpstreamTlsContext& config)
+ClientContextConfigImpl::ClientContextConfigImpl(
+    const envoy::api::v2::auth::UpstreamTlsContext& config)
     : ContextConfigImpl(config.common_tls_context()), server_name_indication_(config.sni()) {
+  // BoringSSL treats this as a C string, so embedded NULL characters will not
+  // be handled correctly.
+  if (server_name_indication_.find('\0') != std::string::npos) {
+    throw EnvoyException("SNI names containing NULL-byte are not allowed");
+  }
   // TODO(PiotrSikora): Support multiple TLS certificates.
-  ASSERT(config.common_tls_context().tls_certificates().size() <= 1);
+  if (config.common_tls_context().tls_certificates().size() > 1) {
+    throw EnvoyException("Multiple TLS certificates are not supported for client contexts");
+  }
 }
 
 ClientContextConfigImpl::ClientContextConfigImpl(const Json::Object& config)
     : ClientContextConfigImpl([&config] {
-        envoy::api::v2::UpstreamTlsContext upstream_tls_context;
+        envoy::api::v2::auth::UpstreamTlsContext upstream_tls_context;
         Config::TlsContextJson::translateUpstreamTlsContext(config, upstream_tls_context);
         return upstream_tls_context;
       }()) {}
 
-ServerContextConfigImpl::ServerContextConfigImpl(const envoy::api::v2::DownstreamTlsContext& config)
+ServerContextConfigImpl::ServerContextConfigImpl(
+    const envoy::api::v2::auth::DownstreamTlsContext& config)
     : ContextConfigImpl(config.common_tls_context()),
       require_client_certificate_(
           PROTOBUF_GET_WRAPPED_OR_DEFAULT(config, require_client_certificate, false)),
@@ -103,27 +126,15 @@ ServerContextConfigImpl::ServerContextConfigImpl(const envoy::api::v2::Downstrea
         std::vector<SessionTicketKey> ret;
 
         switch (config.session_ticket_keys_type_case()) {
-        case envoy::api::v2::DownstreamTlsContext::kSessionTicketKeys:
+        case envoy::api::v2::auth::DownstreamTlsContext::kSessionTicketKeys:
           for (const auto& datasource : config.session_ticket_keys().keys()) {
-            switch (datasource.specifier_case()) {
-            case envoy::api::v2::DataSource::kFilename: {
-              validateAndAppendKey(ret, Filesystem::fileReadToEnd(datasource.filename()));
-              break;
-            }
-            case envoy::api::v2::DataSource::kInline: {
-              validateAndAppendKey(ret, datasource.inline_());
-              break;
-            }
-            default:
-              throw EnvoyException(fmt::format("Unexpected DataSource::specifier_case(): {}",
-                                               datasource.specifier_case()));
-            }
+            validateAndAppendKey(ret, Config::DataSource::read(datasource, false));
           }
           break;
-        case envoy::api::v2::DownstreamTlsContext::kSessionTicketKeysSdsSecretConfig:
-          NOT_IMPLEMENTED;
+        case envoy::api::v2::auth::DownstreamTlsContext::kSessionTicketKeysSdsSecretConfig:
+          throw EnvoyException("SDS not supported yet");
           break;
-        case envoy::api::v2::DownstreamTlsContext::SESSION_TICKET_KEYS_TYPE_NOT_SET:
+        case envoy::api::v2::auth::DownstreamTlsContext::SESSION_TICKET_KEYS_TYPE_NOT_SET:
           break;
         default:
           throw EnvoyException(fmt::format("Unexpected case for oneof session_ticket_keys: {}",
@@ -133,19 +144,14 @@ ServerContextConfigImpl::ServerContextConfigImpl(const envoy::api::v2::Downstrea
         return ret;
       }()) {
   // TODO(PiotrSikora): Support multiple TLS certificates.
-  // TODO(mattklein123): All of the ASSERTs in this file need to be converted to exceptions with
-  //                     proper error handling.
-  // TODO(htuch): Support inline cert material delivery.
-  ASSERT(config.common_tls_context().tls_certificates().size() == 1);
-  ASSERT(config.common_tls_context().tls_certificates()[0].certificate_chain().specifier_case() ==
-         envoy::api::v2::DataSource::kFilename);
-  ASSERT(config.common_tls_context().tls_certificates()[0].private_key().specifier_case() ==
-         envoy::api::v2::DataSource::kFilename);
+  if (config.common_tls_context().tls_certificates().size() != 1) {
+    throw EnvoyException("A single TLS certificate is required for server contexts");
+  }
 }
 
 ServerContextConfigImpl::ServerContextConfigImpl(const Json::Object& config)
     : ServerContextConfigImpl([&config] {
-        envoy::api::v2::DownstreamTlsContext downstream_tls_context;
+        envoy::api::v2::auth::DownstreamTlsContext downstream_tls_context;
         Config::TlsContextJson::translateDownstreamTlsContext(config, downstream_tls_context);
         return downstream_tls_context;
       }()) {}

@@ -1,18 +1,32 @@
 #pragma once
 
+#include "envoy/api/v2/listener/listener.pb.h"
 #include "envoy/network/filter.h"
 #include "envoy/network/listen_socket.h"
+#include "envoy/network/listener.h"
 #include "envoy/server/drain_manager.h"
 #include "envoy/server/filter_config.h"
 #include "envoy/server/guarddog.h"
-#include "envoy/ssl/context.h"
 
 #include "common/protobuf/protobuf.h"
 
-#include "api/lds.pb.h"
-
 namespace Envoy {
 namespace Server {
+
+/**
+ * Interface for an LDS API provider.
+ */
+class LdsApi {
+public:
+  virtual ~LdsApi() {}
+
+  /**
+   * @return std::string the last received version by the xDS API for LDS.
+   */
+  virtual std::string versionInfo() const PURE;
+};
+
+typedef std::unique_ptr<LdsApi> LdsApiPtr;
 
 /**
  * Factory for creating listener components.
@@ -22,23 +36,41 @@ public:
   virtual ~ListenerComponentFactory() {}
 
   /**
+   * @return an LDS API provider.
+   * @param lds_config supplies the management server configuration.
+   */
+  virtual LdsApiPtr createLdsApi(const envoy::api::v2::core::ConfigSource& lds_config) PURE;
+
+  /**
    * Creates a socket.
    * @param address supplies the socket's address.
+   * @param options to be set on the created socket just before calling 'bind()'.
    * @param bind_to_port supplies whether to actually bind the socket.
-   * @return Network::ListenSocketSharedPtr an initialized and potentially bound socket.
+   * @return Network::SocketSharedPtr an initialized and potentially bound socket.
    */
-  virtual Network::ListenSocketSharedPtr
-  createListenSocket(Network::Address::InstanceConstSharedPtr address, bool bind_to_port) PURE;
+  virtual Network::SocketSharedPtr
+  createListenSocket(Network::Address::InstanceConstSharedPtr address,
+                     const Network::Socket::OptionsSharedPtr& options, bool bind_to_port) PURE;
 
   /**
    * Creates a list of filter factories.
    * @param filters supplies the proto configuration.
    * @param context supplies the factory creation context.
-   * @return std::vector<Configuration::NetworkFilterFactoryCb> the list of filter factories.
+   * @return std::vector<Network::FilterFactoryCb> the list of filter factories.
    */
-  virtual std::vector<Configuration::NetworkFilterFactoryCb>
-  createFilterFactoryList(const Protobuf::RepeatedPtrField<envoy::api::v2::Filter>& filters,
-                          Configuration::FactoryContext& context) PURE;
+  virtual std::vector<Network::FilterFactoryCb> createNetworkFilterFactoryList(
+      const Protobuf::RepeatedPtrField<envoy::api::v2::listener::Filter>& filters,
+      Configuration::FactoryContext& context) PURE;
+
+  /**
+   * Creates a list of listener filter factories.
+   * @param filters supplies the JSON configuration.
+   * @param context supplies the factory creation context.
+   * @return std::vector<Network::ListenerFilterFactoryCb> the list of filter factories.
+   */
+  virtual std::vector<Network::ListenerFilterFactoryCb> createListenerFilterFactoryList(
+      const Protobuf::RepeatedPtrField<envoy::api::v2::listener::ListenerFilter>& filters,
+      Configuration::ListenerFactoryContext& context) PURE;
 
   /**
    * @return DrainManagerPtr a new drain manager.
@@ -50,71 +82,6 @@ public:
    * @return uint64_t a listener tag usable for connection handler tracking.
    */
   virtual uint64_t nextListenerTag() PURE;
-};
-
-/**
- * A configuration for an individual listener.
- */
-class Listener {
-public:
-  virtual ~Listener() {}
-
-  /**
-   * @return Network::FilterChainFactory& the factory for setting up the filter chain on a new
-   *         connection.
-   */
-  virtual Network::FilterChainFactory& filterChainFactory() PURE;
-
-  /**
-   * @return Network::ListenSocket& the actual listen socket. The address of this socket may be
-   *         different from configured if for example the configured address binds to port zero.
-   */
-  virtual Network::ListenSocket& socket() PURE;
-
-  /**
-   * @return Ssl::ServerContext* the default SSL context.
-   */
-  virtual Ssl::ServerContext* defaultSslContext() PURE;
-
-  /**
-   * @return bool whether to use the PROXY Protocol V1
-   * (http://www.haproxy.org/download/1.5/doc/proxy-protocol.txt)
-   */
-  virtual bool useProxyProto() PURE;
-
-  /**
-   * @return bool specifies whether the listener should actually listen on the port.
-   *         A listener that doesn't listen on a port can only receive connections
-   *         redirected from other listeners.
-   */
-  virtual bool bindToPort() PURE;
-
-  /**
-   * @return bool if a connection was redirected to this listener address using iptables,
-   *         allow the listener to hand it off to the listener associated to the original address
-   */
-  virtual bool useOriginalDst() PURE;
-
-  /**
-   * @return uint32_t providing a soft limit on size of the listener's new connection read and write
-   *         buffers.
-   */
-  virtual uint32_t perConnectionBufferLimitBytes() PURE;
-
-  /**
-   * @return Stats::Scope& the stats scope to use for all listener specific stats.
-   */
-  virtual Stats::Scope& listenerScope() PURE;
-
-  /**
-   * @return uint64_t the tag the listener should use for connection handler tracking.
-   */
-  virtual uint64_t listenerTag() PURE;
-
-  /**
-   * @return const std::string& the listener's name.
-   */
-  virtual const std::string& name() const PURE;
 };
 
 /**
@@ -132,18 +99,31 @@ public:
    * will be gracefully drained once the new listener is ready to take traffic (e.g. when RDS has
    * been initialized).
    * @param config supplies the configuration proto.
+   * @param version_info supplies the xDS version of the listener.
+   * @param modifiable supplies whether the added listener can be updated or removed. If the
+   *        listener is not modifiable, future calls to this function or removeListener() on behalf
+   *        of this listener will return false.
    * @return TRUE if a listener was added or FALSE if the listener was not updated because it is
    *         a duplicate of the existing listener. This routine will throw an EnvoyException if
    *         there is a fundamental error preventing the listener from being added or updated.
    */
-  virtual bool addOrUpdateListener(const envoy::api::v2::Listener& config) PURE;
+  virtual bool addOrUpdateListener(const envoy::api::v2::Listener& config,
+                                   const std::string& version_info, bool modifiable) PURE;
 
   /**
-   * @return std::vector<std::reference_wrapper<Listener>> a list of the currently loaded listeners.
-   * Note that this routine returns references to the existing listeners. The references are only
-   * valid in the context of the current call stack and should not be stored.
+   * Instruct the listener manager to create an LDS API provider. This is a separate operation
+   * during server initialization because the listener manager is created prior to several core
+   * pieces of the server existing.
+   * @param lds_config supplies the management server configuration.
    */
-  virtual std::vector<std::reference_wrapper<Listener>> listeners() PURE;
+  virtual void createLdsApi(const envoy::api::v2::core::ConfigSource& lds_config) PURE;
+
+  /**
+   * @return std::vector<std::reference_wrapper<Network::ListenerConfig>> a list of the currently
+   * loaded listeners. Note that this routine returns references to the existing listeners. The
+   * references are only valid in the context of the current call stack and should not be stored.
+   */
+  virtual std::vector<std::reference_wrapper<Network::ListenerConfig>> listeners() PURE;
 
   /**
    * @return uint64_t the total number of connections owned by all listeners across all workers.

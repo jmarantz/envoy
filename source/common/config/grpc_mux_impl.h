@@ -1,14 +1,17 @@
 #pragma once
 
+#include <unordered_map>
+
+#include "envoy/common/time.h"
+#include "envoy/common/token_bucket.h"
 #include "envoy/config/grpc_mux.h"
 #include "envoy/config/subscription.h"
 #include "envoy/event/dispatcher.h"
+#include "envoy/grpc/async_client.h"
+#include "envoy/grpc/status.h"
 #include "envoy/upstream/cluster_manager.h"
 
 #include "common/common/logger.h"
-#include "common/grpc/async_client_impl.h"
-
-#include "api/discovery.pb.h"
 
 namespace Envoy {
 namespace Config {
@@ -17,17 +20,12 @@ namespace Config {
  * ADS API implementation that fetches via gRPC.
  */
 class GrpcMuxImpl : public GrpcMux,
-                    Grpc::AsyncStreamCallbacks<envoy::api::v2::DiscoveryResponse>,
+                    Grpc::TypedAsyncStreamCallbacks<envoy::api::v2::DiscoveryResponse>,
                     Logger::Loggable<Logger::Id::upstream> {
 public:
-  GrpcMuxImpl(const envoy::api::v2::Node& node, Upstream::ClusterManager& cluster_manager,
-              const std::string& remote_cluster_name, Event::Dispatcher& dispatcher,
-              const Protobuf::MethodDescriptor& service_method);
-  GrpcMuxImpl(const envoy::api::v2::Node& node,
-              std::unique_ptr<Grpc::AsyncClient<envoy::api::v2::DiscoveryRequest,
-                                                envoy::api::v2::DiscoveryResponse>>
-                  async_client,
-              Event::Dispatcher& dispatcher, const Protobuf::MethodDescriptor& service_method);
+  GrpcMuxImpl(const envoy::api::v2::core::Node& node, Grpc::AsyncClientPtr async_client,
+              Event::Dispatcher& dispatcher, const Protobuf::MethodDescriptor& service_method,
+              MonotonicTimeSource& time_source = ProdMonotonicTimeSource::instance_);
   ~GrpcMuxImpl();
 
   void start() override;
@@ -63,7 +61,9 @@ private:
     ~GrpcMuxWatchImpl() override {
       if (inserted_) {
         parent_.api_state_[type_url_].watches_.erase(entry_);
-        parent_.sendDiscoveryRequest(type_url_);
+        if (!resources_.empty()) {
+          parent_.sendDiscoveryRequest(type_url_);
+        }
       }
     }
     std::vector<std::string> resources_;
@@ -86,18 +86,21 @@ private:
     bool pending_{};
     // Has this API been tracked in subscriptions_?
     bool subscribed_{};
+    // Detects when Envoy is making too many requests.
+    TokenBucketPtr limit_request_;
+    // Limits warning messages when too many requests is detected.
+    TokenBucketPtr limit_log_;
   };
 
-  envoy::api::v2::Node node_;
-  std::unique_ptr<
-      Grpc::AsyncClient<envoy::api::v2::DiscoveryRequest, envoy::api::v2::DiscoveryResponse>>
-      async_client_;
-  Grpc::AsyncStream<envoy::api::v2::DiscoveryRequest>* stream_{};
+  envoy::api::v2::core::Node node_;
+  Grpc::AsyncClientPtr async_client_;
+  Grpc::AsyncStream* stream_{};
   const Protobuf::MethodDescriptor& service_method_;
   std::unordered_map<std::string, ApiState> api_state_;
   // Envoy's dependendency ordering.
   std::list<std::string> subscriptions_;
   Event::TimerPtr retry_timer_;
+  MonotonicTimeSource& time_source_;
 };
 
 class NullGrpcMuxImpl : public GrpcMux {

@@ -8,15 +8,18 @@
 #include <string>
 #include <vector>
 
+#include "envoy/api/v2/core/base.pb.h"
 #include "envoy/common/callback.h"
-#include "envoy/common/optional.h"
 #include "envoy/http/codec.h"
 #include "envoy/network/connection.h"
+#include "envoy/network/transport_socket.h"
 #include "envoy/ssl/context.h"
 #include "envoy/upstream/health_check_host_monitor.h"
 #include "envoy/upstream/load_balancer_type.h"
 #include "envoy/upstream/outlier_detection.h"
 #include "envoy/upstream/resource_manager.h"
+
+#include "absl/types/optional.h"
 
 namespace Envoy {
 namespace Upstream {
@@ -35,7 +38,9 @@ public:
     // The host is currently failing active health checks.
     FAILED_ACTIVE_HC = 0x1,
     // The host is currently considered an outlier and has been ejected.
-    FAILED_OUTLIER_CHECK = 0x02
+    FAILED_OUTLIER_CHECK = 0x02,
+    // The host is currently marked as unhealthy by EDS.
+    FAILED_EDS_HEALTH = 0x04,
   };
 
   /**
@@ -46,13 +51,24 @@ public:
   /**
    * Create a connection for this host.
    * @param dispatcher supplies the owning dispatcher.
+   * @param options supplies the socket options that will be set on the new connection.
    * @return the connection data which includes the raw network connection as well as the *real*
    *         host that backs it. The reason why a 2nd host is returned is that some hosts are
    *         logical and wrap multiple real network destinations. In this case, a different host
    *         will be returned along with the connection vs. the host the method was called on.
    *         If it matters, callers should not assume that the returned host will be the same.
    */
-  virtual CreateConnectionData createConnection(Event::Dispatcher& dispatcher) const PURE;
+  virtual CreateConnectionData
+  createConnection(Event::Dispatcher& dispatcher,
+                   const Network::ConnectionSocket::OptionsSharedPtr& options) const PURE;
+
+  /**
+   * Create a health check connection for this host.
+   * @param dispatcher supplies the owning dispatcher.
+   * @return the connection data.
+   */
+  virtual CreateConnectionData
+  createHealthCheckConnection(Event::Dispatcher& dispatcher) const PURE;
 
   /**
    * @return host specific gauges.
@@ -118,21 +134,68 @@ public:
 
 typedef std::shared_ptr<const Host> HostConstSharedPtr;
 
+typedef std::vector<HostSharedPtr> HostVector;
+typedef std::shared_ptr<HostVector> HostVectorSharedPtr;
+typedef std::shared_ptr<const HostVector> HostVectorConstSharedPtr;
+
+/**
+ * Bucket hosts by locality.
+ */
+class HostsPerLocality {
+public:
+  virtual ~HostsPerLocality() {}
+
+  /**
+   * @return bool is local locality one of the locality buckets? If so, the
+   *         local locality will be the first in the get() vector.
+   */
+  virtual bool hasLocalLocality() const PURE;
+
+  /**
+   * @return const std::vector<HostVector>& list of hosts organized per
+   *         locality. The local locality is the first entry if
+   *         hasLocalLocality() is true.
+   */
+  virtual const std::vector<HostVector>& get() const PURE;
+
+  /**
+   * Clone object with a filter predicate.
+   * @param predicate on Host entries.
+   * @return HostsPerLocalityConstSharedPtr clone of the HostsPerLocality with only
+   *         hosts according to predicate.
+   */
+  virtual std::shared_ptr<const HostsPerLocality>
+  filter(std::function<bool(const Host&)> predicate) const PURE;
+
+  /**
+   * Clone object.
+   * @return HostsPerLocalityConstSharedPtr clone of the HostsPerLocality.
+   */
+  std::shared_ptr<const HostsPerLocality> clone() const {
+    return filter([](const Host&) { return true; });
+  }
+};
+
+typedef std::shared_ptr<HostsPerLocality> HostsPerLocalitySharedPtr;
+typedef std::shared_ptr<const HostsPerLocality> HostsPerLocalityConstSharedPtr;
+
+// Weight for each locality index in HostsPerLocality.
+typedef std::vector<uint32_t> LocalityWeights;
+typedef std::shared_ptr<LocalityWeights> LocalityWeightsSharedPtr;
+typedef std::shared_ptr<const LocalityWeights> LocalityWeightsConstSharedPtr;
+
 /**
  * Base host set interface. This contains all of the endpoints for a given LocalityLbEndpoints
  * priority level.
  */
 class HostSet {
 public:
-  typedef std::shared_ptr<const std::vector<HostSharedPtr>> HostVectorConstSharedPtr;
-  typedef std::shared_ptr<const std::vector<std::vector<HostSharedPtr>>> HostListsConstSharedPtr;
-
   virtual ~HostSet() {}
 
   /**
    * @return all hosts that make up the set at the current time.
    */
-  virtual const std::vector<HostSharedPtr>& hosts() const PURE;
+  virtual const HostVector& hosts() const PURE;
 
   /**
    * @return all healthy hosts contained in the set at the current time. NOTE: This set is
@@ -140,21 +203,27 @@ public:
    *         unhealthy and calling healthy() on it will return false. Code should be written to
    *         deal with this case if it matters.
    */
-  virtual const std::vector<HostSharedPtr>& healthyHosts() const PURE;
+  virtual const HostVector& healthyHosts() const PURE;
 
   /**
-   * @return hosts per locality, index 0 is dedicated to local locality hosts.
-   * If there are no hosts in local locality for upstream cluster hostsPerLocality() will @return
-   * empty vector.
-   *
-   * Note, that we sort localities in lexicographic order starting from index 1.
+   * @return hosts per locality.
    */
-  virtual const std::vector<std::vector<HostSharedPtr>>& hostsPerLocality() const PURE;
+  virtual const HostsPerLocality& hostsPerLocality() const PURE;
 
   /**
    * @return same as hostsPerLocality but only contains healthy hosts.
    */
-  virtual const std::vector<std::vector<HostSharedPtr>>& healthyHostsPerLocality() const PURE;
+  virtual const HostsPerLocality& healthyHostsPerLocality() const PURE;
+
+  /**
+   * @return weights for each locality in the host set.
+   */
+  virtual LocalityWeightsConstSharedPtr localityWeights() const PURE;
+
+  /**
+   * @return next locality index to route to if performing locality weighted balancing.
+   */
+  virtual absl::optional<uint32_t> chooseLocality() PURE;
 
   /**
    * Updates the hosts in a given host set.
@@ -163,14 +232,15 @@ public:
    * @param healthy hosts supplies the subset of hosts which are healthy.
    * @param hosts_per_locality supplies the hosts subdivided by locality.
    * @param hosts_per_locality supplies the healthy hosts subdivided by locality.
+   * @param locality_weights supplies a map from locality to associated weight.
    * @param hosts_added supplies the hosts added since the last update.
    * @param hosts_removed supplies the hosts removed since the last update.
    */
   virtual void updateHosts(HostVectorConstSharedPtr hosts, HostVectorConstSharedPtr healthy_hosts,
-                           HostListsConstSharedPtr hosts_per_locality,
-                           HostListsConstSharedPtr healthy_hosts_per_locality,
-                           const std::vector<HostSharedPtr>& hosts_added,
-                           const std::vector<HostSharedPtr>& hosts_removed) PURE;
+                           HostsPerLocalityConstSharedPtr hosts_per_locality,
+                           HostsPerLocalityConstSharedPtr healthy_hosts_per_locality,
+                           LocalityWeightsConstSharedPtr locality_weights,
+                           const HostVector& hosts_added, const HostVector& hosts_removed) PURE;
 
   /**
    * @return uint32_t the priority of this host set.
@@ -186,8 +256,8 @@ typedef std::unique_ptr<HostSet> HostSetPtr;
  */
 class PrioritySet {
 public:
-  typedef std::function<void(uint32_t priority, const std::vector<HostSharedPtr>& hosts_added,
-                             const std::vector<HostSharedPtr>& hosts_removed)>
+  typedef std::function<void(uint32_t priority, const HostVector& hosts_added,
+                             const HostVector& hosts_removed)>
       MemberUpdateCb;
 
   virtual ~PrioritySet() {}
@@ -240,6 +310,7 @@ public:
   COUNTER  (upstream_cx_http2_total)                                                               \
   COUNTER  (upstream_cx_connect_fail)                                                              \
   COUNTER  (upstream_cx_connect_timeout)                                                           \
+  COUNTER  (upstream_cx_idle_timeout)                                                              \
   COUNTER  (upstream_cx_connect_attempts_exceeded)                                                 \
   COUNTER  (upstream_cx_overflow)                                                                  \
   HISTOGRAM(upstream_cx_connect_ms)                                                                \
@@ -287,13 +358,14 @@ public:
   COUNTER  (update_success)                                                                        \
   COUNTER  (update_failure)                                                                        \
   COUNTER  (update_empty)                                                                          \
+  COUNTER  (update_no_rebuild)                                                                     \
   GAUGE    (version)
 // clang-format on
 
 /**
  * All cluster load report stats. These are only use for EDS load reporting and not sent to the
- * stats sink. See envoy.api.v2.ClusterStats for the definition of upstream_rq_dropped. These are
- * latched by LoadStatsReporter, independent of the normal stats sink flushing.
+ * stats sink. See envoy.api.v2.endpoint.ClusterStats for the definition of upstream_rq_dropped.
+ * These are latched by LoadStatsReporter, independent of the normal stats sink flushing.
  */
 // clang-format off
 #define ALL_CLUSTER_LOAD_REPORT_STATS(COUNTER)                                                     \
@@ -322,6 +394,11 @@ public:
   struct Features {
     // Whether the upstream supports HTTP2. This is used when creating connection pools.
     static const uint64_t HTTP2 = 0x1;
+    // Use the downstream protocol (HTTP1.1, HTTP2) for upstream connections as well, if available.
+    // This is used when creating connection pools.
+    static const uint64_t USE_DOWNSTREAM_PROTOCOL = 0x2;
+    // Whether connections should be immediately closed upon health failure.
+    static const uint64_t CLOSE_CONNECTIONS_ON_HOST_HEALTH_FAILURE = 0x4;
   };
 
   virtual ~ClusterInfo() {}
@@ -336,6 +413,11 @@ public:
    * @return the connect timeout for upstream hosts that belong to this cluster.
    */
   virtual std::chrono::milliseconds connectTimeout() const PURE;
+
+  /**
+   * @return the idle timeout for upstream connection pool connections.
+   */
+  virtual const absl::optional<std::chrono::milliseconds> idleTimeout() const PURE;
 
   /**
    * @return soft limit on size of the cluster's connections read and write buffers.
@@ -354,6 +436,12 @@ public:
   virtual const Http::Http2Settings& http2Settings() const PURE;
 
   /**
+   * @return const envoy::api::v2::Cluster::CommonLbConfig& the common configuration for all
+   *         load balancers for this cluster.
+   */
+  virtual const envoy::api::v2::Cluster::CommonLbConfig& lbConfig() const PURE;
+
+  /**
    * @return the type of load balancing that the cluster should use.
    */
   virtual LoadBalancerType lbType() const PURE;
@@ -366,7 +454,8 @@ public:
   /**
    * @return configuration for ring hash load balancing, only used if type is set to ring_hash_lb.
    */
-  virtual const Optional<envoy::api::v2::Cluster::RingHashLbConfig>& lbRingHashConfig() const PURE;
+  virtual const absl::optional<envoy::api::v2::Cluster::RingHashLbConfig>&
+  lbRingHashConfig() const PURE;
 
   /**
    * @return Whether the cluster is currently in maintenance mode and should not be routed to.
@@ -395,9 +484,10 @@ public:
   virtual ResourceManager& resourceManager(ResourcePriority priority) const PURE;
 
   /**
-   * @return the SSL context to use when communicating with the cluster.
+   * @return Network::TransportSocketFactory& the factory of transport socket to use when
+   *         communicating with the cluster.
    */
-  virtual Ssl::ClientContext* sslContext() const PURE;
+  virtual Network::TransportSocketFactory& transportSocketFactory() const PURE;
 
   /**
    * @return ClusterStats& strongly named stats for this cluster.
@@ -426,6 +516,24 @@ public:
    * @return the configuration for load balancer subsets.
    */
   virtual const LoadBalancerSubsetInfo& lbSubsetInfo() const PURE;
+
+  /**
+   * @return const envoy::api::v2::core::Metadata& the configuration metadata for this cluster.
+   */
+  virtual const envoy::api::v2::core::Metadata& metadata() const PURE;
+
+  /**
+   *
+   * @return const Network::ConnectionSocket::OptionsSharedPtr& socket options for all
+   *         connections for this cluster.
+   */
+  virtual const Network::ConnectionSocket::OptionsSharedPtr& clusterSocketOptions() const PURE;
+
+  /**
+   * @return whether to skip waiting for health checking before draining connections
+   *         after a host is removed from service discovery.
+   */
+  virtual bool drainConnectionsOnHostRemoval() const PURE;
 };
 
 typedef std::shared_ptr<const ClusterInfo> ClusterInfoConstSharedPtr;

@@ -4,7 +4,6 @@
 #include <list>
 #include <memory>
 
-#include "envoy/common/optional.h"
 #include "envoy/event/deferred_deletable.h"
 #include "envoy/event/timer.h"
 #include "envoy/http/conn_pool.h"
@@ -15,6 +14,8 @@
 #include "common/common/linked_object.h"
 #include "common/http/codec_client.h"
 #include "common/http/codec_wrappers.h"
+
+#include "absl/types/optional.h"
 
 namespace Envoy {
 namespace Http {
@@ -29,15 +30,15 @@ namespace Http1 {
 class ConnPoolImpl : Logger::Loggable<Logger::Id::pool>, public ConnectionPool::Instance {
 public:
   ConnPoolImpl(Event::Dispatcher& dispatcher, Upstream::HostConstSharedPtr host,
-               Upstream::ResourcePriority priority)
-      : dispatcher_(dispatcher), host_(host), priority_(priority) {}
+               Upstream::ResourcePriority priority,
+               const Network::ConnectionSocket::OptionsSharedPtr& options);
 
   ~ConnPoolImpl();
 
   // ConnectionPool::Instance
   Http::Protocol protocol() const override { return Http::Protocol::Http11; }
   void addDrainedCallback(DrainedCb cb) override;
-  void closeConnections() override;
+  void drainConnections() override;
   ConnectionPool::Cancellable* newStream(StreamDecoder& response_decoder,
                                          ConnectionPool::Callbacks& callbacks) override;
 
@@ -121,7 +122,8 @@ protected:
   void onDownstreamReset(ActiveClient& client);
   void onPendingRequestCancel(PendingRequest& request);
   void onResponseComplete(ActiveClient& client);
-  void processIdleClient(ActiveClient& client);
+  void onUpstreamReady();
+  void processIdleClient(ActiveClient& client, bool delay);
 
   Stats::TimespanPtr conn_connect_ms_;
   Event::Dispatcher& dispatcher_;
@@ -131,6 +133,9 @@ protected:
   std::list<PendingRequestPtr> pending_requests_;
   std::list<DrainedCb> drained_callbacks_;
   Upstream::ResourcePriority priority_;
+  const Network::ConnectionSocket::OptionsSharedPtr socket_options_;
+  Event::TimerPtr upstream_ready_timer_;
+  bool upstream_ready_enabled_{false};
 };
 
 /**
@@ -139,8 +144,9 @@ protected:
 class ConnPoolImplProd : public ConnPoolImpl {
 public:
   ConnPoolImplProd(Event::Dispatcher& dispatcher, Upstream::HostConstSharedPtr host,
-                   Upstream::ResourcePriority priority)
-      : ConnPoolImpl(dispatcher, host, priority) {}
+                   Upstream::ResourcePriority priority,
+                   const Network::ConnectionSocket::OptionsSharedPtr& options)
+      : ConnPoolImpl(dispatcher, host, priority, options) {}
 
   // ConnPoolImpl
   CodecClientPtr createCodecClient(Upstream::Host::CreateConnectionData& data) override;

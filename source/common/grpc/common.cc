@@ -10,14 +10,13 @@
 #include "common/common/assert.h"
 #include "common/common/empty_string.h"
 #include "common/common/enum_to_int.h"
+#include "common/common/fmt.h"
 #include "common/common/macros.h"
 #include "common/common/utility.h"
 #include "common/http/headers.h"
 #include "common/http/message_impl.h"
 #include "common/http/utility.h"
 #include "common/protobuf/protobuf.h"
-
-#include "fmt/format.h"
 
 namespace Envoy {
 namespace Grpc {
@@ -46,6 +45,17 @@ bool Common::hasGrpcContentType(const Http::HeaderMap& headers) {
   }
   // This must be something like application/grpc-web.
   return false;
+}
+
+bool Common::isGrpcResponseHeader(const Http::HeaderMap& headers, bool end_stream) {
+  if (end_stream) {
+    // Trailers-only response, only grpc-status is required.
+    return headers.GrpcStatus() != nullptr;
+  }
+  if (Http::Utility::getResponseStatus(headers) != enumToInt(Http::Code::OK)) {
+    return false;
+  }
+  return hasGrpcContentType(headers);
 }
 
 void Common::chargeStat(const Upstream::ClusterInfo& cluster, const std::string& protocol,
@@ -81,18 +91,18 @@ void Common::chargeStat(const Upstream::ClusterInfo& cluster, const std::string&
   chargeStat(cluster, "grpc", grpc_service, grpc_method, success);
 }
 
-Optional<Status::GrpcStatus> Common::getGrpcStatus(const Http::HeaderMap& trailers) {
+absl::optional<Status::GrpcStatus> Common::getGrpcStatus(const Http::HeaderMap& trailers) {
   const Http::HeaderEntry* grpc_status_header = trailers.GrpcStatus();
 
   uint64_t grpc_status_code;
   if (!grpc_status_header || grpc_status_header->value().empty()) {
-    return Optional<Status::GrpcStatus>();
+    return absl::optional<Status::GrpcStatus>();
   }
   if (!StringUtil::atoul(grpc_status_header->value().c_str(), grpc_status_code) ||
       grpc_status_code > Status::GrpcStatus::Unauthenticated) {
-    return Optional<Status::GrpcStatus>(Status::GrpcStatus::InvalidCode);
+    return absl::optional<Status::GrpcStatus>(Status::GrpcStatus::InvalidCode);
   }
-  return Optional<Status::GrpcStatus>(static_cast<Status::GrpcStatus>(grpc_status_code));
+  return absl::optional<Status::GrpcStatus>(static_cast<Status::GrpcStatus>(grpc_status_code));
 }
 
 std::string Common::getGrpcMessage(const Http::HeaderMap& trailers) {
@@ -105,95 +115,13 @@ bool Common::resolveServiceAndMethod(const Http::HeaderEntry* path, std::string*
   if (path == nullptr || path->value().c_str() == nullptr) {
     return false;
   }
-  std::vector<std::string> parts = StringUtil::split(path->value().c_str(), '/');
+  const auto parts = StringUtil::splitToken(path->value().c_str(), "/");
   if (parts.size() != 2) {
     return false;
   }
-  *service = std::move(parts[0]);
-  *method = std::move(parts[1]);
+  service->assign(parts[0].data(), parts[0].size());
+  method->assign(parts[1].data(), parts[1].size());
   return true;
-}
-
-Status::GrpcStatus Common::httpToGrpcStatus(uint64_t http_response_status) {
-  // From
-  // https://github.com/grpc/grpc/blob/master/doc/http-grpc-status-mapping.md.
-  switch (http_response_status) {
-  case 400:
-    return Status::GrpcStatus::Internal;
-  case 401:
-    return Status::GrpcStatus::Unauthenticated;
-  case 403:
-    return Status::GrpcStatus::PermissionDenied;
-  case 404:
-    return Status::GrpcStatus::Unimplemented;
-  case 429:
-  case 502:
-  case 503:
-  case 504:
-    return Status::GrpcStatus::Unavailable;
-  default:
-    return Status::GrpcStatus::Unknown;
-  }
-}
-
-uint64_t Common::grpcToHttpStatus(Status::GrpcStatus grpc_status) {
-  // From https://cloud.google.com/apis/design/errors#handling_errors.
-  switch (grpc_status) {
-  case Status::GrpcStatus::Ok:
-    return 200;
-  case Status::GrpcStatus::Canceled:
-    // Client closed request.
-    return 499;
-  case Status::GrpcStatus::Unknown:
-    // Internal server error.
-    return 500;
-  case Status::GrpcStatus::InvalidArgument:
-    // Bad request.
-    return 400;
-  case Status::GrpcStatus::DeadlineExceeded:
-    // Gateway Time-out.
-    return 504;
-  case Status::GrpcStatus::NotFound:
-    // Not found.
-    return 404;
-  case Status::GrpcStatus::AlreadyExists:
-    // Conflict.
-    return 409;
-  case Status::GrpcStatus::PermissionDenied:
-    // Forbidden.
-    return 403;
-  case Status::GrpcStatus::ResourceExhausted:
-    //  Too many requests.
-    return 429;
-  case Status::GrpcStatus::FailedPrecondition:
-    // Bad request.
-    return 400;
-  case Status::GrpcStatus::Aborted:
-    // Conflict.
-    return 409;
-  case Status::GrpcStatus::OutOfRange:
-    // Bad request.
-    return 400;
-  case Status::GrpcStatus::Unimplemented:
-    // Not implemented.
-    return 501;
-  case Status::GrpcStatus::Internal:
-    // Internal server error.
-    return 500;
-  case Status::GrpcStatus::Unavailable:
-    // Service unavailable.
-    return 503;
-  case Status::GrpcStatus::DataLoss:
-    // Internal server error.
-    return 500;
-  case Status::GrpcStatus::Unauthenticated:
-    // Unauthorized.
-    return 401;
-  case Status::GrpcStatus::InvalidCode:
-  default:
-    // Internal server error.
-    return 500;
-  }
 }
 
 Buffer::InstancePtr Common::serializeBody(const Protobuf::Message& message) {
@@ -238,13 +166,14 @@ Http::MessagePtr Common::prepareHeaders(const std::string& upstream_cluster,
 
 void Common::checkForHeaderOnlyError(Http::Message& http_response) {
   // First check for grpc-status in headers. If it is here, we have an error.
-  Optional<Status::GrpcStatus> grpc_status_code = Common::getGrpcStatus(http_response.headers());
-  if (!grpc_status_code.valid()) {
+  absl::optional<Status::GrpcStatus> grpc_status_code =
+      Common::getGrpcStatus(http_response.headers());
+  if (!grpc_status_code) {
     return;
   }
 
   if (grpc_status_code.value() == Status::GrpcStatus::InvalidCode) {
-    throw Exception(Optional<uint64_t>(), "bad grpc-status header");
+    throw Exception(absl::optional<uint64_t>(), "bad grpc-status header");
   }
 
   const Http::HeaderEntry* grpc_status_message = http_response.headers().GrpcMessage();
@@ -254,19 +183,20 @@ void Common::checkForHeaderOnlyError(Http::Message& http_response) {
 
 void Common::validateResponse(Http::Message& http_response) {
   if (Http::Utility::getResponseStatus(http_response.headers()) != enumToInt(Http::Code::OK)) {
-    throw Exception(Optional<uint64_t>(), "non-200 response code");
+    throw Exception(absl::optional<uint64_t>(), "non-200 response code");
   }
 
   checkForHeaderOnlyError(http_response);
 
   // Check for existence of trailers.
   if (!http_response.trailers()) {
-    throw Exception(Optional<uint64_t>(), "no response trailers");
+    throw Exception(absl::optional<uint64_t>(), "no response trailers");
   }
 
-  Optional<Status::GrpcStatus> grpc_status_code = Common::getGrpcStatus(*http_response.trailers());
-  if (!grpc_status_code.valid() || grpc_status_code.value() < 0) {
-    throw Exception(Optional<uint64_t>(), "bad grpc-status trailer");
+  absl::optional<Status::GrpcStatus> grpc_status_code =
+      Common::getGrpcStatus(*http_response.trailers());
+  if (!grpc_status_code || grpc_status_code.value() < 0) {
+    throw Exception(absl::optional<uint64_t>(), "bad grpc-status trailer");
   }
 
   if (grpc_status_code.value() != 0) {

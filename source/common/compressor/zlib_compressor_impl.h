@@ -27,8 +27,9 @@ public:
   /**
    * Enum values used to set compression level during initialization.
    * best: gives best compression.
-   * speed: gives best.
-   * standard: gives normal compression. (default)
+   * speed: gives best performance.
+   * standard: requests a default compromise between speed and compression. (default) @see zlib
+   * manual.
    */
   enum class CompressionLevel : int64_t {
     Best = 9,
@@ -41,7 +42,7 @@ public:
    * filtered: used for data produced by a filter. (or predictor) @see Z_FILTERED (zlib manual)
    * huffman: used to enforce Huffman encoding. @see RFC 1951
    * rle: used to limit match distances to one. (Run-length encoding)
-   * standard: used for normal data. (default) @see Z_DEFAULT_STRATEGY (zlib manual)
+   * standard: used for normal data. (default) @see Z_DEFAULT_STRATEGY in zlib manual.
    */
   enum class CompressionStrategy : uint64_t {
     Filtered = 1,
@@ -64,15 +65,6 @@ public:
             uint64_t memory_level);
 
   /**
-   * Flush should be called when no more data needs to be compressed. It will compress
-   * any remaining input available in the compressor and flush the compressed data to the output
-   * buffer. Note that forcing flush frequently degrades the compression ratio, so this should only
-   * be called when necessary.
-   * @param output_buffer supplies the buffer to output compressed data.
-   */
-  void flush(Buffer::Instance& output_buffer);
-
-  /**
    * It returns the checksum of all output produced so far. Compressor's checksum at the end of the
    * stream has to match decompressor's checksum produced at the end of the decompression.
    * @return uint64_t CRC-32 if a gzip stream is being written or Adler-32 for other compression
@@ -81,7 +73,7 @@ public:
   uint64_t checksum();
 
   // Compressor
-  void compress(const Buffer::Instance& input_buffer, Buffer::Instance& output_buffer) override;
+  void compress(Buffer::Instance& buffer, State state) override;
 
 private:
   bool deflateNext(int64_t flush_state);

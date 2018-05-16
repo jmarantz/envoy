@@ -1,5 +1,7 @@
 #include <fstream>
 
+#include "envoy/api/v2/eds.pb.h"
+
 #include "common/config/filesystem_subscription_impl.h"
 #include "common/config/utility.h"
 #include "common/event/dispatcher_impl.h"
@@ -9,7 +11,6 @@
 #include "test/test_common/environment.h"
 #include "test/test_common/utility.h"
 
-#include "api/eds.pb.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
@@ -70,9 +71,11 @@ public:
     envoy::api::v2::DiscoveryResponse response_pb;
     EXPECT_TRUE(Protobuf::util::JsonStringToMessage(file_json, &response_pb).ok());
     EXPECT_CALL(callbacks_,
-                onConfigUpdate(RepeatedProtoEq(
-                    Config::Utility::getTypedResources<envoy::api::v2::ClusterLoadAssignment>(
-                        response_pb))))
+                onConfigUpdate(
+                    RepeatedProtoEq(
+                        Config::Utility::getTypedResources<envoy::api::v2::ClusterLoadAssignment>(
+                            response_pb)),
+                    version))
         .WillOnce(ThrowOnRejectedConfig(accept));
     if (accept) {
       version_ = version;
@@ -80,7 +83,6 @@ public:
       EXPECT_CALL(callbacks_, onConfigUpdateFailed(_));
     }
     updateFile(file_json);
-    EXPECT_EQ(version_, subscription_.versionInfo());
   }
 
   void verifyStats(uint32_t attempt, uint32_t success, uint32_t rejected, uint32_t failure,

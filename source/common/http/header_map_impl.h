@@ -61,13 +61,14 @@ public:
   void addCopy(const LowerCaseString& key, const std::string& value) override;
   void setReference(const LowerCaseString& key, const std::string& value) override;
   void setReferenceKey(const LowerCaseString& key, const std::string& value) override;
-
   uint64_t byteSize() const override;
   const HeaderEntry* get(const LowerCaseString& key) const override;
+  HeaderEntry* get(const LowerCaseString& key) override;
   void iterate(ConstIterateCb cb, void* context) const override;
   void iterateReverse(ConstIterateCb cb, void* context) const override;
   Lookup lookup(const LowerCaseString& key, const HeaderEntry** entry) const override;
   void remove(const LowerCaseString& key) override;
+  void removePrefix(const LowerCaseString& key) override;
   size_t size() const override { return headers_.size(); }
 
 protected:

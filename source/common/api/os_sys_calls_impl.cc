@@ -21,6 +21,10 @@ ssize_t OsSysCallsImpl::write(int fd, const void* buffer, size_t num_bytes) {
   return ::write(fd, buffer, num_bytes);
 }
 
+ssize_t OsSysCallsImpl::recv(int socket, void* buffer, size_t length, int flags) {
+  return ::recv(socket, buffer, length, flags);
+}
+
 int OsSysCallsImpl::shmOpen(const char* name, int oflag, mode_t mode) {
   return ::shm_open(name, oflag, mode);
 }
@@ -34,6 +38,16 @@ void* OsSysCallsImpl::mmap(void* addr, size_t length, int prot, int flags, int f
 }
 
 int OsSysCallsImpl::stat(const char* pathname, struct stat* buf) { return ::stat(pathname, buf); }
+
+int OsSysCallsImpl::setsockopt(int sockfd, int level, int optname, const void* optval,
+                               socklen_t optlen) {
+  return ::setsockopt(sockfd, level, optname, optval, optlen);
+}
+
+int OsSysCallsImpl::getsockopt(int sockfd, int level, int optname, void* optval,
+                               socklen_t* optlen) {
+  return ::getsockopt(sockfd, level, optname, optval, optlen);
+}
 
 } // namespace Api
 } // namespace Envoy

@@ -37,11 +37,18 @@ DnsResolverImpl::DnsResolverImpl(
     std::vector<std::string> resolver_addrs;
     resolver_addrs.reserve(resolvers.size());
     for (const auto& resolver : resolvers) {
+      // This should be an IP address (i.e. not a pipe).
+      if (resolver->ip() == nullptr) {
+        ares_destroy(channel_);
+        ares_library_cleanup();
+        throw EnvoyException(
+            fmt::format("DNS resolver '{}' is not an IP address", resolver->asString()));
+      }
       resolver_addrs.push_back(resolver->asString());
     }
     const std::string resolvers_csv = StringUtil::join(resolver_addrs, ",");
     int result = ares_set_servers_ports_csv(channel_, resolvers_csv.c_str());
-    RELEASE_ASSERT(result == ARES_SUCCESS)
+    RELEASE_ASSERT(result == ARES_SUCCESS);
   }
 }
 
@@ -67,7 +74,7 @@ void DnsResolverImpl::PendingResolution::onAresHostCallback(int status, int time
     delete this;
     return;
   }
-  if (status == ARES_SUCCESS || !fallback_if_failed_) {
+  if (!fallback_if_failed_) {
     completed_ = true;
   }
 
@@ -94,6 +101,9 @@ void DnsResolverImpl::PendingResolution::onAresHostCallback(int status, int time
         address_list.emplace_back(new Address::Ipv6Instance(address));
       }
     }
+    if (!address_list.empty()) {
+      completed_ = true;
+    }
   }
 
   if (timeouts > 0) {
@@ -110,7 +120,7 @@ void DnsResolverImpl::PendingResolution::onAresHostCallback(int status, int time
     }
   }
 
-  if (status != ARES_SUCCESS && fallback_if_failed_) {
+  if (!completed_ && fallback_if_failed_) {
     fallback_if_failed_ = false;
     getHostByName(AF_INET);
     // Note: Nothing can follow this call to getHostByName due to deletion of this

@@ -34,6 +34,11 @@ public:
   virtual ssize_t write(int fd, const void* buffer, size_t num_bytes) PURE;
 
   /**
+   * @see recv (man 2 recv)
+   */
+  virtual ssize_t recv(int socket, void* buffer, size_t length, int flags) PURE;
+
+  /**
    * Release all resources allocated for fd.
    * @return zero on success, -1 returned otherwise.
    */
@@ -63,6 +68,17 @@ public:
    * @see man 2 stat
    */
   virtual int stat(const char* pathname, struct stat* buf) PURE;
+
+  /**
+   * @see man 2 setsockopt
+   */
+  virtual int setsockopt(int sockfd, int level, int optname, const void* optval,
+                         socklen_t optlen) PURE;
+
+  /**
+   * @see man 2 getsockopt
+   */
+  virtual int getsockopt(int sockfd, int level, int optname, void* optval, socklen_t* optlen) PURE;
 };
 
 typedef std::unique_ptr<OsSysCalls> OsSysCallsPtr;

@@ -4,6 +4,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdlib>
 #include <mutex>
 #include <string>
 
@@ -42,10 +43,35 @@ bool fileExists(const std::string& path);
 bool directoryExists(const std::string& path);
 
 /**
+ * @return ssize_t the size in bytes of the specified file, or -1 if the file size
+ *                 cannot be determined for any reason, including without limitation
+ *                 the non-existence of the file.
+ */
+ssize_t fileSize(const std::string& path);
+
+/**
  * @return full file content as a string.
+ * @throw EnvoyException if the file cannot be read.
  * Be aware, this is not most highly performing file reading method.
  */
 std::string fileReadToEnd(const std::string& path);
+
+/**
+ * @param path some filesystem path.
+ * @return std::string the canonical path (see realpath(3)).
+ */
+std::string canonicalPath(const std::string& path);
+
+/**
+ * Determine if the path is on a list of paths Envoy will refuse to access. This
+ * is a basic sanity check for users, blacklisting some clearly bad paths. Paths
+ * may still be problematic (e.g. indirectly leading to /dev/mem) even if this
+ * returns false, it is up to the user to validate that supplied paths are
+ * valid.
+ * @param path some filesystem path.
+ * @return is the path on the blacklist?
+ */
+bool illegalPath(const std::string& path);
 
 /**
  * This is a file implementation geared for writing out access logs. It turn out that in certain
@@ -61,7 +87,7 @@ public:
   ~FileImpl();
 
   // Filesystem::File
-  void write(const std::string& data) override;
+  void write(absl::string_view data) override;
 
   /**
    * Filesystem::File

@@ -3,6 +3,7 @@
 #include "envoy/buffer/buffer.h"
 #include "envoy/common/pure.h"
 #include "envoy/network/connection.h"
+#include "envoy/ssl/connection.h"
 
 namespace Envoy {
 namespace Network {
@@ -27,6 +28,12 @@ struct IoResult {
    * Number of bytes processed by the I/O event.
    */
   uint64_t bytes_processed_;
+
+  /**
+   * True if an end-of-stream was read from a connection. This
+   * can only be true for read operations.
+   */
+  bool end_stream_read_;
 };
 
 /**
@@ -39,7 +46,7 @@ public:
   /**
    * @return int the file descriptor associated with the connection.
    */
-  virtual int fd() PURE;
+  virtual int fd() const PURE;
 
   /**
    * @return Network::Connection& the connection interface.
@@ -108,17 +115,49 @@ public:
 
   /**
    * @param buffer supplies the buffer to write from
+   * @param end_stream supplies whether this is the end of the stream. If true and all
+   *        data in buffer is written, the connection will be half-closed.
    * @return IoResult the result of the write action.
    */
-  virtual IoResult doWrite(Buffer::Instance& buffer) PURE;
+  virtual IoResult doWrite(Buffer::Instance& buffer, bool end_stream) PURE;
 
   /**
    * Called when underlying transport is established.
    */
   virtual void onConnected() PURE;
+
+  /**
+   * @return the SSL connection data if this is an SSL connection, or nullptr if it is not.
+   */
+  virtual Ssl::Connection* ssl() PURE;
+
+  /**
+   * @return the const SSL connection data if this is an SSL connection, or nullptr if it is not.
+   */
+  virtual const Ssl::Connection* ssl() const PURE;
 };
 
 typedef std::unique_ptr<TransportSocket> TransportSocketPtr;
+
+/**
+ * A factory for creating transport socket. It will be associated to filter chains and clusters.
+ */
+class TransportSocketFactory {
+public:
+  virtual ~TransportSocketFactory() {}
+
+  /**
+   * @return bool whether the transport socket implements secure transport.
+   */
+  virtual bool implementsSecureTransport() const PURE;
+
+  /**
+   * @return Network::TransportSocketPtr a transport socket to be passed to connection.
+   */
+  virtual TransportSocketPtr createTransportSocket() const PURE;
+};
+
+typedef std::unique_ptr<TransportSocketFactory> TransportSocketFactoryPtr;
 
 } // namespace Network
 } // namespace Envoy

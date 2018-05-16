@@ -47,6 +47,14 @@ TEST(FileSystemImpl, directoryExists) {
   EXPECT_FALSE(Filesystem::directoryExists("/dev/blahblah"));
 }
 
+TEST(FileSystemImpl, fileSize) {
+  EXPECT_EQ(0, Filesystem::fileSize("/dev/null"));
+  EXPECT_EQ(-1, Filesystem::fileSize("/dev/blahblahblah"));
+  const std::string data = "test string\ntest";
+  const std::string file_path = TestEnvironment::writeStringToFileForTest("test_envoy", data);
+  EXPECT_EQ(data.length(), Filesystem::fileSize(file_path));
+}
+
 TEST(FileSystemImpl, fileReadToEndSuccess) {
   const std::string data = "test string\ntest";
   const std::string file_path = TestEnvironment::writeStringToFileForTest("test_envoy", data);
@@ -75,6 +83,24 @@ TEST(FileSystemImpl, fileReadToEndDoesNotExist) {
   unlink(TestEnvironment::temporaryPath("envoy_this_not_exist").c_str());
   EXPECT_THROW(Filesystem::fileReadToEnd(TestEnvironment::temporaryPath("envoy_this_not_exist")),
                EnvoyException);
+}
+
+TEST(FilesystemImpl, CanonicalPathSuccess) { EXPECT_EQ("/", Filesystem::canonicalPath("//")); }
+
+TEST(FilesystemImpl, CanonicalPathFail) {
+  EXPECT_THROW_WITH_MESSAGE(Filesystem::canonicalPath("/_some_non_existant_file"), EnvoyException,
+                            "Unable to determine canonical path for /_some_non_existant_file");
+}
+
+TEST(FilesystemImpl, IllegalPath) {
+  EXPECT_FALSE(Filesystem::illegalPath("/"));
+  EXPECT_TRUE(Filesystem::illegalPath("/dev"));
+  EXPECT_TRUE(Filesystem::illegalPath("/dev/"));
+  EXPECT_TRUE(Filesystem::illegalPath("/proc"));
+  EXPECT_TRUE(Filesystem::illegalPath("/proc/"));
+  EXPECT_TRUE(Filesystem::illegalPath("/sys"));
+  EXPECT_TRUE(Filesystem::illegalPath("/sys/"));
+  EXPECT_TRUE(Filesystem::illegalPath("/_some_non_existant_file"));
 }
 
 TEST(FileSystemImpl, flushToLogFilePeriodically) {

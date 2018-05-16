@@ -8,20 +8,21 @@
 
 #include "common/api/api_impl.h"
 #include "common/buffer/buffer_impl.h"
+#include "common/common/fmt.h"
 #include "common/http/header_map_impl.h"
 #include "common/http/http1/codec_impl.h"
 #include "common/http/http2/codec_impl.h"
 #include "common/network/address_impl.h"
 #include "common/network/listen_socket_impl.h"
+#include "common/network/raw_buffer_socket.h"
 #include "common/network/utility.h"
+#include "common/ssl/ssl_socket.h"
 
 #include "server/connection_handler_impl.h"
 
 #include "test/test_common/network_utility.h"
 #include "test/test_common/printers.h"
 #include "test/test_common/utility.h"
-
-#include "fmt/format.h"
 
 namespace Envoy {
 FakeStream::FakeStream(FakeHttpConnection& parent, Http::StreamEncoder& encoder)
@@ -48,6 +49,13 @@ void FakeStream::decodeTrailers(Http::HeaderMapPtr&& trailers) {
   setEndStream(true);
   trailers_ = std::move(trailers);
   decoder_event_.notify_one();
+}
+
+void FakeStream::encode100ContinueHeaders(const Http::HeaderMapImpl& headers) {
+  std::shared_ptr<Http::HeaderMapImpl> headers_copy(
+      new Http::HeaderMapImpl(static_cast<const Http::HeaderMap&>(headers)));
+  parent_.connection().dispatcher().post(
+      [this, headers_copy]() -> void { encoder_.encode100ContinueHeaders(*headers_copy); });
 }
 
 void FakeStream::encodeHeaders(const Http::HeaderMapImpl& headers, bool end_stream) {
@@ -172,6 +180,12 @@ void FakeConnectionBase::readDisable(bool disable) {
   connection_.dispatcher().post([this, disable]() -> void { connection_.readDisable(disable); });
 }
 
+void FakeConnectionBase::enableHalfClose(bool enable) {
+  std::unique_lock<std::mutex> lock(lock_);
+  RELEASE_ASSERT(!disconnected_);
+  connection_.dispatcher().post([this, enable]() -> void { connection_.enableHalfClose(enable); });
+}
+
 Http::StreamDecoder& FakeHttpConnection::newStream(Http::StreamEncoder& encoder) {
   std::unique_lock<std::mutex> lock(lock_);
   new_streams_.emplace_back(new FakeStream(*this, encoder));
@@ -205,6 +219,23 @@ void FakeConnectionBase::waitForDisconnect(bool ignore_spurious_events) {
   ASSERT(disconnected_);
 }
 
+void FakeConnectionBase::waitForHalfClose(bool ignore_spurious_events) {
+  std::unique_lock<std::mutex> lock(lock_);
+  while (!half_closed_) {
+    connection_event_.wait(lock);
+    // The default behavior of waitForHalfClose is to assume the test cleanly
+    // calls waitForData, waitForNewStream, etc. to handle all events on the
+    // connection. If the caller explicitly notes that other events should be
+    // ignored, continue looping until a disconnect is detected. Otherwise fall
+    // through and hit the assert below.
+    if (!ignore_spurious_events) {
+      break;
+    }
+  }
+
+  ASSERT(half_closed_);
+}
+
 FakeStreamPtr FakeHttpConnection::waitForNewStream(Event::Dispatcher& client_dispatcher,
                                                    bool ignore_spurious_events) {
   std::unique_lock<std::mutex> lock(lock_);
@@ -230,40 +261,46 @@ FakeStreamPtr FakeHttpConnection::waitForNewStream(Event::Dispatcher& client_dis
 }
 
 FakeUpstream::FakeUpstream(const std::string& uds_path, FakeHttpConnection::Type type)
-    : FakeUpstream(nullptr, Network::ListenSocketPtr{new Network::UdsListenSocket(uds_path)},
-                   type) {
+    : FakeUpstream(Network::Test::createRawBufferSocketFactory(),
+                   Network::SocketPtr{new Network::UdsListenSocket(
+                       std::make_shared<Network::Address::PipeInstance>(uds_path))},
+                   type, false) {
   ENVOY_LOG(info, "starting fake server on unix domain socket {}", uds_path);
 }
 
-static Network::ListenSocketPtr makeTcpListenSocket(uint32_t port,
-                                                    Network::Address::IpVersion version) {
-  return Network::ListenSocketPtr{new Network::TcpListenSocket(
+static Network::SocketPtr makeTcpListenSocket(uint32_t port, Network::Address::IpVersion version) {
+  return Network::SocketPtr{new Network::TcpListenSocket(
       Network::Utility::parseInternetAddressAndPort(
           fmt::format("{}:{}", Network::Test::getAnyAddressUrlString(version), port)),
-      true)};
+      nullptr, true)};
 }
 
 FakeUpstream::FakeUpstream(uint32_t port, FakeHttpConnection::Type type,
-                           Network::Address::IpVersion version)
-    : FakeUpstream(nullptr, makeTcpListenSocket(port, version), type) {
+                           Network::Address::IpVersion version, bool enable_half_close)
+    : FakeUpstream(Network::Test::createRawBufferSocketFactory(),
+                   makeTcpListenSocket(port, version), type, enable_half_close) {
   ENVOY_LOG(info, "starting fake server on port {}. Address version is {}",
             this->localAddress()->ip()->port(), Network::Test::addressVersionAsString(version));
 }
 
-FakeUpstream::FakeUpstream(Ssl::ServerContext* ssl_ctx, uint32_t port,
-                           FakeHttpConnection::Type type, Network::Address::IpVersion version)
-    : FakeUpstream(ssl_ctx, makeTcpListenSocket(port, version), type) {
+FakeUpstream::FakeUpstream(Network::TransportSocketFactoryPtr&& transport_socket_factory,
+                           uint32_t port, FakeHttpConnection::Type type,
+                           Network::Address::IpVersion version)
+    : FakeUpstream(std::move(transport_socket_factory), makeTcpListenSocket(port, version), type,
+                   false) {
   ENVOY_LOG(info, "starting fake SSL server on port {}. Address version is {}",
             this->localAddress()->ip()->port(), Network::Test::addressVersionAsString(version));
 }
 
-FakeUpstream::FakeUpstream(Ssl::ServerContext* ssl_ctx, Network::ListenSocketPtr&& listen_socket,
-                           FakeHttpConnection::Type type)
-    : http_type_(type), ssl_ctx_(ssl_ctx), socket_(std::move(listen_socket)),
-      api_(new Api::Impl(std::chrono::milliseconds(10000))),
+FakeUpstream::FakeUpstream(Network::TransportSocketFactoryPtr&& transport_socket_factory,
+                           Network::SocketPtr&& listen_socket, FakeHttpConnection::Type type,
+                           bool enable_half_close)
+    : http_type_(type), transport_socket_factory_(std::move(transport_socket_factory)),
+      socket_(std::move(listen_socket)), api_(new Api::Impl(std::chrono::milliseconds(10000))),
       dispatcher_(api_->allocateDispatcher()),
       handler_(new Server::ConnectionHandlerImpl(ENVOY_LOGGER(), *dispatcher_)),
-      allow_unexpected_disconnects_(false) {
+      allow_unexpected_disconnects_(false), enable_half_close_(enable_half_close),
+      listener_(*this) {
   thread_.reset(new Thread::Thread([this]() -> void { threadRoutine(); }));
   server_initialized_.waitReady();
 }
@@ -278,7 +315,7 @@ void FakeUpstream::cleanUp() {
   }
 }
 
-bool FakeUpstream::createFilterChain(Network::Connection& connection) {
+bool FakeUpstream::createNetworkFilterChain(Network::Connection& connection) {
   std::unique_lock<std::mutex> lock(lock_);
   connection.readDisable(true);
   new_connections_.emplace_back(
@@ -287,14 +324,10 @@ bool FakeUpstream::createFilterChain(Network::Connection& connection) {
   return true;
 }
 
+bool FakeUpstream::createListenerFilterChain(Network::ListenerFilterManager&) { return true; }
+
 void FakeUpstream::threadRoutine() {
-  if (ssl_ctx_) {
-    handler_->addSslListener(*this, *ssl_ctx_, *socket_, stats_store_, 0,
-                             Network::ListenerOptions::listenerOptionsWithBindToPort());
-  } else {
-    handler_->addListener(*this, *socket_, stats_store_, 0,
-                          Network::ListenerOptions::listenerOptionsWithBindToPort());
-  }
+  handler_->addListener(listener_);
 
   server_initialized_.setReady();
   dispatcher_->run(Event::Dispatcher::RunType::Block);
@@ -349,18 +382,21 @@ FakeUpstream::waitForHttpConnection(Event::Dispatcher& client_dispatcher,
   }
 }
 
-FakeRawConnectionPtr FakeUpstream::waitForRawConnection() {
+FakeRawConnectionPtr FakeUpstream::waitForRawConnection(std::chrono::milliseconds wait_for_ms) {
   std::unique_lock<std::mutex> lock(lock_);
   if (new_connections_.empty()) {
     ENVOY_LOG(debug, "waiting for raw connection");
-    new_connection_event_.wait(lock);
+    new_connection_event_.wait_for(lock, wait_for_ms);
   }
 
-  ASSERT(!new_connections_.empty());
+  if (new_connections_.empty()) {
+    return nullptr;
+  }
   FakeRawConnectionPtr connection(new FakeRawConnection(std::move(new_connections_.front())));
   connection->initialize();
   new_connections_.pop_front();
   connection->readDisable(false);
+  connection->enableHalfClose(enable_half_close_);
   return connection;
 }
 
@@ -373,17 +409,23 @@ std::string FakeRawConnection::waitForData(uint64_t num_bytes) {
   return data_;
 }
 
-void FakeRawConnection::write(const std::string& data) {
-  connection_.dispatcher().post([data, this]() -> void {
+void FakeRawConnection::write(const std::string& data, bool end_stream) {
+  std::unique_lock<std::mutex> lock(lock_);
+  ASSERT_FALSE(disconnected_);
+  connection_.dispatcher().post([data, end_stream, this]() -> void {
+    std::unique_lock<std::mutex> lock(lock_);
+    ASSERT_FALSE(disconnected_);
     Buffer::OwnedImpl to_write(data);
-    connection_.write(to_write);
+    connection_.write(to_write, end_stream);
   });
 }
 
-Network::FilterStatus FakeRawConnection::ReadFilter::onData(Buffer::Instance& data) {
+Network::FilterStatus FakeRawConnection::ReadFilter::onData(Buffer::Instance& data,
+                                                            bool end_stream) {
   std::unique_lock<std::mutex> lock(parent_.lock_);
   ENVOY_LOG(debug, "got {} bytes", data.length());
   parent_.data_.append(TestUtility::bufferToString(data));
+  parent_.half_closed_ = end_stream;
   data.drain(data.length());
   parent_.connection_event_.notify_one();
   return Network::FilterStatus::StopIteration;

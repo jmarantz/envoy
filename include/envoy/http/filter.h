@@ -191,6 +191,32 @@ public:
   virtual void addDecodedData(Buffer::Instance& data, bool streaming_filter) PURE;
 
   /**
+   * Create a locally generated response using the provided response_code and body_text parameters.
+   * If the request was a gRPC request the local reply will be encoded as a gRPC response with a 200
+   * HTTP response code and grpc-status and grpc-message headers mapped from the provided
+   * parameters.
+   *
+   * @param response_code supplies the HTTP response code.
+   * @param body_text supplies the optional body text which is sent using the text/plain content
+   *                  type, or encoded in the grpc-message header.
+   * @param modify_headers supplies an optional callback function that can modify the
+   *                       response headers.
+   */
+  virtual void sendLocalReply(Code response_code, const std::string& body_text,
+                              std::function<void(HeaderMap& headers)> modify_headers) PURE;
+
+  /**
+   * Called with 100-Continue headers to be encoded.
+   *
+   * This is not folded into encodeHeaders because most Envoy users and filters
+   * will not be proxying 100-continue and with it split out, can ignore the
+   * complexity of multiple encodeHeaders calls.
+   *
+   * @param headers supplies the headers to be encoded.
+   */
+  virtual void encode100ContinueHeaders(HeaderMapPtr&& headers) PURE;
+
+  /**
    * Called with headers to be encoded, optionally indicating end of stream.
    *
    * The connection manager inspects certain pseudo headers that are not actually sent downstream.
@@ -250,7 +276,7 @@ public:
   /**
    * This routine may be called to change the buffer limit for decoder filters.
    *
-   * @param boolean supplies the desired buffer limit.
+   * @param limit supplies the desired buffer limit.
    */
   virtual void setDecoderBufferLimit(uint32_t limit) PURE;
 
@@ -382,7 +408,7 @@ public:
   /**
    * This routine may be called to change the buffer limit for encoder filters.
    *
-   * @limit settings supplies the desired buffer limit.
+   * @param limit supplies the desired buffer limit.
    */
   virtual void setEncoderBufferLimit(uint32_t limit) PURE;
 
@@ -401,6 +427,19 @@ public:
  */
 class StreamEncoderFilter : public StreamFilterBase {
 public:
+  /*
+   * Called with 100-continue headers.
+   *
+   * This is not folded into encodeHeaders because most Envoy users and filters
+   * will not be proxying 100-continue and with it split out, can ignore the
+   * complexity of multiple encodeHeaders calls.
+   *
+   * @param headers supplies the 100-continue response headers to be encoded.
+   * @return FilterHeadersStatus determines how filter chain iteration proceeds.
+   *
+   */
+  virtual FilterHeadersStatus encode100ContinueHeaders(HeaderMap& headers) PURE;
+
   /**
    * Called with headers to be encoded, optionally indicating end of stream.
    * @param headers supplies the headers to be encoded.
@@ -471,6 +510,16 @@ public:
    */
   virtual void addAccessLogHandler(AccessLog::InstanceSharedPtr handler) PURE;
 };
+
+/**
+ * This function is used to wrap the creation of an HTTP filter chain for new streams as they
+ * come in. Filter factories create the function at configuration initialization time, and then
+ * they are used at runtime.
+ * @param callbacks supplies the callbacks for the stream to install filters to. Typically the
+ * function will install a single filter, but it's technically possibly to install more than one
+ * if desired.
+ */
+typedef std::function<void(FilterChainFactoryCallbacks& callbacks)> FilterFactoryCb;
 
 /**
  * A FilterChainFactory is used by a connection manager to create an HTTP level filter chain when a

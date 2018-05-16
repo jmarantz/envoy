@@ -3,12 +3,11 @@
 #include <cstdint>
 #include <string>
 
+#include "envoy/config/filter/network/http_connection_manager/v2/http_connection_manager.pb.h"
 #include "envoy/config/subscription.h"
 
 #include "common/common/assert.h"
 #include "common/http/rest_api_fetcher.h"
-
-#include "api/filter/network/http_connection_manager.pb.h"
 
 namespace Envoy {
 namespace Router {
@@ -22,9 +21,9 @@ class RdsSubscription : public Http::RestApiFetcher,
                         Logger::Loggable<Logger::Id::upstream> {
 public:
   RdsSubscription(Envoy::Config::SubscriptionStats stats,
-                  const envoy::api::v2::filter::network::Rds& rds, Upstream::ClusterManager& cm,
-                  Event::Dispatcher& dispatcher, Runtime::RandomGenerator& random,
-                  const LocalInfo::LocalInfo& local_info);
+                  const envoy::config::filter::network::http_connection_manager::v2::Rds& rds,
+                  Upstream::ClusterManager& cm, Event::Dispatcher& dispatcher,
+                  Runtime::RandomGenerator& random, const LocalInfo::LocalInfo& local_info);
 
 private:
   // Config::Subscription
@@ -46,8 +45,6 @@ private:
     NOT_IMPLEMENTED;
   }
 
-  const std::string versionInfo() const override { return version_info_; }
-
   // Http::RestApiFetcher
   void createRequest(Http::Message& request) override;
   void parseResponse(const Http::Message& response) override;
@@ -55,7 +52,6 @@ private:
   void onFetchFailure(const EnvoyException* e) override;
 
   std::string route_config_name_;
-  std::string version_info_;
   const LocalInfo::LocalInfo& local_info_;
   Envoy::Config::SubscriptionCallbacks<envoy::api::v2::RouteConfiguration>* callbacks_ = nullptr;
   Envoy::Config::SubscriptionStats stats_;

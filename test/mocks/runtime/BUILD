@@ -12,6 +12,7 @@ envoy_cc_mock(
     name = "runtime_mocks",
     srcs = ["mocks.cc"],
     hdrs = ["mocks.h"],
+    external_deps = ["abseil_optional"],
     deps = [
         "//include/envoy/runtime:runtime_interface",
         "//test/mocks:common_lib",

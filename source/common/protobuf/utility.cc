@@ -1,13 +1,40 @@
 #include "common/protobuf/utility.h"
 
 #include "common/common/assert.h"
+#include "common/common/fmt.h"
 #include "common/filesystem/filesystem_impl.h"
 #include "common/json/json_loader.h"
 #include "common/protobuf/protobuf.h"
 
-#include "fmt/format.h"
-
 namespace Envoy {
+namespace ProtobufPercentHelper {
+
+uint64_t checkAndReturnDefault(uint64_t default_value, uint64_t max_value) {
+  ASSERT(default_value <= max_value);
+  return default_value;
+}
+
+uint64_t convertPercent(double percent, uint64_t max_value) {
+  // Checked by schema.
+  ASSERT(percent >= 0.0 && percent <= 100.0);
+  return max_value * (percent / 100.0);
+}
+
+uint64_t fractionalPercentDenominatorToInt(const envoy::type::FractionalPercent& percent) {
+  switch (percent.denominator()) {
+  case envoy::type::FractionalPercent::HUNDRED:
+    return 100;
+  case envoy::type::FractionalPercent::TEN_THOUSAND:
+    return 10000;
+  case envoy::type::FractionalPercent::MILLION:
+    return 1000000;
+  default:
+    // Checked by schema.
+    NOT_REACHED;
+  }
+}
+
+} // namespace ProtobufPercentHelper
 
 MissingFieldException::MissingFieldException(const std::string& field_name,
                                              const Protobuf::Message& message)
@@ -59,12 +86,16 @@ void MessageUtil::loadFromFile(const std::string& path, Protobuf::Message& messa
   }
 }
 
-std::string MessageUtil::getJsonStringFromMessage(const Protobuf::Message& message) {
+std::string MessageUtil::getJsonStringFromMessage(const Protobuf::Message& message,
+                                                  const bool pretty_print) {
   Protobuf::util::JsonPrintOptions json_options;
   // By default, proto field names are converted to camelCase when the message is converted to JSON.
   // Setting this option makes debugging easier because it keeps field names consistent in JSON
   // printouts.
   json_options.preserve_proto_field_names = true;
+  if (pretty_print) {
+    json_options.add_whitespace = true;
+  }
   ProtobufTypes::String json;
   const auto status = Protobuf::util::MessageToJsonString(message, &json, json_options);
   // This should always succeed unless something crash-worthy such as out-of-memory.
@@ -77,9 +108,19 @@ void MessageUtil::jsonConvert(const Protobuf::Message& source, Protobuf::Message
   Protobuf::util::JsonOptions json_options;
   ProtobufTypes::String json;
   const auto status = Protobuf::util::MessageToJsonString(source, &json, json_options);
-  // This should always succeed unless something crash-worthy such as out-of-memory.
-  RELEASE_ASSERT(status.ok());
+  if (!status.ok()) {
+    throw EnvoyException(fmt::format("Unable to convert protobuf message to JSON string: {} {}",
+                                     status.ToString(), source.DebugString()));
+  }
   MessageUtil::loadFromJson(json, dest);
+}
+
+ProtobufWkt::Struct MessageUtil::keyValueStruct(const std::string& key, const std::string& value) {
+  ProtobufWkt::Struct struct_obj;
+  ProtobufWkt::Value val;
+  val.set_string_value(value);
+  (*struct_obj.mutable_fields())[key] = val;
+  return struct_obj;
 }
 
 bool ValueUtil::equal(const ProtobufWkt::Value& v1, const ProtobufWkt::Value& v2) {
@@ -89,6 +130,9 @@ bool ValueUtil::equal(const ProtobufWkt::Value& v1, const ProtobufWkt::Value& v2
   }
 
   switch (kind) {
+  case ProtobufWkt::Value::KIND_NOT_SET:
+    return v2.kind_case() == ProtobufWkt::Value::KIND_NOT_SET;
+
   case ProtobufWkt::Value::kNullValue:
     return true;
 
@@ -137,6 +181,32 @@ bool ValueUtil::equal(const ProtobufWkt::Value& v1, const ProtobufWkt::Value& v2
   default:
     NOT_REACHED;
   }
+}
+
+namespace {
+
+void validateDuration(const ProtobufWkt::Duration& duration) {
+  if (duration.seconds() < 0 || duration.nanos() < 0) {
+    throw DurationUtil::OutOfRangeException(
+        fmt::format("Expected positive duration: {}", duration.DebugString()));
+  }
+  if (duration.nanos() > 999999999 ||
+      duration.seconds() > Protobuf::util::TimeUtil::kDurationMaxSeconds) {
+    throw DurationUtil::OutOfRangeException(
+        fmt::format("Duration out-of-range: {}", duration.DebugString()));
+  }
+}
+
+} // namespace
+
+uint64_t DurationUtil::durationToMilliseconds(const ProtobufWkt::Duration& duration) {
+  validateDuration(duration);
+  return Protobuf::util::TimeUtil::DurationToMilliseconds(duration);
+}
+
+uint64_t DurationUtil::durationToSeconds(const ProtobufWkt::Duration& duration) {
+  validateDuration(duration);
+  return Protobuf::util::TimeUtil::DurationToSeconds(duration);
 }
 
 } // namespace Envoy

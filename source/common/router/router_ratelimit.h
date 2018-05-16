@@ -9,8 +9,7 @@
 #include "envoy/router/router_ratelimit.h"
 
 #include "common/config/rds_json.h"
-#include "common/http/filter/ratelimit.h"
-#include "common/router/config_utility.h"
+#include "common/http/header_utility.h"
 
 namespace Envoy {
 namespace Router {
@@ -42,7 +41,7 @@ public:
  */
 class RequestHeadersAction : public RateLimitAction {
 public:
-  RequestHeadersAction(const envoy::api::v2::RateLimit::Action::RequestHeaders& action)
+  RequestHeadersAction(const envoy::api::v2::route::RateLimit::Action::RequestHeaders& action)
       : header_name_(action.header_name()), descriptor_key_(action.descriptor_key()) {}
 
   // Router::RateLimitAction
@@ -71,7 +70,7 @@ public:
  */
 class GenericKeyAction : public RateLimitAction {
 public:
-  GenericKeyAction(const envoy::api::v2::RateLimit::Action::GenericKey& action)
+  GenericKeyAction(const envoy::api::v2::route::RateLimit::Action::GenericKey& action)
       : descriptor_value_(action.descriptor_value()) {}
 
   // Router::RateLimitAction
@@ -88,7 +87,7 @@ private:
  */
 class HeaderValueMatchAction : public RateLimitAction {
 public:
-  HeaderValueMatchAction(const envoy::api::v2::RateLimit::Action::HeaderValueMatch& action);
+  HeaderValueMatchAction(const envoy::api::v2::route::RateLimit::Action::HeaderValueMatch& action);
 
   // Router::RateLimitAction
   bool populateDescriptor(const Router::RouteEntry& route, RateLimit::Descriptor& descriptor,
@@ -98,7 +97,7 @@ public:
 private:
   const std::string descriptor_value_;
   const bool expect_match_;
-  std::vector<Router::ConfigUtility::HeaderData> action_headers_;
+  std::vector<Http::HeaderUtility::HeaderData> action_headers_;
 };
 
 /*
@@ -106,7 +105,7 @@ private:
  */
 class RateLimitPolicyEntryImpl : public RateLimitPolicyEntry {
 public:
-  RateLimitPolicyEntryImpl(const envoy::api::v2::RateLimit& config);
+  RateLimitPolicyEntryImpl(const envoy::api::v2::route::RateLimit& config);
 
   // Router::RateLimitPolicyEntry
   uint64_t stage() const override { return stage_; }
@@ -127,7 +126,8 @@ private:
  */
 class RateLimitPolicyImpl : public RateLimitPolicy {
 public:
-  RateLimitPolicyImpl(const Protobuf::RepeatedPtrField<envoy::api::v2::RateLimit>& rate_limits);
+  RateLimitPolicyImpl(
+      const Protobuf::RepeatedPtrField<envoy::api::v2::route::RateLimit>& rate_limits);
 
   // Router::RateLimitPolicy
   const std::vector<std::reference_wrapper<const RateLimitPolicyEntry>>&

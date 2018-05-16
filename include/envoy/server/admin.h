@@ -8,6 +8,9 @@
 #include "envoy/http/codes.h"
 #include "envoy/http/header_map.h"
 #include "envoy/network/listen_socket.h"
+#include "envoy/server/config_tracker.h"
+
+#include "absl/strings/string_view.h"
 
 namespace Envoy {
 namespace Server {
@@ -19,8 +22,10 @@ namespace Server {
  * done in the RouteConfigProviderManagerImpl constructor in source/common/router/rds_impl.cc.
  */
 #define MAKE_ADMIN_HANDLER(X)                                                                      \
-  [this](const std::string& url, Http::HeaderMap& response_headers,                                \
-         Buffer::Instance& data) -> Http::Code { return X(url, response_headers, data); }
+  [this](absl::string_view path_and_query, Http::HeaderMap& response_headers,                      \
+         Buffer::Instance& data) -> Http::Code {                                                   \
+    return X(path_and_query, response_headers, data);                                              \
+  }
 
 /**
  * Global admin HTTP endpoint for the server.
@@ -37,8 +42,8 @@ public:
    * @param response supplies the buffer to fill in with the response body.
    * @return Http::Code the response code.
    */
-  typedef std::function<Http::Code(const std::string& url, Http::HeaderMap& response_headers,
-                                   Buffer::Instance& response)>
+  typedef std::function<Http::Code(absl::string_view path_and_query,
+                                   Http::HeaderMap& response_headers, Buffer::Instance& response)>
       HandlerCb;
 
   /**
@@ -47,10 +52,11 @@ public:
    * @param help_text supplies the help text for the handler.
    * @param callback supplies the callback to invoke when the prefix matches.
    * @param removable if true allows the handler to be removed via removeHandler.
+   * @param mutates_server_state indicates whether callback will mutate server state.
    * @return bool true if the handler was added, false if it was not added.
    */
   virtual bool addHandler(const std::string& prefix, const std::string& help_text,
-                          HandlerCb callback, bool removable) PURE;
+                          HandlerCb callback, bool removable, bool mutates_server_state) PURE;
 
   /**
    * Remove an admin handler if it is removable.
@@ -61,9 +67,14 @@ public:
 
   /**
    * Obtain socket the admin endpoint is bound to.
-   * @return Network::ListenSocket& socket reference.
+   * @return Network::Socket& socket reference.
    */
-  virtual const Network::ListenSocket& socket() PURE;
+  virtual const Network::Socket& socket() PURE;
+
+  /**
+   * @return ConfigTracker& tracker for /config_dump endpoint.
+   */
+  virtual ConfigTracker& getConfigTracker() PURE;
 };
 
 } // namespace Server

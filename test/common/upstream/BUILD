@@ -2,6 +2,7 @@ licenses(["notice"])  # Apache 2
 
 load(
     "//bazel:envoy_build_system.bzl",
+    "envoy_cc_binary",
     "envoy_cc_test",
     "envoy_cc_test_library",
     "envoy_package",
@@ -33,34 +34,46 @@ envoy_cc_test(
         "//source/common/config:bootstrap_json_lib",
         "//source/common/config:utility_lib",
         "//source/common/event:dispatcher_lib",
+        "//source/common/network:socket_option_lib",
         "//source/common/network:utility_lib",
         "//source/common/ssl:context_lib",
         "//source/common/stats:stats_lib",
         "//source/common/upstream:cluster_manager_lib",
+        "//source/extensions/transport_sockets/raw_buffer:config",
         "//test/mocks/access_log:access_log_mocks",
+        "//test/mocks/api:api_mocks",
         "//test/mocks/http:http_mocks",
         "//test/mocks/local_info:local_info_mocks",
         "//test/mocks/network:network_mocks",
         "//test/mocks/runtime:runtime_mocks",
+        "//test/mocks/server:server_mocks",
         "//test/mocks/thread_local:thread_local_mocks",
         "//test/mocks/upstream:upstream_mocks",
+        "//test/test_common:threadsafe_singleton_injector_lib",
         "//test/test_common:utility_lib",
     ],
 )
 
 envoy_cc_test(
+    name = "edf_scheduler_test",
+    srcs = ["edf_scheduler_test.cc"],
+    deps = ["//source/common/upstream:edf_scheduler_lib"],
+)
+
+envoy_cc_test(
     name = "eds_test",
     srcs = ["eds_test.cc"],
-    external_deps = ["envoy_eds"],
     deps = [
         ":utility_lib",
         "//source/common/config:utility_lib",
         "//source/common/upstream:eds_lib",
+        "//source/extensions/transport_sockets/raw_buffer:config",
         "//test/mocks/local_info:local_info_mocks",
         "//test/mocks/runtime:runtime_mocks",
         "//test/mocks/ssl:ssl_mocks",
         "//test/mocks/upstream:upstream_mocks",
         "//test/test_common:utility_lib",
+        "@envoy_api//envoy/api/v2:eds_cc",
     ],
 )
 
@@ -80,7 +93,6 @@ envoy_cc_test(
         "//source/common/upstream:upstream_lib",
         "//test/common/http:common_lib",
         "//test/mocks/network:network_mocks",
-        "//test/mocks/redis:redis_mocks",
         "//test/mocks/runtime:runtime_mocks",
         "//test/mocks/upstream:upstream_mocks",
         "//test/test_common:utility_lib",
@@ -118,6 +130,7 @@ envoy_cc_test(
     name = "load_balancer_simulation_test",
     srcs = ["load_balancer_simulation_test.cc"],
     deps = [
+        ":utility_lib",
         "//source/common/network:utility_lib",
         "//source/common/runtime:runtime_lib",
         "//source/common/upstream:load_balancer_lib",
@@ -131,7 +144,6 @@ envoy_cc_test(
 envoy_cc_test(
     name = "load_stats_reporter_test",
     srcs = ["load_stats_reporter_test.cc"],
-    external_deps = ["envoy_eds"],
     deps = [
         "//source/common/stats:stats_lib",
         "//source/common/upstream:load_stats_reporter_lib",
@@ -139,6 +151,9 @@ envoy_cc_test(
         "//test/mocks/grpc:grpc_mocks",
         "//test/mocks/upstream:upstream_mocks",
         "//test/test_common:utility_lib",
+        "@envoy_api//envoy/api/v2:eds_cc",
+        "@envoy_api//envoy/api/v2/endpoint:endpoint_cc",
+        "@envoy_api//envoy/api/v2/endpoint:load_report_cc",
     ],
 )
 
@@ -151,6 +166,7 @@ envoy_cc_test(
         "//source/common/network:utility_lib",
         "//source/common/upstream:logical_dns_cluster_lib",
         "//source/common/upstream:upstream_lib",
+        "//source/extensions/transport_sockets/raw_buffer:config",
         "//test/mocks:common_lib",
         "//test/mocks/network:network_mocks",
         "//test/mocks/runtime:runtime_mocks",
@@ -170,6 +186,7 @@ envoy_cc_test(
         "//source/common/network:utility_lib",
         "//source/common/upstream:original_dst_cluster_lib",
         "//source/common/upstream:upstream_lib",
+        "//source/extensions/transport_sockets/raw_buffer:config",
         "//test/mocks:common_lib",
         "//test/mocks/network:network_mocks",
         "//test/mocks/runtime:runtime_mocks",
@@ -182,9 +199,9 @@ envoy_cc_test(
 envoy_cc_test(
     name = "outlier_detection_impl_test",
     srcs = ["outlier_detection_impl_test.cc"],
+    external_deps = ["abseil_optional"],
     deps = [
         ":utility_lib",
-        "//include/envoy/common:optional",
         "//include/envoy/common:time_interface",
         "//source/common/network:utility_lib",
         "//source/common/upstream:outlier_detection_lib",
@@ -222,10 +239,36 @@ envoy_cc_test(
 )
 
 envoy_cc_test(
+    name = "maglev_lb_test",
+    srcs = ["maglev_lb_test.cc"],
+    deps = [
+        ":utility_lib",
+        "//source/common/upstream:maglev_lb_lib",
+        "//test/mocks/upstream:upstream_mocks",
+    ],
+)
+
+envoy_cc_binary(
+    name = "load_balancer_benchmark",
+    testonly = 1,
+    srcs = ["load_balancer_benchmark.cc"],
+    external_deps = [
+        "benchmark",
+    ],
+    deps = [
+        "//source/common/upstream:maglev_lb_lib",
+        "//source/common/upstream:ring_hash_lb_lib",
+        "//source/common/upstream:upstream_lib",
+        "//test/common/upstream:utility_lib",
+        "//test/mocks/upstream:upstream_mocks",
+        "//test/test_common:printers_lib",
+    ],
+)
+
+envoy_cc_test(
     name = "sds_test",
     srcs = ["sds_test.cc"],
     data = glob(["test_data/**"]),
-    external_deps = ["envoy_base"],
     deps = [
         ":utility_lib",
         "//source/common/config:utility_lib",
@@ -233,12 +276,14 @@ envoy_cc_test(
         "//source/common/http:message_lib",
         "//source/common/network:utility_lib",
         "//source/common/upstream:eds_lib",
+        "//source/extensions/transport_sockets/raw_buffer:config",
         "//test/mocks/local_info:local_info_mocks",
         "//test/mocks/runtime:runtime_mocks",
         "//test/mocks/ssl:ssl_mocks",
         "//test/mocks/upstream:upstream_mocks",
         "//test/test_common:environment_lib",
         "//test/test_common:utility_lib",
+        "@envoy_api//envoy/api/v2/core:base_cc",
     ],
 )
 
@@ -247,11 +292,14 @@ envoy_cc_test(
     srcs = ["subset_lb_test.cc"],
     deps = [
         ":utility_lib",
+        "//source/common/common:minimal_logger_lib",
         "//source/common/network:utility_lib",
         "//source/common/upstream:load_balancer_lib",
         "//source/common/upstream:subset_lb_lib",
         "//source/common/upstream:upstream_includes",
         "//source/common/upstream:upstream_lib",
+        "//test/mocks/access_log:access_log_mocks",
+        "//test/mocks/filesystem:filesystem_mocks",
         "//test/mocks/runtime:runtime_mocks",
         "//test/mocks/upstream:upstream_mocks",
     ],
@@ -265,12 +313,14 @@ envoy_cc_test(
         "//include/envoy/api:api_interface",
         "//include/envoy/http:codec_interface",
         "//include/envoy/upstream:cluster_manager_interface",
+        "//source/common/config:metadata_lib",
         "//source/common/event:dispatcher_lib",
         "//source/common/json:config_schemas_lib",
         "//source/common/json:json_loader_lib",
         "//source/common/network:utility_lib",
         "//source/common/upstream:upstream_includes",
         "//source/common/upstream:upstream_lib",
+        "//source/extensions/transport_sockets/raw_buffer:config",
         "//test/mocks:common_lib",
         "//test/mocks/network:network_mocks",
         "//test/mocks/runtime:runtime_mocks",

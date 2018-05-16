@@ -4,10 +4,13 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <iostream>
 #include <memory>
 #include <string>
 
 #include "envoy/common/pure.h"
+
+#include "absl/strings/string_view.h"
 
 namespace Envoy {
 namespace Http {
@@ -21,12 +24,6 @@ public:
   LowerCaseString(LowerCaseString&& rhs) : string_(std::move(rhs.string_)) {}
   LowerCaseString(const LowerCaseString& rhs) : string_(rhs.string_) {}
   explicit LowerCaseString(const std::string& new_string) : string_(new_string) { lower(); }
-  explicit LowerCaseString(std::string&& new_string, bool convert = true)
-      : string_(std::move(new_string)) {
-    if (convert) {
-      lower();
-    }
-  }
 
   const std::string& get() const { return string_; }
   bool operator==(const LowerCaseString& rhs) const { return string_ == rhs.string_; }
@@ -85,6 +82,13 @@ public:
    * @return a null terminated C string.
    */
   const char* c_str() const { return buffer_.ref_; }
+
+  /**
+   * @return an absl::string_view.
+   */
+  absl::string_view getStringView() const {
+    return absl::string_view(buffer_.ref_, string_length_);
+  }
 
   /**
    * Return the string to a default state. Reference strings are not touched. Both inline/dynamic
@@ -226,6 +230,7 @@ private:
  * O(1) access to these headers without even a hash lookup.
  */
 #define ALL_INLINE_HEADERS(HEADER_FUNC)                                                            \
+  HEADER_FUNC(AcceptEncoding)                                                                      \
   HEADER_FUNC(AccessControlRequestHeaders)                                                         \
   HEADER_FUNC(AccessControlRequestMethod)                                                          \
   HEADER_FUNC(AccessControlAllowOrigin)                                                            \
@@ -238,6 +243,7 @@ private:
   HEADER_FUNC(CacheControl)                                                                        \
   HEADER_FUNC(ClientTraceId)                                                                       \
   HEADER_FUNC(Connection)                                                                          \
+  HEADER_FUNC(ContentEncoding)                                                                     \
   HEADER_FUNC(ContentLength)                                                                       \
   HEADER_FUNC(ContentType)                                                                         \
   HEADER_FUNC(Date)                                                                                \
@@ -249,6 +255,7 @@ private:
   HEADER_FUNC(EnvoyForceTrace)                                                                     \
   HEADER_FUNC(EnvoyImmediateHealthCheckFail)                                                       \
   HEADER_FUNC(EnvoyInternalRequest)                                                                \
+  HEADER_FUNC(EnvoyIpTags)                                                                         \
   HEADER_FUNC(EnvoyMaxRetries)                                                                     \
   HEADER_FUNC(EnvoyOriginalPath)                                                                   \
   HEADER_FUNC(EnvoyOverloaded)                                                                     \
@@ -261,6 +268,7 @@ private:
   HEADER_FUNC(EnvoyUpstreamRequestTimeoutAltResponse)                                              \
   HEADER_FUNC(EnvoyUpstreamRequestTimeoutMs)                                                       \
   HEADER_FUNC(EnvoyUpstreamServiceTime)                                                            \
+  HEADER_FUNC(Etag)                                                                                \
   HEADER_FUNC(Expect)                                                                              \
   HEADER_FUNC(ForwardedClientCert)                                                                 \
   HEADER_FUNC(ForwardedFor)                                                                        \
@@ -270,11 +278,13 @@ private:
   HEADER_FUNC(GrpcStatus)                                                                          \
   HEADER_FUNC(Host)                                                                                \
   HEADER_FUNC(KeepAlive)                                                                           \
+  HEADER_FUNC(LastModified)                                                                        \
   HEADER_FUNC(Method)                                                                              \
   HEADER_FUNC(Origin)                                                                              \
   HEADER_FUNC(OtSpanContext)                                                                       \
   HEADER_FUNC(Path)                                                                                \
   HEADER_FUNC(ProxyConnection)                                                                     \
+  HEADER_FUNC(Referer)                                                                             \
   HEADER_FUNC(RequestId)                                                                           \
   HEADER_FUNC(Scheme)                                                                              \
   HEADER_FUNC(Server)                                                                              \
@@ -283,6 +293,7 @@ private:
   HEADER_FUNC(TransferEncoding)                                                                    \
   HEADER_FUNC(Upgrade)                                                                             \
   HEADER_FUNC(UserAgent)                                                                           \
+  HEADER_FUNC(Vary)                                                                                \
   HEADER_FUNC(XB3TraceId)                                                                          \
   HEADER_FUNC(XB3SpanId)                                                                           \
   HEADER_FUNC(XB3ParentSpanId)                                                                     \
@@ -410,6 +421,7 @@ public:
    * @return the header entry if it exists otherwise nullptr.
    */
   virtual const HeaderEntry* get(const LowerCaseString& key) const PURE;
+  virtual HeaderEntry* get(const LowerCaseString& key) PURE;
 
   // aliases to make iterate() and iterateReverse() callbacks easier to read
   enum class Iterate { Continue, Break };
@@ -455,9 +467,31 @@ public:
   virtual void remove(const LowerCaseString& key) PURE;
 
   /**
+   * Remove all instances of headers where the key begins with the supplied prefix.
+   * @param prefix supplies the prefix to match header keys against.
+   */
+  virtual void removePrefix(const LowerCaseString& prefix) PURE;
+
+  /**
    * @return the number of headers in the map.
    */
   virtual size_t size() const PURE;
+
+  /**
+   * Allow easy pretty-printing of the key/value pairs in HeaderMap
+   * @param os supplies the ostream to print to.
+   * @param headers the headers to print.
+   */
+  friend std::ostream& operator<<(std::ostream& os, const HeaderMap& headers) {
+    headers.iterate(
+        [](const HeaderEntry& header, void* context) -> HeaderMap::Iterate {
+          *static_cast<std::ostream*>(context)
+              << "'" << header.key().c_str() << "', '" << header.value().c_str() << "'\n";
+          return HeaderMap::Iterate::Continue;
+        },
+        &os);
+    return os;
+  }
 };
 
 typedef std::unique_ptr<HeaderMap> HeaderMapPtr;

@@ -1,6 +1,7 @@
 #include "test/integration/integration.h"
 #include "test/integration/utility.h"
 #include "test/server/utility.h"
+#include "test/test_common/utility.h"
 
 namespace Envoy {
 
@@ -30,10 +31,7 @@ public:
   /**
    * Initializer for an individual test.
    */
-  void SetUp() override {
-    named_ports_ = {{"echo"}};
-    BaseIntegrationTest::initialize();
-  }
+  void SetUp() override { BaseIntegrationTest::initialize(); }
 
   /**
    *  Destructor for an individual test.
@@ -45,13 +43,14 @@ public:
 };
 
 INSTANTIATE_TEST_CASE_P(IpVersions, EchoIntegrationTest,
-                        testing::ValuesIn(TestEnvironment::getIpVersionsForTest()));
+                        testing::ValuesIn(TestEnvironment::getIpVersionsForTest()),
+                        TestUtility::ipTestParamsToString);
 
 TEST_P(EchoIntegrationTest, Hello) {
   Buffer::OwnedImpl buffer("hello");
   std::string response;
   RawConnectionDriver connection(
-      lookupPort("echo"), buffer,
+      lookupPort("listener_0"), buffer,
       [&](Network::ClientConnection&, const Buffer::Instance& data) -> void {
         response.append(TestUtility::bufferToString(data));
         connection.close();
@@ -81,7 +80,7 @@ TEST_P(EchoIntegrationTest, AddRemoveListener) {
       [&listener_added_by_worker]() -> void { listener_added_by_worker.setReady(); });
   test_server_->server().dispatcher().post([this, json, &listener_added_by_manager]() -> void {
     EXPECT_TRUE(test_server_->server().listenerManager().addOrUpdateListener(
-        Server::parseListenerFromJson(json)));
+        Server::parseListenerFromJson(json), "", true));
     listener_added_by_manager.setReady();
   });
   listener_added_by_worker.waitReady();

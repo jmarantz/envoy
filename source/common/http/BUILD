@@ -45,7 +45,7 @@ envoy_cc_library(
         "//source/common/common:assert_lib",
         "//source/common/common:enum_to_int",
         "//source/common/common:linked_object",
-        "//source/common/common:logger_lib",
+        "//source/common/common:minimal_logger_lib",
         "//source/common/http/http1:codec_lib",
         "//source/common/http/http2:codec_lib",
         "//source/common/network:filter_lib",
@@ -55,6 +55,11 @@ envoy_cc_library(
 envoy_cc_library(
     name = "codec_helper_lib",
     hdrs = ["codec_helper.h"],
+)
+
+envoy_cc_library(
+    name = "default_server_string_lib",
+    hdrs = ["default_server_string.h"],
 )
 
 envoy_cc_library(
@@ -79,6 +84,12 @@ envoy_cc_library(
 )
 
 envoy_cc_library(
+    name = "conn_manager_config_interface",
+    hdrs = ["conn_manager_config.h"],
+    deps = [":date_provider_lib"],
+)
+
+envoy_cc_library(
     name = "conn_manager_lib",
     srcs = [
         "conn_manager_impl.cc",
@@ -90,7 +101,7 @@ envoy_cc_library(
     ],
     deps = [
         ":codes_lib",
-        ":date_provider_lib",
+        ":conn_manager_config_interface",
         ":exception_lib",
         ":header_map_lib",
         ":headers_lib",
@@ -104,7 +115,7 @@ envoy_cc_library(
         "//include/envoy/http:codec_interface",
         "//include/envoy/http:filter_interface",
         "//include/envoy/http:header_map_interface",
-        "//include/envoy/http:wshandler_callback_interface",
+        "//include/envoy/http:websocket_interface",
         "//include/envoy/local_info:local_info_interface",
         "//include/envoy/network:connection_interface",
         "//include/envoy/network:drain_decision_interface",
@@ -126,7 +137,6 @@ envoy_cc_library(
         "//source/common/common:utility_lib",
         "//source/common/http/http1:codec_lib",
         "//source/common/http/http2:codec_lib",
-        "//source/common/http/websocket:ws_handler_lib",
         "//source/common/network:utility_lib",
         "//source/common/request_info:request_info_lib",
         "//source/common/runtime:uuid_util_lib",
@@ -225,10 +235,6 @@ envoy_cc_library(
     name = "utility_lib",
     srcs = ["utility.cc"],
     hdrs = ["utility.h"],
-    external_deps = [
-        "abseil_strings",
-        "envoy_protocol",
-    ],
     deps = [
         ":exception_lib",
         ":header_map_lib",
@@ -241,9 +247,11 @@ envoy_cc_library(
         "//source/common/common:empty_string",
         "//source/common/common:enum_to_int",
         "//source/common/common:utility_lib",
+        "//source/common/grpc:status_lib",
         "//source/common/json:json_loader_lib",
         "//source/common/network:utility_lib",
         "//source/common/protobuf:utility_lib",
+        "@envoy_api//envoy/api/v2/core:protocol_cc",
     ],
 )
 
@@ -254,5 +262,20 @@ envoy_cc_library(
     deps = [
         "//include/envoy/http:filter_interface",
         "//include/envoy/upstream:cluster_manager_interface",
+    ],
+)
+
+envoy_cc_library(
+    name = "header_utility_lib",
+    srcs = ["header_utility.cc"],
+    hdrs = ["header_utility.h"],
+    deps = [
+        "//include/envoy/http:header_map_interface",
+        "//include/envoy/json:json_object_interface",
+        "//source/common/common:utility_lib",
+        "//source/common/config:rds_json_lib",
+        "//source/common/protobuf:utility_lib",
+        "@envoy_api//envoy/api/v2/route:route_cc",
+        "@envoy_api//envoy/type:range_cc",
     ],
 )

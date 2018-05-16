@@ -8,6 +8,7 @@
 #include "test/mocks/server/mocks.h"
 #include "test/mocks/stats/mocks.h"
 #include "test/test_common/environment.h"
+#include "test/test_common/utility.h"
 
 #include "gtest/gtest.h"
 
@@ -35,7 +36,7 @@ TEST(ServerInstanceUtil, flushHelper) {
 
   std::list<Stats::SinkPtr> sinks;
   sinks.emplace_back(std::move(sink));
-  InstanceUtil::flushCountersAndGaugesToSinks(sinks, store);
+  InstanceUtil::flushMetricsToSinks(sinks, store);
 }
 
 class RunHelperTest : public testing::Test {
@@ -102,17 +103,10 @@ protected:
     server_.reset(new InstanceImpl(
         options_,
         Network::Address::InstanceConstSharedPtr(new Network::Address::Ipv4Instance("127.0.0.1")),
-        hooks_, restart_, stats_store_, fakelock_, component_factory_, thread_local_));
+        hooks_, restart_, stats_store_, fakelock_, component_factory_,
+        std::make_unique<NiceMock<Runtime::MockRandomGenerator>>(), thread_local_));
 
     EXPECT_TRUE(server_->api().fileExists("/dev/null"));
-  }
-
-  void TearDown() override {
-    if (server_) {
-      server_->threadLocal().shutdownGlobalThreading();
-      server_->clusterManager().shutdown();
-      server_->threadLocal().shutdownThread();
-    }
   }
 
   Network::Address::IpVersion version_;
@@ -127,7 +121,8 @@ protected:
 };
 
 INSTANTIATE_TEST_CASE_P(IpVersions, ServerInstanceImplTest,
-                        testing::ValuesIn(TestEnvironment::getIpVersionsForTest()));
+                        testing::ValuesIn(TestEnvironment::getIpVersionsForTest()),
+                        TestUtility::ipTestParamsToString);
 
 TEST_P(ServerInstanceImplTest, V2ConfigOnly) {
   options_.service_cluster_name_ = "some_cluster_name";
@@ -176,6 +171,13 @@ TEST_P(ServerInstanceImplTest, BootstrapNodeWithOptionsOverride) {
   EXPECT_EQ("some_node_name", server_->localInfo().nodeName());
   EXPECT_EQ("bootstrap_sub_zone", server_->localInfo().node().locality().sub_zone());
   EXPECT_EQ(VersionInfo::version(), server_->localInfo().node().build_version());
+}
+
+// Regression test for segfault when server initialization fails prior to
+// ClusterManager initialization.
+TEST_P(ServerInstanceImplTest, BootstrapClusterManagerInitializationFail) {
+  EXPECT_THROW_WITH_MESSAGE(initialize("test/server/cluster_dupe_bootstrap.yaml"), EnvoyException,
+                            "cluster manager: duplicate cluster 'service_google'");
 }
 
 // Negative test for protoc-gen-validate constraints.
@@ -230,7 +232,8 @@ TEST_P(ServerInstanceImplTest, NoOptionsPassed) {
       server_.reset(new InstanceImpl(
           options_,
           Network::Address::InstanceConstSharedPtr(new Network::Address::Ipv4Instance("127.0.0.1")),
-          hooks_, restart_, stats_store_, fakelock_, component_factory_, thread_local_)),
+          hooks_, restart_, stats_store_, fakelock_, component_factory_,
+          std::make_unique<NiceMock<Runtime::MockRandomGenerator>>(), thread_local_)),
       EnvoyException, "unable to read file: ")
 }
 } // namespace Server

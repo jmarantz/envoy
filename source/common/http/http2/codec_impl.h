@@ -6,7 +6,6 @@
 #include <string>
 #include <vector>
 
-#include "envoy/common/optional.h"
 #include "envoy/event/deferred_deletable.h"
 #include "envoy/http/codec.h"
 #include "envoy/network/connection.h"
@@ -20,6 +19,7 @@
 #include "common/http/codec_helper.h"
 #include "common/http/header_map_impl.h"
 
+#include "absl/types/optional.h"
 #include "nghttp2/nghttp2.h"
 
 namespace Envoy {
@@ -37,11 +37,13 @@ const std::string CLIENT_MAGIC_PREFIX = "PRI * HTTP/2";
  */
 // clang-format off
 #define ALL_HTTP2_CODEC_STATS(COUNTER)                                                             \
-  COUNTER(rx_reset)                                                                                \
-  COUNTER(tx_reset)                                                                                \
   COUNTER(header_overflow)                                                                         \
+  COUNTER(headers_cb_no_stream)                                                                    \
+  COUNTER(rx_messaging_error)                                                                      \
+  COUNTER(rx_reset)                                                                                \
+  COUNTER(too_many_header_frames)                                                                  \
   COUNTER(trailers)                                                                                \
-  COUNTER(headers_cb_no_stream)
+  COUNTER(tx_reset)
 // clang-format on
 
 /**
@@ -147,6 +149,7 @@ protected:
     void submitTrailers(const HeaderMap& trailers);
 
     // Http::StreamEncoder
+    void encode100ContinueHeaders(const HeaderMap& headers) override;
     void encodeHeaders(const HeaderMap& headers, bool end_stream) override;
     void encodeData(Buffer::Instance& data, bool end_stream) override;
     void encodeTrailers(const HeaderMap& trailers) override;
@@ -193,7 +196,7 @@ protected:
         [this]() -> void { this->pendingSendBufferLowWatermark(); },
         [this]() -> void { this->pendingSendBufferHighWatermark(); }};
     HeaderMapPtr pending_trailers_;
-    Optional<StreamResetReason> deferred_reset_;
+    absl::optional<StreamResetReason> deferred_reset_;
     HeaderString cookies_;
     bool local_end_stream_sent_ : 1;
     bool remote_end_stream_ : 1;
@@ -201,6 +204,7 @@ protected:
     bool waiting_for_non_informational_headers_ : 1;
     bool pending_receive_buffer_high_watermark_called_ : 1;
     bool pending_send_buffer_high_watermark_called_ : 1;
+    bool reset_due_to_messaging_error_ : 1;
   };
 
   typedef std::unique_ptr<StreamImpl> StreamImplPtr;
@@ -249,11 +253,9 @@ private:
   int onFrameReceived(const nghttp2_frame* frame);
   int onFrameSend(const nghttp2_frame* frame);
   virtual int onHeader(const nghttp2_frame* frame, HeaderString&& name, HeaderString&& value) PURE;
-  int onInvalidFrame(int error_code);
+  int onInvalidFrame(int32_t stream_id, int error_code);
   ssize_t onSend(const uint8_t* data, size_t length);
   int onStreamClose(int32_t stream_id, uint32_t error_code);
-
-  static const std::unique_ptr<const Http::HeaderMap> CONTINUE_HEADER;
 
   bool dispatching_ : 1;
   bool raised_goaway_ : 1;

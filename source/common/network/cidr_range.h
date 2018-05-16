@@ -3,12 +3,11 @@
 #include <string>
 #include <vector>
 
+#include "envoy/api/v2/core/address.pb.h"
 #include "envoy/json/json_object.h"
 #include "envoy/network/address.h"
 
 #include "common/protobuf/protobuf.h"
-
-#include "api/address.pb.h"
 
 namespace Envoy {
 namespace Network {
@@ -48,8 +47,8 @@ public:
   const Ip* ip() const;
 
   /**
-   * TODO(jamessynge) Consider making this Optional<int> length, or modifying the create() methods
-   *                  below to return Optional<CidrRange> (the latter is probably better).
+   * TODO(jamessynge) Consider making this absl::optional<int> length, or modifying the create()
+   * methods below to return absl::optional<CidrRange> (the latter is probably better).
    * @return the number of bits of the address that are included in the mask. -1 if uninitialized
    *         or invalid, else in the range 0 to 32 for IPv4, and 0 to 128 for IPv6.
    */
@@ -76,6 +75,7 @@ public:
   bool isValid() const { return length_ >= 0; }
 
   /**
+   * TODO(ccaraman): Update CidrRange::create to support only constructing valid ranges.
    * @return a CidrRange instance with the specified address and length, modified so that the only
    *         bits that might be non-zero are in the high-order length bits, and so that length is
    *         in the appropriate range (0 to 32 for IPv4, 0 to 128 for IPv6). If the the address or
@@ -88,15 +88,17 @@ public:
    * Constructs an CidrRange from a string with this format (same as returned
    * by CidrRange::asString above):
    *      <address>/<length>    e.g. "10.240.0.0/16" or "1234:5678::/64"
+   * TODO(ccaraman): Update CidrRange::create to support only constructing valid ranges.
    * @return a CidrRange instance with the specified address and length if parsed successfully,
    *         else with no address and a length of -1.
    */
   static CidrRange create(const std::string& range);
 
   /**
-   * Constructs a CidrRange from envoy::api::v2::CidrRange.
+   * Constructs a CidrRange from envoy::api::v2::core::CidrRange.
+   * TODO(ccaraman): Update CidrRange::create to support only constructing valid ranges.
    */
-  static CidrRange create(const envoy::api::v2::CidrRange& cidr);
+  static CidrRange create(const envoy::api::v2::core::CidrRange& cidr);
 
   /**
    * Given an IP address and a length of high order bits to keep, returns an address
@@ -126,7 +128,7 @@ class IpList {
 public:
   IpList(const std::vector<std::string>& subnets);
   IpList(const Json::Object& config, const std::string& member_name);
-  IpList(const Protobuf::RepeatedPtrField<envoy::api::v2::CidrRange>& cidrs);
+  IpList(const Protobuf::RepeatedPtrField<envoy::api::v2::core::CidrRange>& cidrs);
   IpList(){};
 
   bool contains(const Instance& address) const;

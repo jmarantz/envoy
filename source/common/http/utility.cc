@@ -10,7 +10,9 @@
 #include "common/common/assert.h"
 #include "common/common/empty_string.h"
 #include "common/common/enum_to_int.h"
+#include "common/common/fmt.h"
 #include "common/common/utility.h"
+#include "common/grpc/status.h"
 #include "common/http/exception.h"
 #include "common/http/header_map_impl.h"
 #include "common/http/headers.h"
@@ -18,7 +20,6 @@
 #include "common/protobuf/utility.h"
 
 #include "absl/strings/string_view.h"
-#include "fmt/format.h"
 
 namespace Envoy {
 namespace Http {
@@ -44,7 +45,7 @@ std::string Utility::createSslRedirectPath(const HeaderMap& headers) {
                      headers.Path()->value().c_str());
 }
 
-Utility::QueryParams Utility::parseQueryString(const std::string& url) {
+Utility::QueryParams Utility::parseQueryString(absl::string_view url) {
   QueryParams params;
   size_t start = url.find('?');
   if (start == std::string::npos) {
@@ -57,7 +58,7 @@ Utility::QueryParams Utility::parseQueryString(const std::string& url) {
     if (end == std::string::npos) {
       end = url.size();
     }
-    absl::string_view param(url.c_str() + start, end - start);
+    absl::string_view param(url.data() + start, end - start);
 
     const size_t equal = param.find('=');
     if (equal != std::string::npos) {
@@ -92,7 +93,7 @@ std::string Utility::parseCookieValue(const HeaderMap& headers, const std::strin
         // Find the cookie headers in the request (typically, there's only one).
         if (header.key() == Http::Headers::get().Cookie.get().c_str()) {
           // Split the cookie header into individual cookies.
-          for (const std::string& s : StringUtil::split(std::string{header.value().c_str()}, ';')) {
+          for (const auto s : StringUtil::splitToken(header.value().c_str(), ";")) {
             // Find the key part of the cookie (i.e. the name of the cookie).
             size_t first_non_space = s.find_first_not_of(" ");
             size_t equals_index = s.find('=');
@@ -101,18 +102,18 @@ std::string Utility::parseCookieValue(const HeaderMap& headers, const std::strin
               // checking other cookies in this header.
               continue;
             }
-            std::string k = s.substr(first_non_space, equals_index - first_non_space);
+            const absl::string_view k = s.substr(first_non_space, equals_index - first_non_space);
             State* state = static_cast<State*>(context);
             // If the key matches, parse the value from the rest of the cookie string.
             if (k == state->key_) {
-              std::string v = s.substr(equals_index + 1, s.size() - 1);
+              absl::string_view v = s.substr(equals_index + 1, s.size() - 1);
 
               // Cookie values may be wrapped in double quotes.
               // https://tools.ietf.org/html/rfc6265#section-4.1.1
               if (v.size() >= 2 && v.back() == '"' && v[0] == '"') {
                 v = v.substr(1, v.size() - 2);
               }
-              state->ret_ = v;
+              state->ret_ = std::string{v};
               return HeaderMap::Iterate::Break;
             }
           }
@@ -186,7 +187,8 @@ bool Utility::isWebSocketUpgradeRequest(const HeaderMap& headers) {
                     Http::Headers::get().UpgradeValues.WebSocket.c_str())));
 }
 
-Http2Settings Utility::parseHttp2Settings(const envoy::api::v2::Http2ProtocolOptions& config) {
+Http2Settings
+Utility::parseHttp2Settings(const envoy::api::v2::core::Http2ProtocolOptions& config) {
   Http2Settings ret;
   ret.hpack_table_size_ = PROTOBUF_GET_WRAPPED_OR_DEFAULT(
       config, hpack_table_size, Http::Http2Settings::DEFAULT_HPACK_TABLE_SIZE);
@@ -200,53 +202,65 @@ Http2Settings Utility::parseHttp2Settings(const envoy::api::v2::Http2ProtocolOpt
   return ret;
 }
 
-Http1Settings Utility::parseHttp1Settings(const envoy::api::v2::Http1ProtocolOptions& config) {
+Http1Settings
+Utility::parseHttp1Settings(const envoy::api::v2::core::Http1ProtocolOptions& config) {
   Http1Settings ret;
   ret.allow_absolute_url_ = PROTOBUF_GET_WRAPPED_OR_DEFAULT(config, allow_absolute_url, false);
+  ret.accept_http_10_ = config.accept_http_10();
+  ret.default_host_for_http_10_ = config.default_host_for_http_10();
   return ret;
 }
 
-void Utility::sendLocalReply(StreamDecoderFilterCallbacks& callbacks, const bool& is_reset,
-                             Code response_code, const std::string& body_text) {
-  sendLocalReply(
-      [&](HeaderMapPtr&& headers, bool end_stream) -> void {
-        callbacks.encodeHeaders(std::move(headers), end_stream);
-      },
-      [&](Buffer::Instance& data, bool end_stream) -> void {
-        callbacks.encodeData(data, end_stream);
-      },
-      is_reset, response_code, body_text);
+void Utility::sendLocalReply(bool is_grpc, StreamDecoderFilterCallbacks& callbacks,
+                             const bool& is_reset, Code response_code,
+                             const std::string& body_text) {
+  sendLocalReply(is_grpc,
+                 [&](HeaderMapPtr&& headers, bool end_stream) -> void {
+                   callbacks.encodeHeaders(std::move(headers), end_stream);
+                 },
+                 [&](Buffer::Instance& data, bool end_stream) -> void {
+                   callbacks.encodeData(data, end_stream);
+                 },
+                 is_reset, response_code, body_text);
 }
 
 void Utility::sendLocalReply(
-    std::function<void(HeaderMapPtr&& headers, bool end_stream)> encode_headers,
+    bool is_grpc, std::function<void(HeaderMapPtr&& headers, bool end_stream)> encode_headers,
     std::function<void(Buffer::Instance& data, bool end_stream)> encode_data, const bool& is_reset,
     Code response_code, const std::string& body_text) {
+  // encode_headers() may reset the stream, so the stream must not be reset before calling it.
+  ASSERT(!is_reset);
+  // Respond with a gRPC trailers-only response if the request is gRPC
+  if (is_grpc) {
+    HeaderMapPtr response_headers{new HeaderMapImpl{
+        {Headers::get().Status, std::to_string(enumToInt(Code::OK))},
+        {Headers::get().ContentType, Headers::get().ContentTypeValues.Grpc},
+        {Headers::get().GrpcStatus,
+         std::to_string(enumToInt(Grpc::Utility::httpToGrpcStatus(enumToInt(response_code))))}}};
+    if (!body_text.empty()) {
+      // TODO: GrpcMessage should be percent-encoded
+      response_headers->insertGrpcMessage().value(body_text);
+    }
+    encode_headers(std::move(response_headers), true); // Trailers only response
+    return;
+  }
+
   HeaderMapPtr response_headers{
       new HeaderMapImpl{{Headers::get().Status, std::to_string(enumToInt(response_code))}}};
   if (!body_text.empty()) {
     response_headers->insertContentLength().value(body_text.size());
     response_headers->insertContentType().value(Headers::get().ContentTypeValues.Text);
   }
-
   encode_headers(std::move(response_headers), body_text.empty());
+  // encode_headers()) may have changed the referenced is_reset so we need to test it
   if (!body_text.empty() && !is_reset) {
     Buffer::OwnedImpl buffer(body_text);
     encode_data(buffer, true);
   }
 }
 
-void Utility::sendRedirect(StreamDecoderFilterCallbacks& callbacks, const std::string& new_path,
-                           Code response_code) {
-  HeaderMapPtr response_headers{
-      new HeaderMapImpl{{Headers::get().Status, std::to_string(enumToInt(response_code))},
-                        {Headers::get().Location, new_path}}};
-
-  callbacks.encodeHeaders(std::move(response_headers), true);
-}
-
 Utility::GetLastAddressFromXffInfo
-Utility::getLastAddressFromXFF(const Http::HeaderMap& request_headers) {
+Utility::getLastAddressFromXFF(const Http::HeaderMap& request_headers, uint32_t num_to_skip) {
   const auto xff_header = request_headers.ForwardedFor();
   if (xff_header == nullptr) {
     return {nullptr, false};
@@ -254,6 +268,16 @@ Utility::getLastAddressFromXFF(const Http::HeaderMap& request_headers) {
 
   absl::string_view xff_string(xff_header->value().c_str(), xff_header->value().size());
   static const std::string seperator(", ");
+  // Ignore the last num_to_skip addresses at the end of XFF.
+  for (uint32_t i = 0; i < num_to_skip; i++) {
+    std::string::size_type last_comma = xff_string.rfind(seperator);
+    if (last_comma == std::string::npos) {
+      return {nullptr, false};
+    }
+    xff_string = xff_string.substr(0, last_comma);
+  }
+  // The text after the last remaining comma, or the entirety of the string if there
+  // is no comma, is the requested IP address.
   std::string::size_type last_comma = xff_string.rfind(seperator);
   if (last_comma != std::string::npos && last_comma + seperator.size() < xff_string.size()) {
     xff_string = xff_string.substr(last_comma + seperator.size());
@@ -266,10 +290,33 @@ Utility::getLastAddressFromXFF(const Http::HeaderMap& request_headers) {
     // TODO(mattklein123 PERF: Avoid the copy here.
     return {
         Network::Utility::parseInternetAddress(std::string(xff_string.data(), xff_string.size())),
-        last_comma == std::string::npos};
+        last_comma == std::string::npos && num_to_skip == 0};
   } catch (const EnvoyException&) {
     return {nullptr, false};
   }
+}
+
+const std::string& Utility::getProtocolString(const Protocol protocol) {
+  switch (protocol) {
+  case Protocol::Http10:
+    return Headers::get().ProtocolStrings.Http10String;
+  case Protocol::Http11:
+    return Headers::get().ProtocolStrings.Http11String;
+  case Protocol::Http2:
+    return Headers::get().ProtocolStrings.Http2String;
+  }
+
+  NOT_REACHED;
+}
+
+void Utility::appendToHeader(HeaderString& header, const std::string& data) {
+  if (data.empty()) {
+    return;
+  }
+  if (!header.empty()) {
+    header.append(",", 1);
+  }
+  header.append(data.c_str(), data.size());
 }
 
 } // namespace Http

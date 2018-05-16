@@ -3,6 +3,7 @@
 #include <string>
 
 #include "envoy/network/address.h"
+#include "envoy/network/transport_socket.h"
 
 namespace Envoy {
 namespace Network {
@@ -72,9 +73,13 @@ Address::InstanceConstSharedPtr getCanonicalLoopbackAddress(const Address::IpVer
 /**
  * Returns the any address for the specified IP version.
  * @param version the IP version of the any address.
+ * @param v4_compat determines whether a v4-mapped addresses bound to a socket listening on the
+ *        returned ANY address are to be treated as IPv4 or IPv6 addresses. Defaults to 'false',
+ *        has no effect with IPv4 ANY address.
  * @returns the any address for the specified IP version.
  */
-Address::InstanceConstSharedPtr getAnyAddress(const Address::IpVersion version);
+Address::InstanceConstSharedPtr getAnyAddress(const Address::IpVersion version,
+                                              bool v4_compat = false);
 
 /**
  * This function tries to create a socket of type IpVersion version and bind to it. If
@@ -95,6 +100,19 @@ bool supportsIpVersion(const Address::IpVersion version);
  */
 std::pair<Address::InstanceConstSharedPtr, int> bindFreeLoopbackPort(Address::IpVersion version,
                                                                      Address::SocketType type);
+
+/**
+ * Create a transport socket for testing purposes.
+ * @return TransportSocketPtr the transport socket factory to use with a connection.
+ */
+TransportSocketPtr createRawBufferSocket();
+
+/**
+ * Create a transport socket factory for testing purposes.
+ * @return TransportSocketFactoryPtr the transport socket factory to use with a cluster or a
+ * listener.
+ */
+TransportSocketFactoryPtr createRawBufferSocketFactory();
 
 } // namespace Test
 } // namespace Network

@@ -5,31 +5,20 @@
 namespace Envoy {
 namespace Upstream {
 
-LoadStatsReporter::LoadStatsReporter(const envoy::api::v2::Node& node,
+LoadStatsReporter::LoadStatsReporter(const envoy::api::v2::core::Node& node,
                                      ClusterManager& cluster_manager, Stats::Scope& scope,
-                                     LoadStatsAsyncClientPtr async_client,
+                                     Grpc::AsyncClientPtr async_client,
                                      Event::Dispatcher& dispatcher)
     : cm_(cluster_manager), stats_{ALL_LOAD_REPORTER_STATS(
                                 POOL_COUNTER_PREFIX(scope, "load_reporter."))},
       async_client_(std::move(async_client)),
       service_method_(*Protobuf::DescriptorPool::generated_pool()->FindMethodByName(
-          "envoy.api.v2.EndpointDiscoveryService.StreamLoadStats")) {
+          "envoy.service.load_stats.v2.LoadReportingService.StreamLoadStats")) {
   request_.mutable_node()->MergeFrom(node);
   retry_timer_ = dispatcher.createTimer([this]() -> void { establishNewStream(); });
   response_timer_ = dispatcher.createTimer([this]() -> void { sendLoadStatsRequest(); });
   establishNewStream();
 }
-
-LoadStatsReporter::LoadStatsReporter(const envoy::api::v2::Node& node,
-                                     ClusterManager& cluster_manager, Stats::Scope& scope,
-                                     const std::string& remote_cluster_name,
-                                     Event::Dispatcher& dispatcher)
-    : LoadStatsReporter(
-          node, cluster_manager, scope,
-          LoadStatsAsyncClientPtr(new Grpc::AsyncClientImpl<envoy::api::v2::LoadStatsRequest,
-                                                            envoy::api::v2::LoadStatsResponse>(
-              cluster_manager, remote_cluster_name)),
-          dispatcher) {}
 
 void LoadStatsReporter::setRetryTimer() {
   retry_timer_->enableTimer(std::chrono::milliseconds(RETRY_DELAY_MS));
@@ -61,7 +50,8 @@ void LoadStatsReporter::sendLoadStatsRequest() {
     auto* cluster_stats = request_.add_cluster_stats();
     cluster_stats->set_cluster_name(cluster_name);
     for (auto& host_set : cluster.prioritySet().hostSetsPerPriority()) {
-      for (auto& hosts : host_set->hostsPerLocality()) {
+      ENVOY_LOG(trace, "Load report locality count {}", host_set->hostsPerLocality().get().size());
+      for (auto& hosts : host_set->hostsPerLocality().get()) {
         ASSERT(hosts.size() > 0);
         uint64_t rq_success = 0;
         uint64_t rq_error = 0;
@@ -111,7 +101,7 @@ void LoadStatsReporter::onReceiveInitialMetadata(Http::HeaderMapPtr&& metadata) 
 }
 
 void LoadStatsReporter::onReceiveMessage(
-    std::unique_ptr<envoy::api::v2::LoadStatsResponse>&& message) {
+    std::unique_ptr<envoy::service::load_stats::v2::LoadStatsResponse>&& message) {
   ENVOY_LOG(debug, "New load report epoch: {}", message->DebugString());
   stats_.requests_.inc();
   message_ = std::move(message);
@@ -138,7 +128,7 @@ void LoadStatsReporter::startLoadReportPeriod() {
     cluster.info()->loadReportStats().upstream_rq_dropped_.latch();
   }
   response_timer_->enableTimer(std::chrono::milliseconds(
-      Protobuf::util::TimeUtil::DurationToMilliseconds(message_->load_reporting_interval())));
+      DurationUtil::durationToMilliseconds(message_->load_reporting_interval())));
 }
 
 void LoadStatsReporter::onReceiveTrailingMetadata(Http::HeaderMapPtr&& metadata) {

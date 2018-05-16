@@ -2,10 +2,9 @@
 
 #include <string>
 
-#include "common/protobuf/protobuf.h"
-#include "common/singleton/const_singleton.h"
+#include "envoy/api/v2/core/base.pb.h"
 
-#include "api/base.pb.h"
+#include "common/protobuf/protobuf.h"
 
 namespace Envoy {
 namespace Config {
@@ -22,9 +21,19 @@ public:
    * @param key for filter metadata.
    * @return const ProtobufWkt::Value& value if found, empty if not found.
    */
-  static const ProtobufWkt::Value& metadataValue(const envoy::api::v2::Metadata& metadata,
+  static const ProtobufWkt::Value& metadataValue(const envoy::api::v2::core::Metadata& metadata,
                                                  const std::string& filter, const std::string& key);
-
+  /**
+   * Lookup value by a multi-key path for a given filter in Metadata. If path is empty
+   * will return the empty struct.
+   * @param metadata reference.
+   * @param filter name.
+   * @param path multi-key path.
+   * @return const ProtobufWkt::Value& value if found, empty if not found.
+   */
+  static const ProtobufWkt::Value& metadataValue(const envoy::api::v2::core::Metadata& metadata,
+                                                 const std::string& filter,
+                                                 const std::vector<std::string>& path);
   /**
    * Obtain mutable reference to metadata value for a given filter and key.
    * @param metadata reference.
@@ -32,7 +41,7 @@ public:
    * @param key for filter metadata.
    * @return ProtobufWkt::Value&. A Value message is created if not found.
    */
-  static ProtobufWkt::Value& mutableMetadataValue(envoy::api::v2::Metadata& metadata,
+  static ProtobufWkt::Value& mutableMetadataValue(envoy::api::v2::core::Metadata& metadata,
                                                   const std::string& filter,
                                                   const std::string& key);
 };

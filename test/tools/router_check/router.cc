@@ -5,7 +5,8 @@
 #include <string>
 #include <unordered_map>
 
-#include "common/config/rds_json.h"
+#include "common/network/utility.h"
+#include "common/request_info/request_info_impl.h"
 
 #include "test/test_common/printers.h"
 
@@ -45,19 +46,18 @@ RouterCheckTool RouterCheckTool::create(const std::string& router_config_json) {
   envoy::api::v2::RouteConfiguration route_config;
   Config::RdsJson::translateRouteConfiguration(*loader, route_config);
 
-  std::unique_ptr<NiceMock<Runtime::MockLoader>> runtime(new NiceMock<Runtime::MockLoader>());
-  std::unique_ptr<NiceMock<Upstream::MockClusterManager>> cm(
-      new NiceMock<Upstream::MockClusterManager>());
+  std::unique_ptr<NiceMock<Server::Configuration::MockFactoryContext>> factory_context(
+      std::make_unique<NiceMock<Server::Configuration::MockFactoryContext>>());
   std::unique_ptr<Router::ConfigImpl> config(
-      new Router::ConfigImpl(route_config, *runtime, *cm, false));
+      new Router::ConfigImpl(route_config, *factory_context, false));
 
-  return RouterCheckTool(std::move(runtime), std::move(cm), std::move(config));
+  return RouterCheckTool(std::move(factory_context), std::move(config));
 }
 
-RouterCheckTool::RouterCheckTool(std::unique_ptr<NiceMock<Runtime::MockLoader>> runtime,
-                                 std::unique_ptr<NiceMock<Upstream::MockClusterManager>> cm,
-                                 std::unique_ptr<Router::ConfigImpl> config)
-    : runtime_(std::move(runtime)), cm_(std::move(cm)), config_(std::move(config)) {}
+RouterCheckTool::RouterCheckTool(
+    std::unique_ptr<NiceMock<Server::Configuration::MockFactoryContext>> factory_context,
+    std::unique_ptr<Router::ConfigImpl> config)
+    : factory_context_(std::move(factory_context)), config_(std::move(config)) {}
 
 bool RouterCheckTool::compareEntriesInJson(const std::string& expected_route_json) {
   Json::ObjectSharedPtr loader = Json::Factory::loadFromFile(expected_route_json);
@@ -187,8 +187,8 @@ bool RouterCheckTool::compareRewriteHost(ToolConfig& tool_config, const std::str
 
 bool RouterCheckTool::compareRedirectPath(ToolConfig& tool_config, const std::string& expected) {
   std::string actual = "";
-  if (tool_config.route_->redirectEntry() != nullptr) {
-    actual = tool_config.route_->redirectEntry()->newPath(*tool_config.headers_);
+  if (tool_config.route_->directResponseEntry() != nullptr) {
+    actual = tool_config.route_->directResponseEntry()->newPath(*tool_config.headers_);
   }
 
   return compareResults(actual, expected, "path_redirect");

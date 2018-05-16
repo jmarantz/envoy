@@ -42,12 +42,15 @@ private:
   struct LogicalHost : public HostImpl {
     LogicalHost(ClusterInfoConstSharedPtr cluster, const std::string& hostname,
                 Network::Address::InstanceConstSharedPtr address, LogicalDnsCluster& parent)
-        : HostImpl(cluster, hostname, address, envoy::api::v2::Metadata::default_instance(), 1,
-                   envoy::api::v2::Locality().default_instance()),
+        : HostImpl(cluster, hostname, address, envoy::api::v2::core::Metadata::default_instance(),
+                   1, envoy::api::v2::core::Locality().default_instance(),
+                   envoy::api::v2::endpoint::Endpoint::HealthCheckConfig().default_instance()),
           parent_(parent) {}
 
     // Upstream::Host
-    CreateConnectionData createConnection(Event::Dispatcher& dispatcher) const override;
+    CreateConnectionData
+    createConnection(Event::Dispatcher& dispatcher,
+                     const Network::ConnectionSocket::OptionsSharedPtr& options) const override;
 
     LogicalDnsCluster& parent_;
   };
@@ -59,8 +62,8 @@ private:
 
     // Upstream:HostDescription
     bool canary() const override { return false; }
-    const envoy::api::v2::Metadata& metadata() const override {
-      return envoy::api::v2::Metadata::default_instance();
+    const envoy::api::v2::core::Metadata& metadata() const override {
+      return envoy::api::v2::core::Metadata::default_instance();
     }
     const ClusterInfo& cluster() const override { return logical_host_->cluster(); }
     HealthCheckHostMonitor& healthChecker() const override {
@@ -72,10 +75,13 @@ private:
     const HostStats& stats() const override { return logical_host_->stats(); }
     const std::string& hostname() const override { return logical_host_->hostname(); }
     Network::Address::InstanceConstSharedPtr address() const override { return address_; }
-    const envoy::api::v2::Locality& locality() const override {
-      return envoy::api::v2::Locality().default_instance();
+    const envoy::api::v2::core::Locality& locality() const override {
+      return envoy::api::v2::core::Locality().default_instance();
     }
-
+    // TODO(dio): To support different address port.
+    Network::Address::InstanceConstSharedPtr healthCheckAddress() const override {
+      return address_;
+    }
     Network::Address::InstanceConstSharedPtr address_;
     HostConstSharedPtr logical_host_;
   };

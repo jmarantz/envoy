@@ -9,9 +9,9 @@
 #include "envoy/runtime/runtime.h"
 
 #include "common/common/assert.h"
+#include "common/common/fmt.h"
 #include "common/common/hex.h"
 
-#include "fmt/format.h"
 #include "openssl/hmac.h"
 #include "openssl/rand.h"
 #include "openssl/x509v3.h"
@@ -54,16 +54,61 @@ ContextImpl::ContextImpl(ContextManagerImpl& parent, Stats::Scope& scope,
 
   int verify_mode = SSL_VERIFY_NONE;
 
-  if (!config.caCertFile().empty()) {
-    ca_cert_ = loadCert(config.caCertFile());
-    ca_file_path_ = config.caCertFile();
-    // set CA certificate
-    int rc = SSL_CTX_load_verify_locations(ctx_.get(), config.caCertFile().c_str(), nullptr);
-    if (0 == rc) {
+  if (!config.caCert().empty()) {
+    ca_file_path_ = config.caCertPath();
+    bssl::UniquePtr<BIO> bio(
+        BIO_new_mem_buf(const_cast<char*>(config.caCert().data()), config.caCert().size()));
+    RELEASE_ASSERT(bio != nullptr);
+    // Based on BoringSSL's X509_load_cert_crl_file().
+    bssl::UniquePtr<STACK_OF(X509_INFO)> list(
+        PEM_X509_INFO_read_bio(bio.get(), nullptr, nullptr, nullptr));
+    if (list == nullptr) {
       throw EnvoyException(
-          fmt::format("Failed to load verify locations file {}", config.caCertFile()));
+          fmt::format("Failed to load trusted CA certificates from {}", config.caCertPath()));
+    }
+
+    X509_STORE* store = SSL_CTX_get_cert_store(ctx_.get());
+    for (const X509_INFO* item : list.get()) {
+      if (item->x509) {
+        X509_STORE_add_cert(store, item->x509);
+        if (ca_cert_ == nullptr) {
+          X509_up_ref(item->x509);
+          ca_cert_.reset(item->x509);
+        }
+      }
+      if (item->crl) {
+        X509_STORE_add_crl(store, item->crl);
+      }
+    }
+    if (ca_cert_ == nullptr) {
+      throw EnvoyException(
+          fmt::format("Failed to load trusted CA certificates from {}", config.caCertPath()));
     }
     verify_mode = SSL_VERIFY_PEER;
+  }
+
+  if (!config.certificateRevocationList().empty()) {
+    bssl::UniquePtr<BIO> bio(
+        BIO_new_mem_buf(const_cast<char*>(config.certificateRevocationList().data()),
+                        config.certificateRevocationList().size()));
+    RELEASE_ASSERT(bio != nullptr);
+
+    // Based on BoringSSL's X509_load_cert_crl_file().
+    bssl::UniquePtr<STACK_OF(X509_INFO)> list(
+        PEM_X509_INFO_read_bio(bio.get(), nullptr, nullptr, nullptr));
+    if (list == nullptr) {
+      throw EnvoyException(
+          fmt::format("Failed to load CRL from {}", config.certificateRevocationListPath()));
+    }
+
+    X509_STORE* store = SSL_CTX_get_cert_store(ctx_.get());
+    for (const X509_INFO* item : list.get()) {
+      if (item->crl) {
+        X509_STORE_add_crl(store, item->crl);
+      }
+    }
+
+    X509_STORE_set_flags(store, X509_V_FLAG_CRL_CHECK | X509_V_FLAG_CRL_CHECK_ALL);
   }
 
   if (!config.verifySubjectAltNameList().empty()) {
@@ -84,19 +129,52 @@ ContextImpl::ContextImpl(ContextManagerImpl& parent, Stats::Scope& scope,
     SSL_CTX_set_cert_verify_callback(ctx_.get(), ContextImpl::verifyCallback, this);
   }
 
-  if (!config.certChainFile().empty()) {
-    cert_chain_ = loadCert(config.certChainFile());
-    cert_chain_file_path_ = config.certChainFile();
-    int rc = SSL_CTX_use_certificate_chain_file(ctx_.get(), config.certChainFile().c_str());
-    if (0 == rc) {
+  if (config.certChain().empty() != config.privateKey().empty()) {
+    throw EnvoyException(fmt::format("Failed to load incomplete certificate from {}, {}",
+                                     config.certChainPath(), config.privateKeyPath()));
+  }
+
+  if (!config.certChain().empty()) {
+    // Load certificate chain.
+    cert_chain_file_path_ = config.certChainPath();
+    bssl::UniquePtr<BIO> bio(
+        BIO_new_mem_buf(const_cast<char*>(config.certChain().data()), config.certChain().size()));
+    RELEASE_ASSERT(bio != nullptr);
+    cert_chain_.reset(PEM_read_bio_X509_AUX(bio.get(), nullptr, nullptr, nullptr));
+    if (cert_chain_ == nullptr || !SSL_CTX_use_certificate(ctx_.get(), cert_chain_.get())) {
       throw EnvoyException(
-          fmt::format("Failed to load certificate chain file {}", config.certChainFile()));
+          fmt::format("Failed to load certificate chain from {}", config.certChainPath()));
+    }
+    // Read rest of the certificate chain.
+    while (true) {
+      bssl::UniquePtr<X509> cert(PEM_read_bio_X509(bio.get(), nullptr, nullptr, nullptr));
+      if (cert == nullptr) {
+        break;
+      }
+      if (!SSL_CTX_add_extra_chain_cert(ctx_.get(), cert.get())) {
+        throw EnvoyException(
+            fmt::format("Failed to load certificate chain from {}", config.certChainPath()));
+      }
+      // SSL_CTX_add_extra_chain_cert() takes ownership.
+      cert.release();
+    }
+    // Check for EOF.
+    uint32_t err = ERR_peek_last_error();
+    if (ERR_GET_LIB(err) == ERR_LIB_PEM && ERR_GET_REASON(err) == PEM_R_NO_START_LINE) {
+      ERR_clear_error();
+    } else {
+      throw EnvoyException(
+          fmt::format("Failed to load certificate chain from {}", config.certChainPath()));
     }
 
-    rc = SSL_CTX_use_PrivateKey_file(ctx_.get(), config.privateKeyFile().c_str(), SSL_FILETYPE_PEM);
-    if (0 == rc) {
+    // Load private key.
+    bio.reset(
+        BIO_new_mem_buf(const_cast<char*>(config.privateKey().data()), config.privateKey().size()));
+    RELEASE_ASSERT(bio != nullptr);
+    bssl::UniquePtr<EVP_PKEY> pkey(PEM_read_bio_PrivateKey(bio.get(), nullptr, nullptr, nullptr));
+    if (pkey == nullptr || !SSL_CTX_use_PrivateKey(ctx_.get(), pkey.get())) {
       throw EnvoyException(
-          fmt::format("Failed to load private key file {}", config.privateKeyFile()));
+          fmt::format("Failed to load private key from {}", config.privateKeyPath()));
     }
   }
 
@@ -204,41 +282,31 @@ void ContextImpl::logHandshake(SSL* ssl) const {
 
 bool ContextImpl::verifySubjectAltName(X509* cert,
                                        const std::vector<std::string>& subject_alt_names) {
-  bool verified = false;
-
-  STACK_OF(GENERAL_NAME)* altnames = static_cast<STACK_OF(GENERAL_NAME)*>(
-      X509_get_ext_d2i(cert, NID_subject_alt_name, nullptr, nullptr));
-
-  if (altnames) {
-    int n = sk_GENERAL_NAME_num(altnames);
-    for (int i = 0; i < n && !verified; i++) {
-      GENERAL_NAME* altname = sk_GENERAL_NAME_value(altnames, i);
-
-      if (altname->type == GEN_DNS) {
-        ASN1_STRING* str = altname->d.dNSName;
-        char* dns_name = reinterpret_cast<char*>(ASN1_STRING_data(str));
-        for (auto& config_san : subject_alt_names) {
-          if (dNSNameMatch(config_san, dns_name)) {
-            verified = true;
-            break;
-          }
+  bssl::UniquePtr<GENERAL_NAMES> san_names(
+      static_cast<GENERAL_NAMES*>(X509_get_ext_d2i(cert, NID_subject_alt_name, nullptr, nullptr)));
+  if (san_names == nullptr) {
+    return false;
+  }
+  for (const GENERAL_NAME* san : san_names.get()) {
+    if (san->type == GEN_DNS) {
+      ASN1_STRING* str = san->d.dNSName;
+      const char* dns_name = reinterpret_cast<const char*>(ASN1_STRING_data(str));
+      for (auto& config_san : subject_alt_names) {
+        if (dNSNameMatch(config_san, dns_name)) {
+          return true;
         }
-      } else if (altname->type == GEN_URI) {
-        ASN1_STRING* str = altname->d.uniformResourceIdentifier;
-        char* crt_san = reinterpret_cast<char*>(ASN1_STRING_data(str));
-        for (auto& config_san : subject_alt_names) {
-          if (config_san.compare(crt_san) == 0) {
-            verified = true;
-            break;
-          }
+      }
+    } else if (san->type == GEN_URI) {
+      ASN1_STRING* str = san->d.uniformResourceIdentifier;
+      const char* uri = reinterpret_cast<const char*>(ASN1_STRING_data(str));
+      for (auto& config_san : subject_alt_names) {
+        if (config_san.compare(uri) == 0) {
+          return true;
         }
       }
     }
-
-    sk_GENERAL_NAME_pop_free(altnames, GENERAL_NAME_free);
   }
-
-  return verified;
+  return false;
 }
 
 bool ContextImpl::dNSNameMatch(const std::string& dNSName, const char* pattern) {
@@ -327,15 +395,6 @@ std::string ContextImpl::getSerialNumber(const X509* cert) {
   return "";
 }
 
-bssl::UniquePtr<X509> ContextImpl::loadCert(const std::string& cert_file) {
-  X509* cert = nullptr;
-  std::unique_ptr<FILE, decltype(&fclose)> fp(fopen(cert_file.c_str(), "r"), &fclose);
-  if (!fp.get() || !PEM_read_X509(fp.get(), &cert, nullptr, nullptr)) {
-    throw EnvoyException(fmt::format("Failed to load certificate '{}'", cert_file.c_str()));
-  }
-  return bssl::UniquePtr<X509>(cert);
-};
-
 ClientContextImpl::ClientContextImpl(ContextManagerImpl& parent, Stats::Scope& scope,
                                      const ClientContextConfig& config)
     : ContextImpl(parent, scope, config) {
@@ -343,7 +402,6 @@ ClientContextImpl::ClientContextImpl(ContextManagerImpl& parent, Stats::Scope& s
     int rc = SSL_CTX_set_alpn_protos(ctx_.get(), &parsed_alpn_protocols_[0],
                                      parsed_alpn_protocols_.size());
     RELEASE_ASSERT(rc == 0);
-    UNREFERENCED_PARAMETER(rc);
   }
 
   server_name_indication_ = config.serverNameIndication();
@@ -355,7 +413,6 @@ bssl::UniquePtr<SSL> ClientContextImpl::newSsl() const {
   if (!server_name_indication_.empty()) {
     int rc = SSL_set_tlsext_host_name(ssl_con.get(), server_name_indication_.c_str());
     RELEASE_ASSERT(rc);
-    UNREFERENCED_PARAMETER(rc);
   }
 
   return ssl_con;
@@ -368,6 +425,9 @@ ServerContextImpl::ServerContextImpl(ContextManagerImpl& parent, const std::stri
     : ContextImpl(parent, scope, config), listener_name_(listener_name),
       server_names_(server_names), skip_context_update_(skip_context_update), runtime_(runtime),
       session_ticket_keys_(config.sessionTicketKeys()) {
+  if (config.certChain().empty()) {
+    throw EnvoyException("Server TlsCertificates must have a certificate specified");
+  }
   SSL_CTX_set_select_certificate_cb(
       ctx_.get(), [](const SSL_CLIENT_HELLO* client_hello) -> ssl_select_cert_result_t {
         ContextImpl* context_impl = static_cast<ContextImpl*>(
@@ -375,10 +435,41 @@ ServerContextImpl::ServerContextImpl(ContextManagerImpl& parent, const std::stri
         return dynamic_cast<ServerContextImpl*>(context_impl)->processClientHello(client_hello);
       });
 
-  if (!config.caCertFile().empty()) {
-    bssl::UniquePtr<STACK_OF(X509_NAME)> list(SSL_load_client_CA_file(config.caCertFile().c_str()));
-    if (nullptr == list) {
-      throw EnvoyException(fmt::format("Failed to load client CA file {}", config.caCertFile()));
+  if (!config.caCert().empty()) {
+    bssl::UniquePtr<BIO> bio(
+        BIO_new_mem_buf(const_cast<char*>(config.caCert().data()), config.caCert().size()));
+    RELEASE_ASSERT(bio != nullptr);
+    // Based on BoringSSL's SSL_add_file_cert_subjects_to_stack().
+    bssl::UniquePtr<STACK_OF(X509_NAME)> list(sk_X509_NAME_new(
+        [](const X509_NAME** a, const X509_NAME** b) -> int { return X509_NAME_cmp(*a, *b); }));
+    RELEASE_ASSERT(list != nullptr);
+    for (;;) {
+      bssl::UniquePtr<X509> cert(PEM_read_bio_X509(bio.get(), nullptr, nullptr, nullptr));
+      if (cert == nullptr) {
+        break;
+      }
+      X509_NAME* name = X509_get_subject_name(cert.get());
+      if (name == nullptr) {
+        throw EnvoyException(fmt::format("Failed to load trusted client CA certificates from {}",
+                                         config.caCertPath()));
+      }
+      // Check for duplicates.
+      if (sk_X509_NAME_find(list.get(), nullptr, name)) {
+        continue;
+      }
+      bssl::UniquePtr<X509_NAME> name_dup(X509_NAME_dup(name));
+      if (name_dup == nullptr || !sk_X509_NAME_push(list.get(), name_dup.release())) {
+        throw EnvoyException(fmt::format("Failed to load trusted client CA certificates from {}",
+                                         config.caCertPath()));
+      }
+    }
+    // Check for EOF.
+    uint32_t err = ERR_peek_last_error();
+    if (ERR_GET_LIB(err) == ERR_LIB_PEM && ERR_GET_REASON(err) == PEM_R_NO_START_LINE) {
+      ERR_clear_error();
+    } else {
+      throw EnvoyException(fmt::format("Failed to load trusted client CA certificates from {}",
+                                       config.caCertPath()));
     }
     SSL_CTX_set_client_CA_list(ctx_.get(), list.release());
 
@@ -442,10 +533,7 @@ ServerContextImpl::ServerContextImpl(ContextManagerImpl& parent, const std::stri
   bssl::UniquePtr<GENERAL_NAMES> san_names(
       static_cast<GENERAL_NAMES*>(X509_get_ext_d2i(cert, NID_subject_alt_name, nullptr, nullptr)));
   if (san_names != nullptr) {
-    // TODO(ggreenway): Use range-based for loop when newer BoringSSL build is used:
-    //   for (const GENERAL_NAME* san : *san_names) {
-    for (size_t i = 0; i < sk_GENERAL_NAME_num(san_names.get()); i++) {
-      const GENERAL_NAME* san = sk_GENERAL_NAME_value(san_names.get(), i);
+    for (const GENERAL_NAME* san : san_names.get()) {
       if (san->type == GEN_DNS || san->type == GEN_URI) {
         rc = EVP_DigestUpdate(&md, ASN1_STRING_data(san->d.ia5), ASN1_STRING_length(san->d.ia5));
         RELEASE_ASSERT(rc == 1);
@@ -563,7 +651,6 @@ void ServerContextImpl::updateConnectionContext(SSL* ssl) {
   // TODO(PiotrSikora): add getters to BoringSSL.
   rc = SSL_set1_curves_list(ssl, ecdh_curves_.c_str());
   ASSERT(rc == 1);
-  UNREFERENCED_PARAMETER(rc);
 }
 
 int ServerContextImpl::sessionTicketProcess(SSL*, uint8_t* key_name, uint8_t* iv,
@@ -586,7 +673,6 @@ int ServerContextImpl::sessionTicketProcess(SSL*, uint8_t* key_name, uint8_t* iv
 
     int rc = RAND_bytes(iv, EVP_CIPHER_iv_length(cipher));
     ASSERT(rc);
-    UNREFERENCED_PARAMETER(rc);
 
     // This RELEASE_ASSERT is logically a static_assert, but we can't actually get
     // EVP_CIPHER_key_length(cipher) at compile-time

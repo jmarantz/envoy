@@ -1,18 +1,21 @@
 #include "xfcc_integration_test.h"
 
 #include <regex>
+#include <unordered_map>
+
+#include "envoy/config/filter/network/http_connection_manager/v2/http_connection_manager.pb.h"
 
 #include "common/event/dispatcher_impl.h"
 #include "common/http/header_map_impl.h"
 #include "common/network/utility.h"
 #include "common/ssl/context_config_impl.h"
 #include "common/ssl/context_manager_impl.h"
+#include "common/ssl/ssl_socket.h"
 
 #include "test/test_common/network_utility.h"
 #include "test/test_common/printers.h"
 #include "test/test_common/utility.h"
 
-#include "api/filter/network/http_connection_manager.pb.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "integration.h"
@@ -27,16 +30,15 @@ void XfccIntegrationTest::TearDown() {
   client_mtls_ssl_ctx_.reset();
   client_tls_ssl_ctx_.reset();
   fake_upstreams_.clear();
-  upstream_ssl_ctx_.reset();
   context_manager_.reset();
   runtime_.reset();
 }
 
-Ssl::ClientContextPtr XfccIntegrationTest::createClientSslContext(bool mtls) {
+Network::TransportSocketFactoryPtr XfccIntegrationTest::createClientSslContext(bool mtls) {
   std::string json_tls = R"EOF(
 {
   "ca_cert_file": "{{ test_rundir }}/test/config/integration/certs/cacert.pem",
-  "verify_subject_alt_name": [ "spiffe://lyft.com/backend-team" ]
+  "verify_subject_alt_name": [ "spiffe://lyft.com/backend-team", "lyft.com", "www.lyft.com" ]
 }
 )EOF";
   std::string json_mtls = R"EOF(
@@ -44,7 +46,7 @@ Ssl::ClientContextPtr XfccIntegrationTest::createClientSslContext(bool mtls) {
   "ca_cert_file": "{{ test_rundir }}/test/config/integration/certs/cacert.pem",
   "cert_chain_file": "{{ test_rundir }}/test/config/integration/certs/clientcert.pem",
   "private_key_file": "{{ test_rundir }}/test/config/integration/certs/clientkey.pem",
-  "verify_subject_alt_name": [ "spiffe://lyft.com/backend-team" ]
+  "verify_subject_alt_name": [ "spiffe://lyft.com/backend-team", "lyft.com", "www.lyft.com" ]
 }
 )EOF";
 
@@ -57,10 +59,11 @@ Ssl::ClientContextPtr XfccIntegrationTest::createClientSslContext(bool mtls) {
   Json::ObjectSharedPtr loader = TestEnvironment::jsonLoadFromString(target);
   Ssl::ClientContextConfigImpl cfg(*loader);
   static auto* client_stats_store = new Stats::TestIsolatedStoreImpl();
-  return context_manager_->createSslClientContext(*client_stats_store, cfg);
+  return Network::TransportSocketFactoryPtr{
+      new Ssl::ClientSslSocketFactory(cfg, *context_manager_, *client_stats_store)};
 }
 
-Ssl::ServerContextPtr XfccIntegrationTest::createUpstreamSslContext() {
+Network::TransportSocketFactoryPtr XfccIntegrationTest::createUpstreamSslContext() {
   std::string json = R"EOF(
 {
   "cert_chain_file": "{{ test_rundir }}/test/config/integration/certs/upstreamcert.pem",
@@ -70,39 +73,43 @@ Ssl::ServerContextPtr XfccIntegrationTest::createUpstreamSslContext() {
 
   Json::ObjectSharedPtr loader = TestEnvironment::jsonLoadFromString(json);
   Ssl::ServerContextConfigImpl cfg(*loader);
-  static auto* upstream_stats_store = new Stats::TestIsolatedStoreImpl();
-  return context_manager_->createSslServerContext("", {}, *upstream_stats_store, cfg, true);
+  static Stats::Scope* upstream_stats_store = new Stats::TestIsolatedStoreImpl();
+  return std::make_unique<Ssl::ServerSslSocketFactory>(cfg, EMPTY_STRING,
+                                                       std::vector<std::string>{}, true,
+                                                       *context_manager_, *upstream_stats_store);
 }
 
 Network::ClientConnectionPtr XfccIntegrationTest::makeClientConnection() {
   Network::Address::InstanceConstSharedPtr address =
       Network::Utility::resolveUrl("tcp://" + Network::Test::getLoopbackAddressUrlString(version_) +
                                    ":" + std::to_string(lookupPort("http")));
-  return dispatcher_->createClientConnection(address, Network::Address::InstanceConstSharedPtr());
+  return dispatcher_->createClientConnection(address, Network::Address::InstanceConstSharedPtr(),
+                                             Network::Test::createRawBufferSocket(), nullptr);
 }
 
 Network::ClientConnectionPtr XfccIntegrationTest::makeMtlsClientConnection() {
   Network::Address::InstanceConstSharedPtr address =
       Network::Utility::resolveUrl("tcp://" + Network::Test::getLoopbackAddressUrlString(version_) +
                                    ":" + std::to_string(lookupPort("http")));
-  return dispatcher_->createSslClientConnection(*client_mtls_ssl_ctx_, address,
-                                                Network::Address::InstanceConstSharedPtr());
+  return dispatcher_->createClientConnection(address, Network::Address::InstanceConstSharedPtr(),
+                                             client_mtls_ssl_ctx_->createTransportSocket(),
+                                             nullptr);
 }
 
 void XfccIntegrationTest::createUpstreams() {
-  upstream_ssl_ctx_ = createUpstreamSslContext();
   fake_upstreams_.emplace_back(
-      new FakeUpstream(upstream_ssl_ctx_.get(), 0, FakeHttpConnection::Type::HTTP1, version_));
+      new FakeUpstream(createUpstreamSslContext(), 0, FakeHttpConnection::Type::HTTP1, version_));
 }
 
 void XfccIntegrationTest::initialize() {
   config_helper_.addConfigModifier(
-      [&](envoy::api::v2::filter::network::HttpConnectionManager& hcm) -> void {
+      [&](envoy::config::filter::network::http_connection_manager::v2::HttpConnectionManager& hcm)
+          -> void {
         hcm.set_forward_client_cert_details(fcc_);
         hcm.mutable_set_current_client_cert_details()->CopyFrom(sccd_);
       });
 
-  config_helper_.addConfigModifier([&](envoy::api::v2::Bootstrap& bootstrap) -> void {
+  config_helper_.addConfigModifier([&](envoy::config::bootstrap::v2::Bootstrap& bootstrap) -> void {
     auto context = bootstrap.mutable_static_resources()->mutable_clusters(0)->mutable_tls_context();
     auto* validation_context = context->mutable_common_tls_context()->mutable_validation_context();
     validation_context->mutable_trusted_ca()->set_filename(
@@ -139,7 +146,7 @@ void XfccIntegrationTest::testRequestAndResponseWithXfccHeader(std::string previ
   }
 
   codec_client_ = makeHttpConnection(std::move(conn));
-  codec_client_->makeHeaderOnlyRequest(header_map, *response_);
+  auto response = codec_client_->makeHeaderOnlyRequest(header_map);
   fake_upstream_connection_ = fake_upstreams_[0]->waitForHttpConnection(*dispatcher_);
   upstream_request_ = fake_upstream_connection_->waitForNewStream(*dispatcher_);
   upstream_request_->waitForEndStream(*dispatcher_);
@@ -150,84 +157,184 @@ void XfccIntegrationTest::testRequestAndResponseWithXfccHeader(std::string previ
                  upstream_request_->headers().ForwardedClientCert()->value().c_str());
   }
   upstream_request_->encodeHeaders(Http::TestHeaderMapImpl{{":status", "200"}}, true);
-  response_->waitForEndStream();
+  response->waitForEndStream();
   EXPECT_TRUE(upstream_request_->complete());
-  EXPECT_TRUE(response_->complete());
+  EXPECT_TRUE(response->complete());
 }
 
 INSTANTIATE_TEST_CASE_P(IpVersions, XfccIntegrationTest,
-                        testing::ValuesIn(TestEnvironment::getIpVersionsForTest()));
+                        testing::ValuesIn(TestEnvironment::getIpVersionsForTest()),
+                        TestUtility::ipTestParamsToString);
 
 TEST_P(XfccIntegrationTest, MtlsForwardOnly) {
-  fcc_ = envoy::api::v2::filter::network::HttpConnectionManager::FORWARD_ONLY;
+  fcc_ = envoy::config::filter::network::http_connection_manager::v2::HttpConnectionManager::
+      FORWARD_ONLY;
   initialize();
   testRequestAndResponseWithXfccHeader(previous_xfcc_, previous_xfcc_);
 }
 
 TEST_P(XfccIntegrationTest, MtlsAlwaysForwardOnly) {
-  fcc_ = envoy::api::v2::filter::network::HttpConnectionManager::ALWAYS_FORWARD_ONLY;
+  fcc_ = envoy::config::filter::network::http_connection_manager::v2::HttpConnectionManager::
+      ALWAYS_FORWARD_ONLY;
   initialize();
   testRequestAndResponseWithXfccHeader(previous_xfcc_, previous_xfcc_);
 }
 
 TEST_P(XfccIntegrationTest, MtlsSanitize) {
-  fcc_ = envoy::api::v2::filter::network::HttpConnectionManager::SANITIZE;
+  fcc_ =
+      envoy::config::filter::network::http_connection_manager::v2::HttpConnectionManager::SANITIZE;
   initialize();
   testRequestAndResponseWithXfccHeader(previous_xfcc_, "");
 }
 
-TEST_P(XfccIntegrationTest, MtlsSanitizeSetSubjectSan) {
-  fcc_ = envoy::api::v2::filter::network::HttpConnectionManager::SANITIZE_SET;
+TEST_P(XfccIntegrationTest, MtlsSanitizeSetSubject) {
+  fcc_ = envoy::config::filter::network::http_connection_manager::v2::HttpConnectionManager::
+      SANITIZE_SET;
   sccd_.mutable_subject()->set_value(true);
-  sccd_.mutable_san()->set_value(true);
+  initialize();
+  testRequestAndResponseWithXfccHeader(previous_xfcc_,
+                                       current_xfcc_by_hash_ + ";" + client_subject_);
+}
+
+TEST_P(XfccIntegrationTest, MtlsSanitizeSetUri) {
+  fcc_ = envoy::config::filter::network::http_connection_manager::v2::HttpConnectionManager::
+      SANITIZE_SET;
+  sccd_.set_uri(true);
+  initialize();
+  testRequestAndResponseWithXfccHeader(previous_xfcc_,
+                                       current_xfcc_by_hash_ + ";" + client_uri_san_);
+}
+
+TEST_P(XfccIntegrationTest, MtlsSanitizeSetDns) {
+  fcc_ = envoy::config::filter::network::http_connection_manager::v2::HttpConnectionManager::
+      SANITIZE_SET;
+  sccd_.set_dns(true);
+  initialize();
+  testRequestAndResponseWithXfccHeader(previous_xfcc_,
+                                       current_xfcc_by_hash_ + ";" + client_dns_san_);
+}
+
+TEST_P(XfccIntegrationTest, MtlsSanitizeSetSubjectUri) {
+  fcc_ = envoy::config::filter::network::http_connection_manager::v2::HttpConnectionManager::
+      SANITIZE_SET;
+  sccd_.mutable_subject()->set_value(true);
+  sccd_.set_uri(true);
   initialize();
   testRequestAndResponseWithXfccHeader(previous_xfcc_, current_xfcc_by_hash_ + ";" +
-                                                           client_subject_ + ";" + client_san_);
+                                                           client_subject_ + ";" + client_uri_san_);
+}
+
+TEST_P(XfccIntegrationTest, MtlsSanitizeSetSubjectDns) {
+  fcc_ = envoy::config::filter::network::http_connection_manager::v2::HttpConnectionManager::
+      SANITIZE_SET;
+  sccd_.mutable_subject()->set_value(true);
+  sccd_.set_dns(true);
+  initialize();
+  testRequestAndResponseWithXfccHeader(previous_xfcc_, current_xfcc_by_hash_ + ";" +
+                                                           client_subject_ + ";" + client_dns_san_);
+}
+
+TEST_P(XfccIntegrationTest, MtlsSanitizeSetSubjectUriDns) {
+  fcc_ = envoy::config::filter::network::http_connection_manager::v2::HttpConnectionManager::
+      SANITIZE_SET;
+  sccd_.mutable_subject()->set_value(true);
+  sccd_.set_uri(true);
+  sccd_.set_dns(true);
+  initialize();
+  testRequestAndResponseWithXfccHeader(previous_xfcc_, current_xfcc_by_hash_ + ";" +
+                                                           client_subject_ + ";" + client_uri_san_ +
+                                                           ";" + client_dns_san_);
 }
 
 TEST_P(XfccIntegrationTest, MtlsAppendForward) {
-  fcc_ = envoy::api::v2::filter::network::HttpConnectionManager::APPEND_FORWARD;
+  fcc_ = envoy::config::filter::network::http_connection_manager::v2::HttpConnectionManager::
+      APPEND_FORWARD;
   initialize();
   testRequestAndResponseWithXfccHeader(previous_xfcc_,
                                        previous_xfcc_ + "," + current_xfcc_by_hash_);
 }
 
 TEST_P(XfccIntegrationTest, MtlsAppendForwardSubject) {
-  fcc_ = envoy::api::v2::filter::network::HttpConnectionManager::APPEND_FORWARD;
+  fcc_ = envoy::config::filter::network::http_connection_manager::v2::HttpConnectionManager::
+      APPEND_FORWARD;
   sccd_.mutable_subject()->set_value(true);
   initialize();
   testRequestAndResponseWithXfccHeader(
       previous_xfcc_, previous_xfcc_ + "," + current_xfcc_by_hash_ + ";" + client_subject_);
 }
 
-TEST_P(XfccIntegrationTest, MtlsAppendForwardSan) {
-  fcc_ = envoy::api::v2::filter::network::HttpConnectionManager::APPEND_FORWARD;
-  sccd_.mutable_san()->set_value(true);
+TEST_P(XfccIntegrationTest, MtlsAppendForwardUri) {
+  fcc_ = envoy::config::filter::network::http_connection_manager::v2::HttpConnectionManager::
+      APPEND_FORWARD;
+  sccd_.set_uri(true);
   initialize();
   testRequestAndResponseWithXfccHeader(
-      previous_xfcc_, previous_xfcc_ + "," + current_xfcc_by_hash_ + ";" + client_san_);
+      previous_xfcc_, previous_xfcc_ + "," + current_xfcc_by_hash_ + ";" + client_uri_san_);
 }
 
-TEST_P(XfccIntegrationTest, MtlsAppendForwardSubjectSan) {
-  fcc_ = envoy::api::v2::filter::network::HttpConnectionManager::APPEND_FORWARD;
+TEST_P(XfccIntegrationTest, MtlsAppendForwardDns) {
+  fcc_ = envoy::config::filter::network::http_connection_manager::v2::HttpConnectionManager::
+      APPEND_FORWARD;
+  sccd_.set_dns(true);
+  initialize();
+  testRequestAndResponseWithXfccHeader(
+      previous_xfcc_, previous_xfcc_ + "," + current_xfcc_by_hash_ + ";" + client_dns_san_);
+}
+
+TEST_P(XfccIntegrationTest, MtlsAppendForwardSubjectUri) {
+  fcc_ = envoy::config::filter::network::http_connection_manager::v2::HttpConnectionManager::
+      APPEND_FORWARD;
   sccd_.mutable_subject()->set_value(true);
-  sccd_.mutable_san()->set_value(true);
+  sccd_.set_uri(true);
   initialize();
   testRequestAndResponseWithXfccHeader(previous_xfcc_, previous_xfcc_ + "," +
                                                            current_xfcc_by_hash_ + ";" +
-                                                           client_subject_ + ";" + client_san_);
+                                                           client_subject_ + ";" + client_uri_san_);
 }
 
-TEST_P(XfccIntegrationTest, MtlsAppendForwardSanPreviousXfccHeaderEmpty) {
-  fcc_ = envoy::api::v2::filter::network::HttpConnectionManager::APPEND_FORWARD;
-  sccd_.mutable_san()->set_value(true);
+TEST_P(XfccIntegrationTest, MtlsAppendForwardSubjectDns) {
+  fcc_ = envoy::config::filter::network::http_connection_manager::v2::HttpConnectionManager::
+      APPEND_FORWARD;
+  sccd_.mutable_subject()->set_value(true);
+  sccd_.set_dns(true);
   initialize();
-  testRequestAndResponseWithXfccHeader("", current_xfcc_by_hash_ + ";" + client_san_);
+  testRequestAndResponseWithXfccHeader(previous_xfcc_, previous_xfcc_ + "," +
+                                                           current_xfcc_by_hash_ + ";" +
+                                                           client_subject_ + ";" + client_dns_san_);
+}
+
+TEST_P(XfccIntegrationTest, MtlsAppendForwardSubjectUriDns) {
+  fcc_ = envoy::config::filter::network::http_connection_manager::v2::HttpConnectionManager::
+      APPEND_FORWARD;
+  sccd_.mutable_subject()->set_value(true);
+  sccd_.set_uri(true);
+  sccd_.set_dns(true);
+  initialize();
+  testRequestAndResponseWithXfccHeader(
+      previous_xfcc_, previous_xfcc_ + "," + current_xfcc_by_hash_ + ";" + client_subject_ + ";" +
+                          client_uri_san_ + ";" + client_dns_san_);
+}
+
+TEST_P(XfccIntegrationTest, MtlsAppendForwardUriPreviousXfccHeaderEmpty) {
+  fcc_ = envoy::config::filter::network::http_connection_manager::v2::HttpConnectionManager::
+      APPEND_FORWARD;
+  sccd_.set_uri(true);
+  initialize();
+  testRequestAndResponseWithXfccHeader("", current_xfcc_by_hash_ + ";" + client_uri_san_);
+}
+
+TEST_P(XfccIntegrationTest, MtlsAppendForwardDnsPreviousXfccHeaderEmpty) {
+  fcc_ = envoy::config::filter::network::http_connection_manager::v2::HttpConnectionManager::
+      APPEND_FORWARD;
+  sccd_.set_dns(true);
+  initialize();
+  testRequestAndResponseWithXfccHeader("", current_xfcc_by_hash_ + ";" + client_dns_san_);
 }
 
 TEST_P(XfccIntegrationTest, TlsAlwaysForwardOnly) {
   // The always_forward_only works regardless of whether the connection is TLS/mTLS.
-  fcc_ = envoy::api::v2::filter::network::HttpConnectionManager::ALWAYS_FORWARD_ONLY;
+  fcc_ = envoy::config::filter::network::http_connection_manager::v2::HttpConnectionManager::
+      ALWAYS_FORWARD_ONLY;
   tls_ = false;
   initialize();
   testRequestAndResponseWithXfccHeader(previous_xfcc_, previous_xfcc_);
@@ -236,7 +343,8 @@ TEST_P(XfccIntegrationTest, TlsAlwaysForwardOnly) {
 TEST_P(XfccIntegrationTest, TlsEnforceSanitize) {
   // The forward_only, append_forward and sanitize_set options are not effective when the connection
   // is not using Mtls.
-  fcc_ = envoy::api::v2::filter::network::HttpConnectionManager::FORWARD_ONLY;
+  fcc_ = envoy::config::filter::network::http_connection_manager::v2::HttpConnectionManager::
+      FORWARD_ONLY;
   tls_ = false;
   initialize();
   testRequestAndResponseWithXfccHeader(previous_xfcc_, "");
@@ -244,7 +352,8 @@ TEST_P(XfccIntegrationTest, TlsEnforceSanitize) {
 
 TEST_P(XfccIntegrationTest, NonTlsAlwaysForwardOnly) {
   // The always_forward_only works regardless of whether the connection is TLS/mTLS.
-  fcc_ = envoy::api::v2::filter::network::HttpConnectionManager::ALWAYS_FORWARD_ONLY;
+  fcc_ = envoy::config::filter::network::http_connection_manager::v2::HttpConnectionManager::
+      ALWAYS_FORWARD_ONLY;
   tls_ = false;
   initialize();
   testRequestAndResponseWithXfccHeader(previous_xfcc_, previous_xfcc_);
@@ -253,7 +362,8 @@ TEST_P(XfccIntegrationTest, NonTlsAlwaysForwardOnly) {
 TEST_P(XfccIntegrationTest, NonTlsEnforceSanitize) {
   // The forward_only, append_forward and sanitize_set options are not effective when the connection
   // is not using Mtls.
-  fcc_ = envoy::api::v2::filter::network::HttpConnectionManager::FORWARD_ONLY;
+  fcc_ = envoy::config::filter::network::http_connection_manager::v2::HttpConnectionManager::
+      FORWARD_ONLY;
   tls_ = false;
   initialize();
   testRequestAndResponseWithXfccHeader(previous_xfcc_, "");
@@ -268,7 +378,8 @@ TEST_P(XfccIntegrationTest, TagExtractedNameGenerationTest) {
   // the printout needs to be copied from each test parameterization and pasted into the respective
   // case in the switch statement below.
 
-  fcc_ = envoy::api::v2::filter::network::HttpConnectionManager::FORWARD_ONLY;
+  fcc_ = envoy::config::filter::network::http_connection_manager::v2::HttpConnectionManager::
+      FORWARD_ONLY;
   initialize();
 
   // Commented sample code to regenerate the map literals used below in the test log if necessary:

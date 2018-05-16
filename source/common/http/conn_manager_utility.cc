@@ -13,6 +13,8 @@
 #include "common/runtime/uuid_util.h"
 #include "common/tracing/http_tracer_impl.h"
 
+#include "absl/strings/str_join.h"
+
 namespace Envoy {
 namespace Http {
 
@@ -50,9 +52,22 @@ Network::Address::InstanceConstSharedPtr ConnectionManagerUtility::mutateRequest
   // our peer to have already properly set XFF, etc.
   Network::Address::InstanceConstSharedPtr final_remote_address;
   bool single_xff_address;
+  const uint32_t xff_num_trusted_hops = config.xffNumTrustedHops();
   if (config.useRemoteAddress()) {
-    final_remote_address = connection.remoteAddress();
     single_xff_address = request_headers.ForwardedFor() == nullptr;
+    // If there are any trusted proxies in front of this Envoy instance (as indicated by
+    // the xff_num_trusted_hops configuration option), get the trusted client address
+    // from the XFF before we append to XFF.
+    if (xff_num_trusted_hops > 0) {
+      final_remote_address =
+          Utility::getLastAddressFromXFF(request_headers, xff_num_trusted_hops - 1).address_;
+    }
+    // If there aren't any trusted proxies in front of this Envoy instance, or there
+    // are but they didn't populate XFF properly, the trusted client address is the
+    // source address of the immediate downstream's connection to us.
+    if (final_remote_address == nullptr) {
+      final_remote_address = connection.remoteAddress();
+    }
     if (Network::Utility::isLoopbackAddress(*connection.remoteAddress())) {
       Utility::appendXff(request_headers, config.localAddress());
     } else {
@@ -64,7 +79,7 @@ Network::Address::InstanceConstSharedPtr ConnectionManagerUtility::mutateRequest
     // If we are not using remote address, attempt to pull a valid IPv4 or IPv6 address out of XFF.
     // If we find one, it will be used as the downstream address for logging. It may or may not be
     // used for determining internal/external status (see below).
-    auto ret = Utility::getLastAddressFromXFF(request_headers);
+    auto ret = Utility::getLastAddressFromXFF(request_headers, xff_num_trusted_hops);
     final_remote_address = ret.address_;
     single_xff_address = ret.single_address_;
   }
@@ -118,13 +133,14 @@ Network::Address::InstanceConstSharedPtr ConnectionManagerUtility::mutateRequest
     request_headers.removeEnvoyUpstreamRequestTimeoutAltResponse();
     request_headers.removeEnvoyExpectedRequestTimeoutMs();
     request_headers.removeEnvoyForceTrace();
+    request_headers.removeEnvoyIpTags();
 
     for (const Http::LowerCaseString& header : route_config.internalOnlyHeaders()) {
       request_headers.remove(header);
     }
   }
 
-  if (config.userAgent().valid()) {
+  if (config.userAgent()) {
     request_headers.insertEnvoyDownstreamServiceCluster().value(config.userAgent().value());
     HeaderEntry& user_agent_header = request_headers.insertUserAgent();
     if (user_agent_header.value().empty()) {
@@ -140,9 +156,9 @@ Network::Address::InstanceConstSharedPtr ConnectionManagerUtility::mutateRequest
 
   // If we are an external request, AND we are "using remote address" (see above), we set
   // x-envoy-external-address since this is our first ingress point into the trusted network.
-  if (edge_request && connection.remoteAddress()->type() == Network::Address::Type::Ip) {
+  if (edge_request && final_remote_address->type() == Network::Address::Type::Ip) {
     request_headers.insertEnvoyExternalAddress().value(
-        connection.remoteAddress()->ip()->addressAsString());
+        final_remote_address->ip()->addressAsString());
   }
 
   // Generate x-request-id for all edge requests, or if there is none.
@@ -188,14 +204,23 @@ void ConnectionManagerUtility::mutateXfccRequestHeader(Http::HeaderMap& request_
   // the XFCC header.
   if (config.forwardClientCert() == Http::ForwardClientCertType::AppendForward ||
       config.forwardClientCert() == Http::ForwardClientCertType::SanitizeSet) {
-    if (!connection.ssl()->uriSanLocalCertificate().empty()) {
-      client_cert_details.push_back("By=" + connection.ssl()->uriSanLocalCertificate());
+    const std::string uri_san_local_cert = connection.ssl()->uriSanLocalCertificate();
+    if (!uri_san_local_cert.empty()) {
+      client_cert_details.push_back("By=" + uri_san_local_cert);
     }
-    if (!connection.ssl()->sha256PeerCertificateDigest().empty()) {
-      client_cert_details.push_back("Hash=" + connection.ssl()->sha256PeerCertificateDigest());
+    const std::string cert_digest = connection.ssl()->sha256PeerCertificateDigest();
+    if (!cert_digest.empty()) {
+      client_cert_details.push_back("Hash=" + cert_digest);
     }
     for (const auto& detail : config.setCurrentClientCertDetails()) {
       switch (detail) {
+      case Http::ClientCertDetailsType::Cert: {
+        const std::string peer_cert = connection.ssl()->urlEncodedPemEncodedPeerCertificate();
+        if (!peer_cert.empty()) {
+          client_cert_details.push_back("Cert=\"" + peer_cert + "\"");
+        }
+        break;
+      }
       case Http::ClientCertDetailsType::Subject:
         // The "Subject" key still exists even if the subject is empty.
         client_cert_details.push_back("Subject=\"" + connection.ssl()->subjectPeerCertificate() +
@@ -205,19 +230,27 @@ void ConnectionManagerUtility::mutateXfccRequestHeader(Http::HeaderMap& request_
         // Currently, we only support a single SAN field with URI type.
         // The "SAN" key still exists even if the SAN is empty.
         client_cert_details.push_back("SAN=" + connection.ssl()->uriSanPeerCertificate());
+        break;
+      case Http::ClientCertDetailsType::URI:
+        client_cert_details.push_back("URI=" + connection.ssl()->uriSanPeerCertificate());
+        break;
+      case Http::ClientCertDetailsType::DNS: {
+        const std::vector<std::string> dns_sans = connection.ssl()->dnsSansPeerCertificate();
+        if (!dns_sans.empty()) {
+          for (const std::string& dns : dns_sans) {
+            client_cert_details.push_back("DNS=" + dns);
+          }
+        }
+        break;
+      }
       }
     }
   }
 
-  std::string client_cert_details_str = StringUtil::join(client_cert_details, ";");
+  const std::string client_cert_details_str = absl::StrJoin(client_cert_details, ";");
   if (config.forwardClientCert() == Http::ForwardClientCertType::AppendForward) {
-    if (request_headers.ForwardedClientCert() &&
-        !request_headers.ForwardedClientCert()->value().empty()) {
-      request_headers.ForwardedClientCert()->value().append(("," + client_cert_details_str).c_str(),
-                                                            client_cert_details_str.length() + 1);
-    } else {
-      request_headers.insertForwardedClientCert().value(client_cert_details_str);
-    }
+    Utility::appendToHeader(request_headers.insertForwardedClientCert().value(),
+                            client_cert_details_str);
   } else if (config.forwardClientCert() == Http::ForwardClientCertType::SanitizeSet) {
     request_headers.insertForwardedClientCert().value(client_cert_details_str);
   } else {

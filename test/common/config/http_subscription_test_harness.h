@@ -1,3 +1,4 @@
+#include "envoy/api/v2/eds.pb.h"
 #include "envoy/http/async_client.h"
 
 #include "common/common/utility.h"
@@ -13,7 +14,6 @@
 #include "test/mocks/upstream/mocks.h"
 #include "test/test_common/utility.h"
 
-#include "api/eds.pb.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
@@ -55,7 +55,7 @@ public:
     EXPECT_CALL(cm_.async_client_, send_(_, _, _))
         .WillOnce(Invoke([this, cluster_names, version](
                              Http::MessagePtr& request, Http::AsyncClient::Callbacks& callbacks,
-                             const Optional<std::chrono::milliseconds>& timeout) {
+                             const absl::optional<std::chrono::milliseconds>& timeout) {
           http_callbacks_ = &callbacks;
           UNREFERENCED_PARAMETER(timeout);
           EXPECT_EQ("POST", std::string(request->headers().Method()->value().c_str()));
@@ -108,9 +108,11 @@ public:
     Http::MessagePtr message{new Http::ResponseMessageImpl(std::move(response_headers))};
     message->body().reset(new Buffer::OwnedImpl(response_json));
     EXPECT_CALL(callbacks_,
-                onConfigUpdate(RepeatedProtoEq(
-                    Config::Utility::getTypedResources<envoy::api::v2::ClusterLoadAssignment>(
-                        response_pb))))
+                onConfigUpdate(
+                    RepeatedProtoEq(
+                        Config::Utility::getTypedResources<envoy::api::v2::ClusterLoadAssignment>(
+                            response_pb)),
+                    version))
         .WillOnce(ThrowOnRejectedConfig(accept));
     if (!accept) {
       EXPECT_CALL(callbacks_, onConfigUpdateFailed(_));
@@ -121,7 +123,6 @@ public:
     if (accept) {
       version_ = version;
     }
-    EXPECT_EQ(version_, subscription_->versionInfo());
     request_in_progress_ = false;
     timerTick();
   }
@@ -139,7 +140,7 @@ public:
   Event::MockDispatcher dispatcher_;
   Event::MockTimer* timer_;
   Event::TimerCb timer_cb_;
-  envoy::api::v2::Node node_;
+  envoy::api::v2::core::Node node_;
   Runtime::MockRandomGenerator random_gen_;
   Http::MockAsyncClientRequest http_request_;
   Http::AsyncClient::Callbacks* http_callbacks_;

@@ -10,11 +10,11 @@ echo "building using ${NUM_CPUS} CPUs"
 function bazel_release_binary_build() {
   echo "Building..."
   cd "${ENVOY_CI_DIR}"
-  bazel --batch build ${BAZEL_BUILD_OPTIONS} -c opt //source/exe:envoy-static.stamped
+  bazel --batch build ${BAZEL_BUILD_OPTIONS} -c opt //source/exe:envoy-static
   # Copy the envoy-static binary somewhere that we can access outside of the
   # container.
   cp -f \
-    "${ENVOY_CI_DIR}"/bazel-genfiles/source/exe/envoy-static.stamped \
+    "${ENVOY_CI_DIR}"/bazel-bin/source/exe/envoy-static \
     "${ENVOY_DELIVERY_DIR}"/envoy
 
   # TODO(mattklein123): Replace this with caching and a different job which creates images.
@@ -28,11 +28,11 @@ function bazel_release_binary_build() {
 function bazel_debug_binary_build() {
   echo "Building..."
   cd "${ENVOY_CI_DIR}"
-  bazel --batch build ${BAZEL_BUILD_OPTIONS} -c dbg //source/exe:envoy-static.stamped
+  bazel --batch build ${BAZEL_BUILD_OPTIONS} -c dbg //source/exe:envoy-static
   # Copy the envoy-static binary somewhere that we can access outside of the
   # container.
   cp -f \
-    "${ENVOY_CI_DIR}"/bazel-genfiles/source/exe/envoy-static.stamped \
+    "${ENVOY_CI_DIR}"/bazel-bin/source/exe/envoy-static \
     "${ENVOY_DELIVERY_DIR}"/envoy-debug
 }
 
@@ -49,6 +49,10 @@ if [[ "$1" == "bazel.release" ]]; then
   echo "bazel release build with tests..."
   bazel_release_binary_build
   echo "Testing..."
+  # We have various test binaries in the test directory such as tools, benchmarks, etc. We
+  # run a build pass to make sure they compile.
+  bazel --batch build ${BAZEL_BUILD_OPTIONS} -c opt //include/... //source/... //test/...
+  # Now run all of the tests which should already be compiled.
   bazel --batch test ${BAZEL_TEST_OPTIONS} -c opt //test/...
   exit 0
 elif [[ "$1" == "bazel.release.server_only" ]]; then
@@ -102,10 +106,21 @@ elif [[ "$1" == "bazel.dev" ]]; then
 elif [[ "$1" == "bazel.ipv6_tests" ]]; then
   # This is around until Circle supports IPv6. We try to run a limited set of IPv6 tests as fast
   # as possible for basic sanity testing.
+  apt-get update && apt-get install -y dnsutils && \
+    dig go.googlesource.com A go.googlesource.com AAAA # Debug IPv6 network issues
   setup_clang_toolchain
   echo "Testing..."
   cd "${ENVOY_CI_DIR}"
   bazel --batch test ${BAZEL_TEST_OPTIONS} -c fastbuild //test/integration/... //test/common/network/...
+  exit 0
+elif [[ "$1" == "bazel.api" ]]; then
+  setup_clang_toolchain
+  cd "${ENVOY_CI_DIR}"
+  echo "Building API..."
+  bazel --batch build ${BAZEL_BUILD_OPTIONS} -c fastbuild @envoy_api//envoy/...
+  echo "Testing API..."
+  bazel --batch test ${BAZEL_TEST_OPTIONS} -c fastbuild @envoy_api//test/... @envoy_api//tools/... \
+    @envoy_api//tools:capture2pcap_test
   exit 0
 elif [[ "$1" == "bazel.coverage" ]]; then
   setup_gcc_toolchain
@@ -131,7 +146,6 @@ elif [[ "$1" == "bazel.coverage" ]]; then
   # directory. Wow.
   cd "${ENVOY_BUILD_DIR}"
   SRCDIR="${GCOVR_DIR}" "${ENVOY_SRCDIR}"/test/run_envoy_bazel_coverage.sh
-  rsync -av "${ENVOY_BUILD_DIR}"/bazel-envoy/generated/coverage/ "${ENVOY_COVERAGE_DIR}"
   exit 0
 elif [[ "$1" == "bazel.coverity" ]]; then
   # Coverity Scan version 2017.07 fails to analyze the entirely of the Envoy
@@ -143,7 +157,7 @@ elif [[ "$1" == "bazel.coverity" ]]; then
   echo "Building..."
   cd "${ENVOY_CI_DIR}"
   /build/cov-analysis/bin/cov-build --dir "${ENVOY_BUILD_DIR}"/cov-int bazel --batch build --action_env=LD_PRELOAD ${BAZEL_BUILD_OPTIONS} \
-    -c opt //source/exe:envoy-static.stamped
+    -c opt //source/exe:envoy-static
   # tar up the coverity results
   tar czvf "${ENVOY_BUILD_DIR}"/envoy-coverity-output.tgz -C "${ENVOY_BUILD_DIR}" cov-int
   # Copy the Coverity results somewhere that we can access outside of the container.
@@ -162,7 +176,8 @@ elif [[ "$1" == "check_format" ]]; then
   ./tools/check_format.py check
   exit 0
 elif [[ "$1" == "docs" ]]; then
-  docs/publish.sh
+  echo "generating docs..."
+  docs/build.sh
   exit 0
 else
   echo "Invalid do_ci.sh target, see ci/README.md for valid targets."

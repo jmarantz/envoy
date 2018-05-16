@@ -1,6 +1,7 @@
 #include <cstdint>
 #include <string>
 
+#include "common/common/fmt.h"
 #include "common/config/protocol_json.h"
 #include "common/http/exception.h"
 #include "common/http/header_map_impl.h"
@@ -11,9 +12,9 @@
 #include "test/test_common/printers.h"
 #include "test/test_common/utility.h"
 
-#include "fmt/format.h"
 #include "gtest/gtest.h"
 
+using testing::Invoke;
 using testing::InvokeWithoutArgs;
 using testing::_;
 
@@ -87,7 +88,7 @@ TEST(HttpUtility, createSslRedirectPath) {
 namespace {
 
 Http2Settings parseHttp2SettingsFromJson(const std::string& json_string) {
-  envoy::api::v2::Http2ProtocolOptions http2_protocol_options;
+  envoy::api::v2::core::Http2ProtocolOptions http2_protocol_options;
   auto json_object_ptr = Json::Factory::loadFromString(json_string);
   Config::ProtocolJson::translateHttp2ProtocolOptions(
       *json_object_ptr->getObject("http2_settings", true), http2_protocol_options);
@@ -126,12 +127,21 @@ TEST(HttpUtility, parseHttp2Settings) {
 
 TEST(HttpUtility, getLastAddressFromXFF) {
   {
-    const std::string first_address = "34.0.0.1";
-    const std::string second_address = "10.0.0.1";
-    TestHeaderMapImpl request_headers{
-        {"x-forwarded-for", fmt::format("{0}, {0}, {1}", first_address, second_address)}};
+    const std::string first_address = "192.0.2.10";
+    const std::string second_address = "192.0.2.1";
+    const std::string third_address = "10.0.0.1";
+    TestHeaderMapImpl request_headers{{"x-forwarded-for", "192.0.2.10, 192.0.2.1, 10.0.0.1"}};
     auto ret = Utility::getLastAddressFromXFF(request_headers);
+    EXPECT_EQ(third_address, ret.address_->ip()->addressAsString());
+    EXPECT_FALSE(ret.single_address_);
+    ret = Utility::getLastAddressFromXFF(request_headers, 1);
     EXPECT_EQ(second_address, ret.address_->ip()->addressAsString());
+    EXPECT_FALSE(ret.single_address_);
+    ret = Utility::getLastAddressFromXFF(request_headers, 2);
+    EXPECT_EQ(first_address, ret.address_->ip()->addressAsString());
+    EXPECT_FALSE(ret.single_address_);
+    ret = Utility::getLastAddressFromXFF(request_headers, 3);
+    EXPECT_EQ(nullptr, ret.address_);
     EXPECT_FALSE(ret.single_address_);
   }
   {
@@ -237,7 +247,22 @@ TEST(HttpUtility, SendLocalReply) {
 
   EXPECT_CALL(callbacks, encodeHeaders_(_, false));
   EXPECT_CALL(callbacks, encodeData(_, true));
-  Utility::sendLocalReply(callbacks, is_reset, Http::Code::PayloadTooLarge, "large");
+  Utility::sendLocalReply(false, callbacks, is_reset, Http::Code::PayloadTooLarge, "large");
+}
+
+TEST(HttpUtility, SendLocalGrpcReply) {
+  MockStreamDecoderFilterCallbacks callbacks;
+  bool is_reset = false;
+
+  EXPECT_CALL(callbacks, encodeHeaders_(_, true))
+      .WillOnce(Invoke([&](const HeaderMap& headers, bool) -> void {
+        EXPECT_STREQ(headers.Status()->value().c_str(), "200");
+        EXPECT_NE(headers.GrpcStatus(), nullptr);
+        EXPECT_STREQ(headers.GrpcStatus()->value().c_str(), "2"); // Unknown gRPC error.
+        EXPECT_NE(headers.GrpcMessage(), nullptr);
+        EXPECT_STREQ(headers.GrpcMessage()->value().c_str(), "large");
+      }));
+  Utility::sendLocalReply(true, callbacks, is_reset, Http::Code::PayloadTooLarge, "large");
 }
 
 TEST(HttpUtility, SendLocalReplyDestroyedEarly) {
@@ -248,7 +273,32 @@ TEST(HttpUtility, SendLocalReplyDestroyedEarly) {
     is_reset = true;
   }));
   EXPECT_CALL(callbacks, encodeData(_, true)).Times(0);
-  Utility::sendLocalReply(callbacks, is_reset, Http::Code::PayloadTooLarge, "large");
+  Utility::sendLocalReply(false, callbacks, is_reset, Http::Code::PayloadTooLarge, "large");
+}
+
+TEST(HttpUtility, TestAppendHeader) {
+  // Test appending to a string with a value.
+  {
+    HeaderString value1;
+    value1.setCopy("some;", 5);
+    Utility::appendToHeader(value1, "test");
+    EXPECT_EQ(value1, "some;,test");
+  }
+
+  // Test appending to an empty string.
+  {
+    HeaderString value2;
+    Utility::appendToHeader(value2, "my tag data");
+    EXPECT_EQ(value2, "my tag data");
+  }
+
+  // Test empty data case.
+  {
+    HeaderString value3;
+    value3.setCopy("empty", 5);
+    Utility::appendToHeader(value3, "");
+    EXPECT_EQ(value3, "empty");
+  }
 }
 
 } // namespace Http

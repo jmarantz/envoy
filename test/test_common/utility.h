@@ -10,15 +10,17 @@
 #include <vector>
 
 #include "envoy/buffer/buffer.h"
+#include "envoy/config/bootstrap/v2/bootstrap.pb.h"
 #include "envoy/network/address.h"
 #include "envoy/stats/stats.h"
 
+#include "common/common/c_smart_ptr.h"
 #include "common/http/header_map_impl.h"
 #include "common/protobuf/utility.h"
+#include "common/stats/stats_impl.h"
 
 #include "test/test_common/printers.h"
 
-#include "api/bootstrap.pb.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
@@ -35,12 +37,44 @@ namespace Envoy {
     EXPECT_EQ(message, std::string(e.what()));                                                     \
   }
 
+#define EXPECT_THROW_WITH_REGEX(statement, expected_exception, regex_str)                          \
+  try {                                                                                            \
+    statement;                                                                                     \
+    ADD_FAILURE() << "Exception should take place. It did not.";                                   \
+  } catch (expected_exception & e) {                                                               \
+    EXPECT_THAT(e.what(), ::testing::ContainsRegex(regex_str));                                    \
+  }
+
+#define EXPECT_THROW_WITHOUT_REGEX(statement, expected_exception, regex_str)                       \
+  try {                                                                                            \
+    statement;                                                                                     \
+    ADD_FAILURE() << "Exception should take place. It did not.";                                   \
+  } catch (expected_exception & e) {                                                               \
+    EXPECT_THAT(e.what(), ::testing::Not(::testing::ContainsRegex(regex_str)));                    \
+  }
+
 #define VERBOSE_EXPECT_NO_THROW(statement)                                                         \
   try {                                                                                            \
     statement;                                                                                     \
   } catch (EnvoyException & e) {                                                                   \
     ADD_FAILURE() << "Unexpected exception: " << std::string(e.what());                            \
   }
+
+/*
+  Macro to use instead of EXPECT_DEATH when stderr is produced by a logger.
+  It temporarily installs stderr sink and restores the original logger sink after the test
+  completes and sdterr_sink object goes of of scope.
+  EXPECT_DEATH(statement, regex) test passes when statement causes crash and produces error message
+  matching regex. Test fails when statement does not crash or it crashes but message does not
+  match regex. If a message produced during crash is redirected away from strerr, the test fails.
+  By installing StderrSinkDelegate, the macro forces EXPECT_DEATH to send any output produced by
+  statement to stderr.
+*/
+#define EXPECT_DEATH_LOG_TO_STDERR(statement, message)                                             \
+  do {                                                                                             \
+    Logger::StderrSinkDelegate stderr_sink(Logger::Registry::getSink());                           \
+    EXPECT_DEATH(statement, message);                                                              \
+  } while (false)
 
 // Random number generator which logs its seed to stderr. To repeat a test run with a non-zero seed
 // one can run the test with --test_arg=--gtest_random_seed=[seed]
@@ -121,10 +155,29 @@ public:
    * @return bool indicating whether the protos are equal. Type name and string serialization are
    *         used for equality testing.
    */
-  template <class ProtoType> static bool protoEqual(const ProtoType& lhs, const ProtoType& rhs) {
+  static bool protoEqual(const Protobuf::Message& lhs, const Protobuf::Message& rhs) {
     return lhs.GetTypeName() == rhs.GetTypeName() &&
            lhs.SerializeAsString() == rhs.SerializeAsString();
   }
+
+  /**
+   * Split a string.
+   * @param source supplies the string to split.
+   * @param split supplies the char to split on.
+   * @return vector of strings computed after splitting `source` around all instances of `split`.
+   */
+  static std::vector<std::string> split(const std::string& source, char split);
+
+  /**
+   * Split a string.
+   * @param source supplies the string to split.
+   * @param split supplies the string to split on.
+   * @param keep_empty_string result contains empty strings if the string starts or ends with
+   * 'split', or if instances of 'split' are adjacent.
+   * @return vector of strings computed after splitting `source` around all instances of `split`.
+   */
+  static std::vector<std::string> split(const std::string& source, const std::string& split,
+                                        bool keep_empty_string = false);
 
   /**
    * Compare two RepeatedPtrFields of the same type for equality.
@@ -165,9 +218,10 @@ public:
   /**
    * Parse bootstrap config from v1 JSON static config string.
    * @param json_string source v1 JSON static config string.
-   * @return envoy::api::v2::Bootstrap.
+   * @return envoy::config::bootstrap::v2::Bootstrap.
    */
-  static envoy::api::v2::Bootstrap parseBootstrapFromJson(const std::string& json_string);
+  static envoy::config::bootstrap::v2::Bootstrap
+  parseBootstrapFromJson(const std::string& json_string);
 
   /**
    * Returns a "novel" IPv4 loopback address, if available.
@@ -193,6 +247,31 @@ public:
     MessageType message;
     MessageUtil::loadFromYaml(yaml, message);
     return message;
+  }
+
+  // Allows pretty printed test names for TEST_P using TestEnvironment::getIpVersionsForTest().
+  //
+  // Tests using this will be of the form IpVersions/SslSocketTest.HalfClose/IPv4
+  // instead of IpVersions/SslSocketTest.HalfClose/1
+  static std::string
+  ipTestParamsToString(const testing::TestParamInfo<Network::Address::IpVersion>& params) {
+    return params.param == Network::Address::IpVersion::v4 ? "IPv4" : "IPv6";
+  }
+
+  /**
+   * Return flip-ordered bytes.
+   * @param bytes input bytes.
+   * @return Type flip-ordered bytes.
+   */
+  template <class Type> static Type flipOrder(const Type& bytes) {
+    Type result{0};
+    Type data = bytes;
+    for (Type i = 0; i < sizeof(Type); i++) {
+      result <<= 8;
+      result |= (data & Type(0xFF));
+      data >>= 8;
+    }
+    return result;
   }
 };
 
@@ -252,7 +331,9 @@ public:
   }
 
   using HeaderMapImpl::addCopy;
+  using HeaderMapImpl::remove;
   void addCopy(const std::string& key, const std::string& value);
+  void remove(const std::string& key);
   std::string get_(const std::string& key);
   std::string get_(const LowerCaseString& key);
   bool has(const std::string& key);
@@ -261,8 +342,46 @@ public:
 
 } // namespace Http
 
+namespace Stats {
+/**
+ * This is a heap test allocator that works similar to how the shared memory allocator works in
+ * terms of reference counting, etc.
+ */
+class TestAllocator : public RawStatDataAllocator {
+public:
+  ~TestAllocator() { EXPECT_TRUE(stats_.empty()); }
+
+  RawStatData* alloc(const std::string& name) override {
+    CSmartPtr<RawStatData, freeAdapter>& stat_ref = stats_[name];
+    if (!stat_ref) {
+      stat_ref.reset(static_cast<RawStatData*>(::calloc(RawStatData::size(), 1)));
+      stat_ref->initialize(name);
+    } else {
+      stat_ref->ref_count_++;
+    }
+
+    return stat_ref.get();
+  }
+
+  void free(RawStatData& data) override {
+    if (--data.ref_count_ > 0) {
+      return;
+    }
+
+    if (stats_.erase(std::string(data.name_)) == 0) {
+      FAIL();
+    }
+  }
+
+private:
+  static void freeAdapter(RawStatData* data) { ::free(data); }
+  std::unordered_map<std::string, CSmartPtr<RawStatData, freeAdapter>> stats_;
+};
+
+} // namespace Stats
+
 MATCHER_P(ProtoEq, rhs, "") { return TestUtility::protoEqual(arg, rhs); }
 
 MATCHER_P(RepeatedProtoEq, rhs, "") { return TestUtility::repeatedPtrFieldEqual(arg, rhs); }
 
-} // Envoy
+} // namespace Envoy

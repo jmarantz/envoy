@@ -14,7 +14,9 @@ envoy_cc_test(
     srcs = ["stats_impl_test.cc"],
     deps = [
         "//source/common/stats:stats_lib",
+        "//test/test_common:logging_lib",
         "//test/test_common:utility_lib",
+<<<<<<< HEAD
     ],
 )
 
@@ -61,6 +63,9 @@ envoy_cc_test(
         "//test/mocks/thread_local:thread_local_mocks",
         "//test/test_common:environment_lib",
         "//test/test_common:network_utility_lib",
+=======
+        "@envoy_api//envoy/config/metrics/v2:stats_cc",
+>>>>>>> master
     ],
 )
 

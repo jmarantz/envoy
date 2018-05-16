@@ -9,9 +9,13 @@ CC ?= gcc
 CXX ?= g++
 
 # Common compiler flags
-CXXFLAGS ?= "-ggdb3 -fno-omit-frame-pointer -O2"
-CFLAGS ?= "-ggdb3 -fno-omit-frame-pointer -O2"
-CPPFLAGS ?= "-DNDEBUG"
+CXXFLAGS ?= -ggdb3 -fno-omit-frame-pointer -O2
+CFLAGS ?= -ggdb3 -fno-omit-frame-pointer -O2
+CPPFLAGS ?= -DNDEBUG
+
+# Keep track of the env vars we depend upon for $(THIRDPARTY_DEPS)/%.dep.env. If the list (captured
+# above) of flags changes, this should be updated.
+ENV_STR := $(CC) $(CXX) $(CXXFLAGS) $(CFLAGS) $(CPPFLAGS)
 
 # If $(BUILD_DISTINCT) is set in the make environment, the artifacts are built and installed in
 # distinct directories under $(THIRDPARTY_BUILD) and $(THIRDPARTY_SRC). They end up looking like
@@ -19,35 +23,44 @@ CPPFLAGS ?= "-DNDEBUG"
 # $(THIRDPARTY_BUILD)/include.
 DISTINCT_PATH = $(if $(BUILD_DISTINCT),$(@F),)
 
-build-setup = rm -rf $@.build && \
-	$(if $(BUILD_DISTINCT),rm -rf $(THIRDPARTY_BUILD)/$(DISTINCT_PATH) &&,) \
-	$(if $(BUILD_DISTINCT),rm -rf $(THIRDPARTY_SRC)/$(DISTINCT_PATH) &&,) \
-	mkdir -p $@.build && \
-	mkdir -p $(THIRDPARTY_BUILD)/$(DISTINCT_PATH)/lib && \
-	mkdir -p $(THIRDPARTY_BUILD)/$(DISTINCT_PATH)/include && \
-	cd $@.build && \
+build-setup = rm -rf "$@.build" && \
+	$(if $(BUILD_DISTINCT),rm -rf "$(THIRDPARTY_BUILD)/$(DISTINCT_PATH)" &&,) \
+	$(if $(BUILD_DISTINCT),rm -rf "$(THIRDPARTY_SRC)/$(DISTINCT_PATH)" &&,) \
+	mkdir -p "$@.build" && \
+	mkdir -p "$(THIRDPARTY_BUILD)/$(DISTINCT_PATH)/lib" && \
+	mkdir -p "$(THIRDPARTY_BUILD)/$(DISTINCT_PATH)/include" && \
+	cd "$@.build" && \
 	echo "Building in $@.build, logs at $@.log"
 
-build-complete = rm -rf $@.build && \
+build-complete = rm -rf "$@.build" && \
 	echo "Successful build of $@" && \
 	touch $@
 
 # This needs to be invoked with $(call build-recipe,DEFS) where DEFS are additional environment
 # definitions that are to be injected into the build recipe execution environment.
-build-recipe = cd $(THIRDPARTY_SRC) && \
+build-recipe = cd "$(THIRDPARTY_SRC)" && \
     $(build-setup) && \
-	(((THIRDPARTY_SRC=$(THIRDPARTY_SRC)/$(DISTINCT_PATH) \
-	   THIRDPARTY_BUILD=$(THIRDPARTY_BUILD)/$(DISTINCT_PATH) \
-	   CC=$(CC) \
-	   CXX=$(CXX) \
-	   CFLAGS=$(CFLAGS) \
-	   CXXFLAGS=$(CXXFLAGS) \
-	   CPPFLAGS=$(CPPFLAGS) \
+	(((THIRDPARTY_SRC="$(THIRDPARTY_SRC)/$(DISTINCT_PATH)" \
+	   THIRDPARTY_BUILD="$(THIRDPARTY_BUILD)/$(DISTINCT_PATH)" \
+	   CC="$(CC)" \
+	   CXX="$(CXX)" \
+	   CFLAGS="$(CFLAGS)" \
+	   CXXFLAGS="$(CXXFLAGS)" \
+	   CPPFLAGS="$(CPPFLAGS)" \
 	   $(1) \
 	   bash -c "time $(CURDIR)/recipe_wrapper.sh $(realpath $<)" 2>&1) > $@.log) || (cat $@.log; exit 1)) && \
 	$(build-complete)
 
-$(THIRDPARTY_DEPS)/%.dep: $(RECIPES)/%.sh
+# Simplify wildcard phony with FORCE target.
+.PHONY: FORCE
+FORCE:
+
+# Capture $(ENV_STR) deps to retrigger build when they change.
+.PRECIOUS: $(THIRDPARTY_DEPS)/%.dep.env
+$(THIRDPARTY_DEPS)/%.dep.env: FORCE
+	@[ "$$(cat $@)" != "$(ENV_STR)" ] && echo "$(ENV_STR)" > $@ || echo "No need to rebuild $@"
+
+$(THIRDPARTY_DEPS)/%.dep: $(RECIPES)/%.sh $(THIRDPARTY_DEPS)/%.dep.env
 	@+$(call build-recipe,)
 
 # Special support for targets that need protobuf, and hence take a dependency on protobuf.dep.

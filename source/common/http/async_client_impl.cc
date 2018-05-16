@@ -6,13 +6,14 @@
 #include <string>
 #include <vector>
 
+#include "common/grpc/common.h"
 #include "common/http/utility.h"
 
 namespace Envoy {
 namespace Http {
 
 const std::list<std::string> AsyncStreamImpl::NullCorsPolicy::allow_origin_;
-const Optional<bool> AsyncStreamImpl::NullCorsPolicy::allow_credentials_;
+const absl::optional<bool> AsyncStreamImpl::NullCorsPolicy::allow_credentials_;
 const std::vector<std::reference_wrapper<const Router::RateLimitPolicyEntry>>
     AsyncStreamImpl::NullRateLimitPolicy::rate_limit_policy_entry_;
 const AsyncStreamImpl::NullRateLimitPolicy AsyncStreamImpl::RouteEntryImpl::rate_limit_policy_;
@@ -20,7 +21,12 @@ const AsyncStreamImpl::NullRetryPolicy AsyncStreamImpl::RouteEntryImpl::retry_po
 const AsyncStreamImpl::NullShadowPolicy AsyncStreamImpl::RouteEntryImpl::shadow_policy_;
 const AsyncStreamImpl::NullVirtualHost AsyncStreamImpl::RouteEntryImpl::virtual_host_;
 const AsyncStreamImpl::NullRateLimitPolicy AsyncStreamImpl::NullVirtualHost::rate_limit_policy_;
+const AsyncStreamImpl::NullConfig AsyncStreamImpl::NullVirtualHost::route_configuration_;
 const std::multimap<std::string, std::string> AsyncStreamImpl::RouteEntryImpl::opaque_config_;
+const envoy::api::v2::core::Metadata AsyncStreamImpl::RouteEntryImpl::metadata_;
+const AsyncStreamImpl::NullPathMatchCriterion
+    AsyncStreamImpl::RouteEntryImpl::path_match_criterion_;
+const std::list<LowerCaseString> AsyncStreamImpl::NullConfig::internal_only_headers_;
 
 AsyncClientImpl::AsyncClientImpl(const Upstream::ClusterInfo& cluster, Stats::Store& stats_store,
                                  Event::Dispatcher& dispatcher,
@@ -38,8 +44,9 @@ AsyncClientImpl::~AsyncClientImpl() {
   }
 }
 
-AsyncClient::Request* AsyncClientImpl::send(MessagePtr&& request, AsyncClient::Callbacks& callbacks,
-                                            const Optional<std::chrono::milliseconds>& timeout) {
+AsyncClient::Request*
+AsyncClientImpl::send(MessagePtr&& request, AsyncClient::Callbacks& callbacks,
+                      const absl::optional<std::chrono::milliseconds>& timeout) {
   AsyncRequestImpl* async_request =
       new AsyncRequestImpl(std::move(request), *this, callbacks, timeout);
   async_request->initialize();
@@ -55,9 +62,10 @@ AsyncClient::Request* AsyncClientImpl::send(MessagePtr&& request, AsyncClient::C
   }
 }
 
-AsyncClient::Stream* AsyncClientImpl::start(AsyncClient::StreamCallbacks& callbacks,
-                                            const Optional<std::chrono::milliseconds>& timeout,
-                                            bool buffer_body_for_retry) {
+AsyncClient::Stream*
+AsyncClientImpl::start(AsyncClient::StreamCallbacks& callbacks,
+                       const absl::optional<std::chrono::milliseconds>& timeout,
+                       bool buffer_body_for_retry) {
   std::unique_ptr<AsyncStreamImpl> new_stream{
       new AsyncStreamImpl(*this, callbacks, timeout, buffer_body_for_retry)};
   new_stream->moveIntoList(std::move(new_stream), active_streams_);
@@ -65,7 +73,7 @@ AsyncClient::Stream* AsyncClientImpl::start(AsyncClient::StreamCallbacks& callba
 }
 
 AsyncStreamImpl::AsyncStreamImpl(AsyncClientImpl& parent, AsyncClient::StreamCallbacks& callbacks,
-                                 const Optional<std::chrono::milliseconds>& timeout,
+                                 const absl::optional<std::chrono::milliseconds>& timeout,
                                  bool buffer_body_for_retry)
     : parent_(parent), stream_callbacks_(callbacks), stream_id_(parent.config_.random_.random()),
       router_(parent.config_), request_info_(Protocol::Http11),
@@ -80,15 +88,8 @@ AsyncStreamImpl::AsyncStreamImpl(AsyncClientImpl& parent, AsyncClient::StreamCal
 }
 
 void AsyncStreamImpl::encodeHeaders(HeaderMapPtr&& headers, bool end_stream) {
-#ifndef NVLOG
-  ENVOY_LOG(debug, "async http request response headers (end_stream={}):", end_stream);
-  headers->iterate(
-      [](const HeaderEntry& header, void*) -> HeaderMap::Iterate {
-        ENVOY_LOG(debug, "  '{}':'{}'", header.key().c_str(), header.value().c_str());
-        return HeaderMap::Iterate::Continue;
-      },
-      nullptr);
-#endif
+  ENVOY_LOG(debug, "async http request response headers (end_stream={}):\n{}", end_stream,
+            *headers);
   ASSERT(!remote_closed_);
   stream_callbacks_.onHeaders(std::move(headers), end_stream);
   closeRemote(end_stream);
@@ -103,21 +104,14 @@ void AsyncStreamImpl::encodeData(Buffer::Instance& data, bool end_stream) {
 }
 
 void AsyncStreamImpl::encodeTrailers(HeaderMapPtr&& trailers) {
-#ifndef NVLOG
-  ENVOY_LOG(debug, "async http request response trailers:");
-  trailers->iterate(
-      [](const HeaderEntry& header, void*) -> HeaderMap::Iterate {
-        ENVOY_LOG(debug, "  '{}':'{}'", header.key().c_str(), header.value().c_str());
-        return HeaderMap::Iterate::Continue;
-      },
-      nullptr);
-#endif
+  ENVOY_LOG(debug, "async http request response trailers:\n{}", *trailers);
   ASSERT(!remote_closed_);
   stream_callbacks_.onTrailers(std::move(trailers));
   closeRemote(true);
 }
 
 void AsyncStreamImpl::sendHeaders(HeaderMap& headers, bool end_stream) {
+  is_grpc_request_ = Grpc::Common::hasGrpcContentType(headers);
   headers.insertEnvoyInternalRequest().value().setReference(
       Headers::get().EnvoyInternalRequestValues.True);
   Utility::appendXff(headers, *parent_.config_.local_info_.address());
@@ -179,7 +173,7 @@ void AsyncStreamImpl::resetStream() {
 
 AsyncRequestImpl::AsyncRequestImpl(MessagePtr&& request, AsyncClientImpl& parent,
                                    AsyncClient::Callbacks& callbacks,
-                                   const Optional<std::chrono::milliseconds>& timeout)
+                                   const absl::optional<std::chrono::milliseconds>& timeout)
     // We tell the underlying stream to not buffer because we already have the full request and
     // and can handle any buffered body requests.
     : AsyncStreamImpl(parent, *this, timeout, false), request_(std::move(request)),

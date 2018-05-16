@@ -7,7 +7,6 @@
 #include <memory>
 #include <string>
 
-#include "envoy/common/optional.h"
 #include "envoy/server/configuration.h"
 #include "envoy/server/drain_manager.h"
 #include "envoy/server/guarddog.h"
@@ -18,6 +17,7 @@
 #include "envoy/tracing/http_tracer.h"
 
 #include "common/access_log/access_log_manager_impl.h"
+#include "common/common/logger_delegates.h"
 #include "common/runtime/runtime_impl.h"
 #include "common/ssl/context_manager_impl.h"
 
@@ -26,6 +26,8 @@
 #include "server/listener_manager_impl.h"
 #include "server/test_hooks.h"
 #include "server/worker_impl.h"
+
+#include "absl/types/optional.h"
 
 namespace Envoy {
 namespace Server {
@@ -72,6 +74,8 @@ public:
  */
 class InstanceUtil : Logger::Loggable<Logger::Id::main> {
 public:
+  enum class BootstrapVersion { V1, V2 };
+
   /**
    * Default implementation of runtime loader creation used in the real server and in most
    * integration tests where a mock runtime is not needed.
@@ -79,22 +83,23 @@ public:
   static Runtime::LoaderPtr createRuntime(Instance& server, Server::Configuration::Initial& config);
 
   /**
-   * Helper for flushing counters and gauges to sinks. This takes care of calling beginFlush(),
-   * latching of counters and flushing, flushing of gauges, and calling endFlush(), on each sink.
+   * Helper for flushing counters, gauges and hisograms to sinks. This takes care of calling
+   * beginFlush(), latching of counters and flushing, flushing of gauges, and calling endFlush(), on
+   * each sink.
    * @param sinks supplies the list of sinks.
    * @param store supplies the store to flush.
    */
-  static void flushCountersAndGaugesToSinks(const std::list<Stats::SinkPtr>& sinks,
-                                            Stats::Store& store);
+  static void flushMetricsToSinks(const std::list<Stats::SinkPtr>& sinks, Stats::Store& store);
 
   /**
    * Load a bootstrap config from either v1 or v2 and perform validation.
    * @param bootstrap supplies the bootstrap to fill.
    * @param config_path supplies the config path.
    * @param v2_only supplies whether to attempt v1 fallback.
+   * @return BootstrapVersion to indicate which version of the API was parsed.
    */
-  static void loadBootstrapConfig(envoy::api::v2::Bootstrap& bootstrap,
-                                  const std::string& config_path, bool v2_only);
+  static BootstrapVersion loadBootstrapConfig(envoy::config::bootstrap::v2::Bootstrap& bootstrap,
+                                              Options& options);
 };
 
 /**
@@ -125,7 +130,7 @@ public:
   InstanceImpl(Options& options, Network::Address::InstanceConstSharedPtr local_address,
                TestHooks& hooks, HotRestart& restarter, Stats::StoreRoot& store,
                Thread::BasicLockable& access_log_lock, ComponentFactory& component_factory,
-               ThreadLocal::Instance& tls);
+               Runtime::RandomGeneratorPtr&& random_generator, ThreadLocal::Instance& tls);
 
   ~InstanceImpl() override;
 
@@ -146,9 +151,9 @@ public:
   HotRestart& hotRestart() override { return restarter_; }
   Init::Manager& initManager() override { return init_manager_; }
   ListenerManager& listenerManager() override { return *listener_manager_; }
-  Runtime::RandomGenerator& random() override { return random_generator_; }
+  Runtime::RandomGenerator& random() override { return *random_generator_; }
   RateLimit::ClientPtr
-  rateLimitClient(const Optional<std::chrono::milliseconds>& timeout) override {
+  rateLimitClient(const absl::optional<std::chrono::milliseconds>& timeout) override {
     return config_->rateLimitClientFactory().create(timeout);
   }
   Runtime::Loader& runtime() override;
@@ -165,19 +170,20 @@ public:
   const LocalInfo::LocalInfo& localInfo() override { return *local_info_; }
 
 private:
+  ProtobufTypes::MessagePtr dumpBootstrapConfig();
   void flushStats();
   void initialize(Options& options, Network::Address::InstanceConstSharedPtr local_address,
                   ComponentFactory& component_factory);
-  void loadServerFlags(const Optional<std::string>& flags_path);
+  void loadServerFlags(const absl::optional<std::string>& flags_path);
   uint64_t numConnections();
   void startWorkers();
+  void terminate();
 
   Options& options_;
   HotRestart& restarter_;
   const time_t start_time_;
   time_t original_start_time_;
   Stats::StoreRoot& stats_store_;
-  std::vector<Stats::TagExtractorPtr> tag_extractors_;
   std::unique_ptr<ServerStats> server_stats_;
   ThreadLocal::Instance& thread_local_;
   Api::ApiPtr api_;
@@ -185,14 +191,13 @@ private:
   std::unique_ptr<AdminImpl> admin_;
   Singleton::ManagerPtr singleton_manager_;
   Network::ConnectionHandlerPtr handler_;
-  Runtime::RandomGeneratorImpl random_generator_;
+  Runtime::RandomGeneratorPtr random_generator_;
   Runtime::LoaderPtr runtime_loader_;
   std::unique_ptr<Ssl::ContextManagerImpl> ssl_context_manager_;
   ProdListenerComponentFactory listener_component_factory_;
   ProdWorkerFactory worker_factory_;
   std::unique_ptr<ListenerManager> listener_manager_;
   std::unique_ptr<Configuration::Main> config_;
-  Stats::ScopePtr admin_scope_;
   Network::DnsResolverSharedPtr dns_resolver_;
   Event::TimerPtr stat_flush_timer_;
   LocalInfo::LocalInfoPtr local_info_;
@@ -201,7 +206,11 @@ private:
   std::unique_ptr<Upstream::ClusterManagerFactory> cluster_manager_factory_;
   InitManagerImpl init_manager_;
   std::unique_ptr<Server::GuardDog> guard_dog_;
+  bool terminated_;
+  std::unique_ptr<Logger::FileSinkDelegate> file_logger_;
+  envoy::config::bootstrap::v2::Bootstrap bootstrap_;
+  ConfigTracker::EntryOwnerPtr config_tracker_entry_;
 };
 
-} // Server
+} // namespace Server
 } // namespace Envoy

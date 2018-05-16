@@ -20,20 +20,34 @@ namespace Envoy {
 namespace Http {
 namespace Http1 {
 
+ConnPoolImpl::ConnPoolImpl(Event::Dispatcher& dispatcher, Upstream::HostConstSharedPtr host,
+                           Upstream::ResourcePriority priority,
+                           const Network::ConnectionSocket::OptionsSharedPtr& options)
+    : dispatcher_(dispatcher), host_(host), priority_(priority), socket_options_(options),
+      upstream_ready_timer_(dispatcher_.createTimer([this]() { onUpstreamReady(); })) {}
+
 ConnPoolImpl::~ConnPoolImpl() {
-  closeConnections();
-
-  // Make sure all clients are destroyed before we are destroyed.
-  dispatcher_.clearDeferredDeleteList();
-}
-
-void ConnPoolImpl::closeConnections() {
   while (!ready_clients_.empty()) {
     ready_clients_.front()->codec_client_->close();
   }
 
   while (!busy_clients_.empty()) {
     busy_clients_.front()->codec_client_->close();
+  }
+
+  // Make sure all clients are destroyed before we are destroyed.
+  dispatcher_.clearDeferredDeleteList();
+}
+
+void ConnPoolImpl::drainConnections() {
+  while (!ready_clients_.empty()) {
+    ready_clients_.front()->codec_client_->close();
+  }
+
+  // We drain busy clients by manually setting remaining requests to 1. Thus, when the next
+  // response completes the client will be destroyed.
+  for (const auto& client : busy_clients_) {
+    client->remaining_requests_ = 1;
   }
 }
 
@@ -172,7 +186,7 @@ void ConnPoolImpl::onConnectionEvent(ActiveClient& client, Network::ConnectionEv
   // whether the client is in the ready list (connected) or the busy list (failed to connect).
   if (event == Network::ConnectionEvent::Connected) {
     conn_connect_ms_->complete();
-    processIdleClient(client);
+    processIdleClient(client, false);
   }
 }
 
@@ -201,23 +215,46 @@ void ConnPoolImpl::onResponseComplete(ActiveClient& client) {
     host_->cluster().stats().upstream_cx_max_requests_.inc();
     onDownstreamReset(client);
   } else {
-    processIdleClient(client);
+    // Upstream connection might be closed right after response is complete. Setting delay=true
+    // here to attach pending requests in next dispatcher loop to handle that case.
+    // https://github.com/envoyproxy/envoy/issues/2715
+    processIdleClient(client, true);
   }
 }
 
-void ConnPoolImpl::processIdleClient(ActiveClient& client) {
+void ConnPoolImpl::onUpstreamReady() {
+  upstream_ready_enabled_ = false;
+  while (!pending_requests_.empty() && !ready_clients_.empty()) {
+    ActiveClient& client = *ready_clients_.front();
+    ENVOY_CONN_LOG(debug, "attaching to next request", *client.codec_client_);
+    // There is work to do so bind a request to the client and move it to the busy list. Pending
+    // requests are pushed onto the front, so pull from the back.
+    attachRequestToClient(client, pending_requests_.back()->decoder_,
+                          pending_requests_.back()->callbacks_);
+    pending_requests_.pop_back();
+    client.moveBetweenLists(ready_clients_, busy_clients_);
+  }
+}
+
+void ConnPoolImpl::processIdleClient(ActiveClient& client, bool delay) {
   client.stream_wrapper_.reset();
-  if (pending_requests_.empty()) {
-    // There is nothing to service so just move the connection into the ready list.
+  if (pending_requests_.empty() || delay) {
+    // There is nothing to service or delayed processing is requested, so just move the connection
+    // into the ready list.
     ENVOY_CONN_LOG(debug, "moving to ready", *client.codec_client_);
     client.moveBetweenLists(busy_clients_, ready_clients_);
   } else {
-    // There is work to do so bind a request to the client and move it to the busy list. Pending
-    // requests are pushed onto the front, so pull from the back.
+    // There is work to do immediately so bind a request to the client and move it to the busy list.
+    // Pending requests are pushed onto the front, so pull from the back.
     ENVOY_CONN_LOG(debug, "attaching to next request", *client.codec_client_);
     attachRequestToClient(client, pending_requests_.back()->decoder_,
                           pending_requests_.back()->callbacks_);
     pending_requests_.pop_back();
+  }
+
+  if (delay && !pending_requests_.empty() && !upstream_ready_enabled_) {
+    upstream_ready_enabled_ = true;
+    upstream_ready_timer_->enableTimer(std::chrono::milliseconds(0));
   }
 
   checkForDrained();
@@ -277,7 +314,8 @@ ConnPoolImpl::ActiveClient::ActiveClient(ConnPoolImpl& parent)
 
   parent_.conn_connect_ms_.reset(
       new Stats::Timespan(parent_.host_->cluster().stats().upstream_cx_connect_ms_));
-  Upstream::Host::CreateConnectionData data = parent_.host_->createConnection(parent_.dispatcher_);
+  Upstream::Host::CreateConnectionData data =
+      parent_.host_->createConnection(parent_.dispatcher_, parent_.socket_options_);
   real_host_description_ = data.host_description_;
   codec_client_ = parent_.createCodecClient(data);
   codec_client_->addConnectionCallbacks(*this);
@@ -316,7 +354,7 @@ void ConnPoolImpl::ActiveClient::onConnectTimeout() {
 
 CodecClientPtr ConnPoolImplProd::createCodecClient(Upstream::Host::CreateConnectionData& data) {
   CodecClientPtr codec{new CodecClientProd(CodecClient::Type::HTTP1, std::move(data.connection_),
-                                           data.host_description_)};
+                                           data.host_description_, dispatcher_)};
   return codec;
 }
 

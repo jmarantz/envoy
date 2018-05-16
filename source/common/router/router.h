@@ -5,6 +5,7 @@
 #include <memory>
 #include <string>
 
+#include "envoy/config/filter/http/router/v2/router.pb.h"
 #include "envoy/http/codec.h"
 #include "envoy/http/codes.h"
 #include "envoy/http/filter.h"
@@ -20,10 +21,10 @@
 #include "common/common/hash.h"
 #include "common/common/hex.h"
 #include "common/common/logger.h"
+#include "common/config/well_known_names.h"
 #include "common/http/utility.h"
 #include "common/request_info/request_info_impl.h"
-
-#include "api/filter/http/router.pb.h"
+#include "common/router/config_impl.h"
 
 namespace Envoy {
 namespace Router {
@@ -36,6 +37,7 @@ namespace Router {
   COUNTER(no_route)                                                                                \
   COUNTER(no_cluster)                                                                              \
   COUNTER(rq_redirect)                                                                             \
+  COUNTER(rq_direct_response)                                                                      \
   COUNTER(rq_total)
 // clang-format on
 
@@ -96,7 +98,8 @@ public:
         shadow_writer_(std::move(shadow_writer)) {}
 
   FilterConfig(const std::string& stat_prefix, Server::Configuration::FactoryContext& context,
-               ShadowWriterPtr&& shadow_writer, const envoy::api::v2::filter::http::Router& config)
+               ShadowWriterPtr&& shadow_writer,
+               const envoy::config::filter::http::router::v2::Router& config)
       : FilterConfig(stat_prefix, context.localInfo(), context.scope(), context.clusterManager(),
                      context.runtime(), context.random(), std::move(shadow_writer),
                      PROTOBUF_GET_WRAPPED_OR_DEFAULT(config, dynamic_stats, true),
@@ -147,7 +150,7 @@ public:
   void setDecoderFilterCallbacks(Http::StreamDecoderFilterCallbacks& callbacks) override;
 
   // Upstream::LoadBalancerContext
-  Optional<uint64_t> computeHashKey() override {
+  absl::optional<uint64_t> computeHashKey() override {
     if (route_entry_ && downstream_headers_) {
       auto hash_policy = route_entry_->hashPolicy();
       if (hash_policy) {
@@ -160,8 +163,27 @@ public:
     }
     return {};
   }
-  const Router::MetadataMatchCriteria* metadataMatchCriteria() const override {
+  const Router::MetadataMatchCriteria* metadataMatchCriteria() override {
     if (route_entry_) {
+      // Have we been called before? If so, there's no need to recompute because
+      // by the time this method is called for the first time, route_entry_ should
+      // not change anymore.
+      if (metadata_match_ != nullptr) {
+        return metadata_match_.get();
+      }
+
+      // The request's metadata, if present, takes precedence over the route's.
+      const auto& request_metadata = callbacks_->requestInfo().dynamicMetadata().filter_metadata();
+      const auto filter_it = request_metadata.find(Envoy::Config::MetadataFilters::get().ENVOY_LB);
+      if (filter_it != request_metadata.end()) {
+        if (route_entry_->metadataMatchCriteria() != nullptr) {
+          metadata_match_ =
+              route_entry_->metadataMatchCriteria()->mergeMatchCriteria(filter_it->second);
+        } else {
+          metadata_match_ = std::make_unique<Router::MetadataMatchCriteriaImpl>(filter_it->second);
+        }
+        return metadata_match_.get();
+      }
       return route_entry_->metadataMatchCriteria();
     }
     return nullptr;
@@ -205,9 +227,11 @@ private:
     void encodeHeaders(bool end_stream);
     void encodeData(Buffer::Instance& data, bool end_stream);
     void encodeTrailers(const Http::HeaderMap& trailers);
+
     void resetStream();
     void setupPerTryTimeout();
     void onPerTryTimeout();
+    void maybeEndDecode(bool end_stream);
 
     void onUpstreamHostSelected(Upstream::HostDescriptionConstSharedPtr host) {
       request_info_.onUpstreamHostSelected(host);
@@ -216,6 +240,7 @@ private:
     }
 
     // Http::StreamDecoder
+    void decode100ContinueHeaders(Http::HeaderMapPtr&& headers) override;
     void decodeHeaders(Http::HeaderMapPtr&& headers, bool end_stream) override;
     void decodeData(Buffer::Instance& data, bool end_stream) override;
     void decodeTrailers(Http::HeaderMapPtr&& trailers) override;
@@ -261,13 +286,14 @@ private:
     Event::TimerPtr per_try_timeout_;
     Http::ConnectionPool::Cancellable* conn_pool_stream_handle_{};
     Http::StreamEncoder* request_encoder_{};
-    Optional<Http::StreamResetReason> deferred_reset_reason_;
+    absl::optional<Http::StreamResetReason> deferred_reset_reason_;
     Buffer::WatermarkBufferPtr buffered_request_body_;
     Upstream::HostDescriptionConstSharedPtr upstream_host_;
     DownstreamWatermarkManager downstream_watermark_manager_{*this};
     Tracing::SpanPtr span_;
     RequestInfo::RequestInfoImpl request_info_;
     Http::HeaderMap* upstream_headers_{};
+    Http::HeaderMap* upstream_trailers_{};
 
     bool calling_encode_headers_ : 1;
     bool upstream_canary_ : 1;
@@ -297,19 +323,19 @@ private:
   void maybeDoShadowing();
   void onRequestComplete();
   void onResponseTimeout();
+  void onUpstream100ContinueHeaders(Http::HeaderMapPtr&& headers);
   void onUpstreamHeaders(uint64_t response_code, Http::HeaderMapPtr&& headers, bool end_stream);
   void onUpstreamData(Buffer::Instance& data, bool end_stream);
   void onUpstreamTrailers(Http::HeaderMapPtr&& trailers);
   void onUpstreamComplete();
   void onUpstreamReset(UpstreamResetType type,
-                       const Optional<Http::StreamResetReason>& reset_reason);
+                       const absl::optional<Http::StreamResetReason>& reset_reason);
   void sendNoHealthyUpstreamResponse();
   bool setupRetry(bool end_stream);
   void doRetry();
   // Called immediately after a non-5xx header is received from upstream, performs stats accounting
   // and handle difference between gRPC and non-gRPC requests.
   void handleNon5xxResponseHeaders(const Http::HeaderMap& headers, bool end_stream);
-  void sendLocalReply(Http::Code code, const std::string& body, bool overloaded);
 
   FilterConfig& config_;
   Http::StreamDecoderFilterCallbacks* callbacks_{};
@@ -328,6 +354,7 @@ private:
   MonotonicTime downstream_request_complete_time_;
   uint32_t buffer_limit_{0};
   bool stream_destroyed_{};
+  MetadataMatchCriteriaConstPtr metadata_match_;
 
   // list of cookies to add to upstream headers
   std::vector<std::string> downstream_set_cookies_;

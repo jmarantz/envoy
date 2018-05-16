@@ -33,26 +33,22 @@ public:
 
   // Event::Dispatcher
   void clearDeferredDeleteList() override;
+  Network::ConnectionPtr
+  createServerConnection(Network::ConnectionSocketPtr&& socket,
+                         Network::TransportSocketPtr&& transport_socket) override;
   Network::ClientConnectionPtr
   createClientConnection(Network::Address::InstanceConstSharedPtr address,
-                         Network::Address::InstanceConstSharedPtr source_address) override;
-  Network::ClientConnectionPtr
-  createSslClientConnection(Ssl::ClientContext& ssl_ctx,
-                            Network::Address::InstanceConstSharedPtr address,
-                            Network::Address::InstanceConstSharedPtr source_address) override;
+                         Network::Address::InstanceConstSharedPtr source_address,
+                         Network::TransportSocketPtr&& transport_socket,
+                         const Network::ConnectionSocket::OptionsSharedPtr& options) override;
   Network::DnsResolverSharedPtr createDnsResolver(
       const std::vector<Network::Address::InstanceConstSharedPtr>& resolvers) override;
   FileEventPtr createFileEvent(int fd, FileReadyCb cb, FileTriggerType trigger,
                                uint32_t events) override;
   Filesystem::WatcherPtr createFilesystemWatcher() override;
-  Network::ListenerPtr createListener(Network::ConnectionHandler& conn_handler,
-                                      Network::ListenSocket& socket, Network::ListenerCallbacks& cb,
-                                      Stats::Scope& scope,
-                                      const Network::ListenerOptions& listener_options) override;
-  Network::ListenerPtr createSslListener(Network::ConnectionHandler& conn_handler,
-                                         Ssl::ServerContext& ssl_ctx, Network::ListenSocket& socket,
-                                         Network::ListenerCallbacks& cb, Stats::Scope& scope,
-                                         const Network::ListenerOptions& listener_options) override;
+  Network::ListenerPtr createListener(Network::Socket& socket, Network::ListenerCallbacks& cb,
+                                      bool bind_to_port,
+                                      bool hand_off_restored_destination_connections) override;
   TimerPtr createTimer(TimerCb cb) override;
   void deferredDelete(DeferredDeletablePtr&& to_delete) override;
   void exit() override;
@@ -63,14 +59,13 @@ public:
 
 private:
   void runPostCallbacks();
-#ifndef NDEBUG
+
   // Validate that an operation is thread safe, i.e. it's invoked on the same thread that the
   // dispatcher run loop is executing on. We allow run_tid_ == 0 for tests where we don't invoke
   // run().
   bool isThreadSafe() const {
     return run_tid_ == 0 || run_tid_ == Thread::Thread::currentThreadId();
   }
-#endif
 
   Thread::ThreadId run_tid_{};
   Buffer::WatermarkFactoryPtr buffer_factory_;

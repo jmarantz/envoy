@@ -22,7 +22,9 @@ As a developer convenience, a [WORKSPACE](https://github.com/envoyproxy/envoy/bl
 version](https://github.com/envoyproxy/envoy/blob/master/bazel/repositories.bzl) of the various Envoy
 dependencies are provided. These are provided as is, they are only suitable for development and
 testing purposes. The specific versions of the Envoy dependencies used in this build may not be
-up-to-date with the latest security patches.
+up-to-date with the latest security patches. See
+[this doc](https://github.com/envoyproxy/envoy/blob/master/bazel/EXTERNAL_DEPS.md#updating-an-external-dependency-version)
+for how to update or override dependencies.
 
 1. Install the latest version of [Bazel](https://bazel.build/versions/master/docs/install.html) in your environment.
 2. Install external dependencies libtool, cmake, and realpath libraries separately.
@@ -31,6 +33,8 @@ On Ubuntu, run the following commands:
  apt-get install libtool
  apt-get install cmake
  apt-get install realpath
+ apt-get install clang-format-5.0
+ apt-get install automake
 ```
 
 On Fedora (maybe also other red hat distros), run the following:
@@ -49,13 +53,14 @@ brew install bazel
 brew install automake
 ```
 
-Envoy compiles and passes tests with the version of clang installed by XCode 8.3.3:
-Apple LLVM version 8.1.0 (clang-802.0.42).
+Envoy compiles and passes tests with the version of clang installed by XCode 9.3.0:
+Apple LLVM version 9.1.0 (clang-902.0.30).
 
 3. Install Golang on your machine. This is required as part of building [BoringSSL](https://boringssl.googlesource.com/boringssl/+/HEAD/BUILDING.md)
 and also for [Buildifer](https://github.com/bazelbuild/buildtools) which is used for formatting bazel BUILD files.
-4. `bazel fetch //source/...` to fetch and build all external dependencies. This may take some time.
-5. `bazel build //source/exe:envoy-static` from the Envoy source directory.
+4. `go get github.com/bazelbuild/buildtools/buildifier` to install buildifier
+5. `bazel fetch //source/...` to fetch and build all external dependencies. This may take some time.
+6. `bazel build //source/exe:envoy-static` from the Envoy source directory.
 
 ## Building Bazel with the CI Docker image
 
@@ -236,17 +241,67 @@ bazel test -c dbg --config=clang-tsan //test/...
 
 ## Log Verbosity
 
-By default, log verbosity is controlled at runtime in all builds. However, it may be desirable to
-remove log statements of lower importance during compilation to enhance performance. To remove
-`trace` and `debug` log statements during compilation define `NVLOG`:
-```
-bazel build --copt=-DNVLOG //source/exe:envoy-static
-```
+Log verbosity is controlled at runtime in all builds.
 
-## Hot Restart
+## Disabling optional features
 
-Hot restart can be disabled in any build by specifying `--define=hot_restart=disabled`
-on the Bazel command line.
+The following optional features can be disabled on the Bazel build command-line:
+
+* Hot restart with `--define hot_restart=disabled`
+* Google C++ gRPC client with `--define google_grpc=disabled`
+* Backtracing on signals with `--define signal_trace=disabled`
+
+## Enabling optional features
+
+The following optional features can be enabled on the Bazel build command-line:
+
+* Exported symbols during linking with `--define exported_symbols=enabled`.
+  This is useful in cases where you have a lua script that loads shared object libraries, such as
+  those installed via luarocks.
+* Perf annotation with `--define perf_annotation=enabled` (see
+  source/common/common/perf_annotation.h for details).
+
+## Disabling extensions
+
+Envoy uses a modular build which allows extensions to be removed if they are not needed or desired.
+Extensions that can be removed are contained in
+[extensions_build_config.bzl](../source/extensions/extensions_build_config.bzl). Use the following
+procedure to customize the extensions for your build:
+
+* The Envoy build assumes that a Bazel repository named `@envoy_build_config` exists which
+  contains the file `@envoy_build_config//:extensions_build_config.bzl`. In the default build,
+  a synthetic repository is created containing [extensions_build_config.bzl](../source/extensions/extensions_build_config.bzl).
+  Thus, the default build has all extensions.
+* Start by creating a new Bazel workspace somewhere in the filesystem that your build can access.
+  This workspace should contain:
+  * Empty WORKSPACE file.
+  * Empty BUILD file.
+  * A copy of [extensions_build_config.bzl](../source/extensions/extensions_build_config.bzl).
+  * Comment out any extensions that you don't want to build in your file copy.
+
+To have your local build use your overridden configuration repository there are two options:
+
+1. Use the [`--override_repository`](https://docs.bazel.build/versions/master/command-line-reference.html)
+   CLI option to override the `@envoy_build_config` repo.
+2. Use the following snippet in your WORKSPACE before you load the Envoy repository. E.g.,
+
+```
+workspace(name = "envoy")
+
+local_repository(
+    name = "envoy_build_config",
+    # Relative paths are also supported.
+    path = "/somewhere/on/filesystem/envoy_build_config",
+)
+
+local_repository(
+    name = "envoy",
+    # Relative paths are also supported.
+    path = "/somewhere/on/filesystem/envoy",
+)
+
+...
+```
 
 ## Stats Tunables
 
@@ -259,7 +314,6 @@ value. For example:
 ```
 bazel build --copts=-DENVOY_DEFAULT_MAX_STATS=32768 --copts=-DENVOY_DEFAULT_MAX_OBJ_NAME_LENGTH=150 //source/exe:envoy-static
 ```
-
 
 # Release builds
 

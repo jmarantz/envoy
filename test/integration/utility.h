@@ -28,6 +28,7 @@ public:
   const std::string& body() { return body_; }
 
   // Http::StreamDecoder
+  void decode100ContinueHeaders(Http::HeaderMapPtr&&) override {}
   void decodeHeaders(Http::HeaderMapPtr&& headers, bool end_stream) override;
   void decodeData(Buffer::Instance&, bool end_stream) override;
   void decodeTrailers(Http::HeaderMapPtr&& trailers) override;
@@ -67,7 +68,7 @@ private:
         : parent_(parent), data_callback_(cb) {}
 
     // Network::ReadFilter
-    Network::FilterStatus onData(Buffer::Instance& data) override {
+    Network::FilterStatus onData(Buffer::Instance& data, bool) override {
       data_callback_(*parent_.client_, data);
       data.drain(data.length());
       return Network::FilterStatus::StopIteration;
@@ -89,6 +90,23 @@ class IntegrationUtil {
 public:
   /**
    * Make a new connection, issues a request, and then disconnect when the request is complete.
+   * @param addr supplies the address to connect to.
+   * @param method supplies the request method.
+   * @param url supplies the request url.
+   * @param body supplies the optional request body to send.
+   * @param type supplies the codec to use for the request.
+   * @param host supplies the host header to use for the request.
+   * @param content_type supplies the content-type header to use for the request, if any.
+   * @return BufferingStreamDecoderPtr the complete request or a partial request if there was
+   *         remote easly disconnection.
+   */
+  static BufferingStreamDecoderPtr
+  makeSingleRequest(const Network::Address::InstanceConstSharedPtr& addr, const std::string& method,
+                    const std::string& url, const std::string& body, Http::CodecClient::Type type,
+                    const std::string& host = "host", const std::string& content_type = "");
+
+  /**
+   * Make a new connection, issues a request, and then disconnect when the request is complete.
    * @param port supplies the port to connect to on localhost.
    * @param method supplies the request method.
    * @param url supplies the request url.
@@ -96,13 +114,15 @@ public:
    * @param type supplies the codec to use for the request.
    * @param version the IP addess version of the client and server.
    * @param host supplies the host header to use for the request.
+   * @param content_type supplies the content-type header to use for the request, if any.
    * @return BufferingStreamDecoderPtr the complete request or a partial request if there was
    *         remote easly disconnection.
    */
   static BufferingStreamDecoderPtr
   makeSingleRequest(uint32_t port, const std::string& method, const std::string& url,
                     const std::string& body, Http::CodecClient::Type type,
-                    Network::Address::IpVersion version, const std::string& host = "host");
+                    Network::Address::IpVersion ip_version, const std::string& host = "host",
+                    const std::string& content_type = "");
 };
 
 // A set of connection callbacks which tracks connection state.
@@ -131,15 +151,17 @@ public:
   WaitForPayloadReader(Event::Dispatcher& dispatcher);
 
   // Network::ReadFilter
-  Network::FilterStatus onData(Buffer::Instance& data) override;
+  Network::FilterStatus onData(Buffer::Instance& data, bool end_stream) override;
 
   void set_data_to_wait_for(const std::string& data) { data_to_wait_for_ = data; }
   const std::string& data() { return data_; }
+  bool readLastByte() { return read_end_stream_; }
 
 private:
   Event::Dispatcher& dispatcher_;
   std::string data_to_wait_for_;
   std::string data_;
+  bool read_end_stream_{};
 };
 
 } // namespace Envoy

@@ -2,6 +2,7 @@
 #include <memory>
 #include <vector>
 
+#include "common/event/dispatcher_impl.h"
 #include "common/http/http2/conn_pool.h"
 #include "common/network/utility.h"
 #include "common/upstream/upstream_impl.h"
@@ -57,9 +58,11 @@ public:
     Network::MockClientConnection* connection_;
     CodecClientForTest* codec_client_;
     Event::MockTimer* connect_timer_;
+    Event::DispatcherPtr client_dispatcher_;
   };
 
-  Http2ConnPoolImplTest() : pool_(dispatcher_, host_, Upstream::ResourcePriority::Default) {}
+  Http2ConnPoolImplTest()
+      : pool_(dispatcher_, host_, Upstream::ResourcePriority::Default, nullptr) {}
 
   ~Http2ConnPoolImplTest() {
     // Make sure all gauges are 0.
@@ -74,13 +77,15 @@ public:
     test_client.connection_ = new NiceMock<Network::MockClientConnection>();
     test_client.codec_ = new NiceMock<Http::MockClientConnection>();
     test_client.connect_timer_ = new NiceMock<Event::MockTimer>(&dispatcher_);
+    test_client.client_dispatcher_.reset(new Event::DispatcherImpl);
 
+    std::shared_ptr<Upstream::MockClusterInfo> cluster{new NiceMock<Upstream::MockClusterInfo>()};
     Network::ClientConnectionPtr connection{test_client.connection_};
-    test_client.codec_client_ =
-        new CodecClientForTest(std::move(connection), test_client.codec_,
-                               [this](CodecClient*) -> void { onClientDestroy(); }, nullptr);
-
-    EXPECT_CALL(dispatcher_, createClientConnection_(_, _))
+    test_client.codec_client_ = new CodecClientForTest(
+        std::move(connection), test_client.codec_,
+        [this](CodecClient*) -> void { onClientDestroy(); },
+        Upstream::makeTestHost(cluster, "tcp://127.0.0.1:9000"), *test_client.client_dispatcher_);
+    EXPECT_CALL(dispatcher_, createClientConnection_(_, _, _, _))
         .WillOnce(Return(test_client.connection_));
     EXPECT_CALL(pool_, createCodecClient_(_))
         .WillOnce(Invoke([this](Upstream::Host::CreateConnectionData&) -> CodecClient* {
@@ -120,11 +125,14 @@ public:
 };
 
 /**
- * Verify that connections are closed when requested.
+ * Verify that connections are drained when requested.
  */
-TEST_F(Http2ConnPoolImplTest, CloseConnections) {
+TEST_F(Http2ConnPoolImplTest, DrainConnections) {
   InSequence s;
   pool_.max_streams_ = 1;
+
+  // Test drain connections call prior to any connections being created.
+  pool_.drainConnections();
 
   expectClientCreate();
   ActiveTestRequest r1(*this, 0);
@@ -138,8 +146,14 @@ TEST_F(Http2ConnPoolImplTest, CloseConnections) {
   r2.callbacks_.outer_encoder_->encodeHeaders(HeaderMapImpl{}, true);
   expectClientConnect(1);
 
-  pool_.closeConnections();
-  EXPECT_CALL(*this, onClientDestroy()).Times(2);
+  // This will move primary to draining and destroy draining.
+  pool_.drainConnections();
+  EXPECT_CALL(*this, onClientDestroy());
+  dispatcher_.clearDeferredDeleteList();
+
+  // This will destroy draining.
+  test_clients_[1].connection_->raiseEvent(Network::ConnectionEvent::RemoteClose);
+  EXPECT_CALL(*this, onClientDestroy());
   dispatcher_.clearDeferredDeleteList();
 }
 

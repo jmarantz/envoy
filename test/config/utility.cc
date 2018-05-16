@@ -1,14 +1,18 @@
 #include "test/config/utility.h"
 
+#include "envoy/config/filter/network/http_connection_manager/v2/http_connection_manager.pb.h"
+#include "envoy/config/transport_socket/capture/v2alpha/capture.pb.h"
 #include "envoy/http/codec.h"
 
 #include "common/common/assert.h"
+#include "common/config/resources.h"
 #include "common/protobuf/utility.h"
 
 #include "test/test_common/environment.h"
 #include "test/test_common/network_utility.h"
 
-#include "api/filter/network/http_connection_manager.pb.h"
+#include "absl/strings/str_replace.h"
+#include "gtest/gtest.h"
 
 namespace Envoy {
 
@@ -72,12 +76,41 @@ config:
     max_request_time : 120s
 )EOF";
 
+const std::string ConfigHelper::SMALL_BUFFER_FILTER =
+    R"EOF(
+name: envoy.buffer
+config:
+    max_request_bytes : 1024
+    max_request_time : 5s
+)EOF";
+
 const std::string ConfigHelper::DEFAULT_HEALTH_CHECK_FILTER =
     R"EOF(
 name: envoy.health_check
 config:
     pass_through_mode: false
     endpoint: /healthcheck
+)EOF";
+
+const std::string ConfigHelper::DEFAULT_SQUASH_FILTER =
+    R"EOF(
+name: envoy.squash
+config:
+  cluster: squash
+  attachment_template:
+    spec:
+      attachment:
+        env: "{{ SQUASH_ENV_TEST }}"
+      match_request: true
+  attachment_timeout:
+    seconds: 1
+    nanos: 0
+  attachment_poll_period:
+    seconds: 2
+    nanos: 0
+  request_timeout:
+    seconds: 1
+    nanos: 0
 )EOF";
 
 ConfigHelper::ConfigHelper(const Network::Address::IpVersion version, const std::string& config) {
@@ -99,8 +132,10 @@ ConfigHelper::ConfigHelper(const Network::Address::IpVersion version, const std:
 
   for (int i = 0; i < static_resources->clusters_size(); ++i) {
     auto* cluster = static_resources->mutable_clusters(i);
-    auto host_socket_addr = cluster->mutable_hosts(0)->mutable_socket_address();
-    host_socket_addr->set_address(Network::Test::getLoopbackAddressString(version));
+    if (cluster->mutable_hosts(0)->has_socket_address()) {
+      auto host_socket_addr = cluster->mutable_hosts(0)->mutable_socket_address();
+      host_socket_addr->set_address(Network::Test::getLoopbackAddressString(version));
+    }
   }
 }
 
@@ -111,18 +146,57 @@ void ConfigHelper::finalize(const std::vector<uint32_t>& ports) {
   }
 
   uint32_t port_idx = 0;
+  bool eds_hosts = false;
   auto* static_resources = bootstrap_.mutable_static_resources();
-  for (int i = 0; i < bootstrap_.mutable_static_resources()->clusters_size(); ++i) {
-    auto* cluster = static_resources->mutable_clusters(i);
-    for (int j = 0; j < cluster->hosts_size(); ++j) {
-      if (cluster->mutable_hosts(j)->has_socket_address()) {
-        auto* host_socket_addr = cluster->mutable_hosts(j)->mutable_socket_address();
-        RELEASE_ASSERT(ports.size() >= port_idx);
-        host_socket_addr->set_port_value(ports[port_idx++]);
+  const auto capture_path = TestEnvironment::getOptionalEnvVar("CAPTURE_PATH");
+  if (capture_path) {
+    ENVOY_LOG_MISC(debug, "Test capture path set to {}", capture_path.value());
+  } else {
+    ENVOY_LOG_MISC(debug, "No capture path set for tests");
+  }
+  for (int i = 0; i < bootstrap_.mutable_static_resources()->listeners_size(); ++i) {
+    auto* listener = static_resources->mutable_listeners(i);
+    for (int j = 0; j < listener->filter_chains_size(); ++j) {
+      if (capture_path) {
+        auto* filter_chain = listener->mutable_filter_chains(j);
+        const bool has_tls = filter_chain->has_tls_context();
+        absl::optional<ProtobufWkt::Struct> tls_config;
+        if (has_tls) {
+          tls_config = ProtobufWkt::Struct();
+          MessageUtil::jsonConvert(filter_chain->tls_context(), tls_config.value());
+          filter_chain->clear_tls_context();
+        }
+        setCaptureTransportSocket(capture_path.value(), fmt::format("listener_{}_{}", i, j),
+                                  *filter_chain->mutable_transport_socket(), tls_config);
       }
     }
   }
-  ASSERT(port_idx == ports.size());
+  for (int i = 0; i < bootstrap_.mutable_static_resources()->clusters_size(); ++i) {
+    auto* cluster = static_resources->mutable_clusters(i);
+    if (cluster->type() == envoy::api::v2::Cluster::EDS) {
+      eds_hosts = true;
+    } else {
+      for (int j = 0; j < cluster->hosts_size(); ++j) {
+        if (cluster->mutable_hosts(j)->has_socket_address()) {
+          auto* host_socket_addr = cluster->mutable_hosts(j)->mutable_socket_address();
+          RELEASE_ASSERT(ports.size() > port_idx);
+          host_socket_addr->set_port_value(ports[port_idx++]);
+        }
+      }
+    }
+    if (capture_path) {
+      const bool has_tls = cluster->has_tls_context();
+      absl::optional<ProtobufWkt::Struct> tls_config;
+      if (has_tls) {
+        tls_config = ProtobufWkt::Struct();
+        MessageUtil::jsonConvert(cluster->tls_context(), tls_config.value());
+        cluster->clear_tls_context();
+      }
+      setCaptureTransportSocket(capture_path.value(), fmt::format("cluster_{}", i),
+                                *cluster->mutable_transport_socket(), tls_config);
+    }
+  }
+  ASSERT(port_idx == ports.size() || eds_hosts);
 
   if (!connect_timeout_set_) {
 #ifdef __APPLE__
@@ -136,6 +210,35 @@ void ConfigHelper::finalize(const std::vector<uint32_t>& ports) {
   }
 
   finalized_ = true;
+}
+
+void ConfigHelper::setCaptureTransportSocket(
+    const std::string& capture_path, const std::string& type,
+    envoy::api::v2::core::TransportSocket& transport_socket,
+    const absl::optional<ProtobufWkt::Struct>& tls_config) {
+  // Determine inner transport socket.
+  envoy::api::v2::core::TransportSocket inner_transport_socket;
+  if (!transport_socket.name().empty()) {
+    RELEASE_ASSERT(!tls_config);
+    inner_transport_socket.MergeFrom(transport_socket);
+  } else if (tls_config.has_value()) {
+    inner_transport_socket.set_name("ssl");
+    inner_transport_socket.mutable_config()->MergeFrom(tls_config.value());
+  } else {
+    inner_transport_socket.set_name("raw_buffer");
+  }
+  // Configure outer capture transport socket.
+  transport_socket.set_name("envoy.transport_sockets.capture");
+  envoy::config::transport_socket::capture::v2alpha::Capture capture_config;
+  auto* file_sink = capture_config.mutable_file_sink();
+  const ::testing::TestInfo* const test_info =
+      ::testing::UnitTest::GetInstance()->current_test_info();
+  const std::string test_id =
+      std::string(test_info->name()) + "_" + std::string(test_info->test_case_name()) + "_" + type;
+  file_sink->set_path_prefix(capture_path + "_" + absl::StrReplaceAll(test_id, {{"/", "_"}}));
+  file_sink->set_format(envoy::config::transport_socket::capture::v2alpha::FileSink::PROTO_TEXT);
+  capture_config.mutable_transport_socket()->MergeFrom(inner_transport_socket);
+  MessageUtil::jsonConvert(capture_config, *transport_socket.mutable_config());
 }
 
 void ConfigHelper::setSourceAddress(const std::string& address_string) {
@@ -153,7 +256,7 @@ void ConfigHelper::setSourceAddress(const std::string& address_string) {
 
 void ConfigHelper::setDefaultHostAndRoute(const std::string& domains, const std::string& prefix) {
   RELEASE_ASSERT(!finalized_);
-  envoy::api::v2::filter::network::HttpConnectionManager hcm_config;
+  envoy::config::filter::network::http_connection_manager::v2::HttpConnectionManager hcm_config;
   loadHttpConnectionManager(hcm_config);
 
   auto* virtual_host = hcm_config.mutable_route_config()->mutable_virtual_hosts(0);
@@ -176,11 +279,12 @@ void ConfigHelper::setBufferLimits(uint32_t upstream_buffer_limit,
     cluster->mutable_per_connection_buffer_limit_bytes()->set_value(upstream_buffer_limit);
   }
 
-  auto filter = getFilterFromListener();
-  if (filter->name() == "envoy.http_connection_manager") {
-    envoy::api::v2::filter::network::HttpConnectionManager hcm_config;
+  auto filter = getFilterFromListener("envoy.http_connection_manager");
+  if (filter) {
+    envoy::config::filter::network::http_connection_manager::v2::HttpConnectionManager hcm_config;
     loadHttpConnectionManager(hcm_config);
-    if (hcm_config.codec_type() == envoy::api::v2::filter::network::HttpConnectionManager::HTTP2) {
+    if (hcm_config.codec_type() ==
+        envoy::config::filter::network::http_connection_manager::v2::HttpConnectionManager::HTTP2) {
       const uint32_t size =
           std::max(downstream_buffer_limit, Http::Http2Settings::MIN_INITIAL_STREAM_WINDOW_SIZE);
       auto* options = hcm_config.mutable_http2_protocol_options();
@@ -207,10 +311,10 @@ void ConfigHelper::setConnectTimeout(std::chrono::milliseconds timeout) {
 
 void ConfigHelper::addRoute(const std::string& domains, const std::string& prefix,
                             const std::string& cluster, bool validate_clusters,
-                            envoy::api::v2::RouteAction::ClusterNotFoundResponseCode code,
-                            envoy::api::v2::VirtualHost::TlsRequirementType type) {
+                            envoy::api::v2::route::RouteAction::ClusterNotFoundResponseCode code,
+                            envoy::api::v2::route::VirtualHost::TlsRequirementType type) {
   RELEASE_ASSERT(!finalized_);
-  envoy::api::v2::filter::network::HttpConnectionManager hcm_config;
+  envoy::config::filter::network::http_connection_manager::v2::HttpConnectionManager hcm_config;
   loadHttpConnectionManager(hcm_config);
 
   auto* route_config = hcm_config.mutable_route_config();
@@ -228,7 +332,7 @@ void ConfigHelper::addRoute(const std::string& domains, const std::string& prefi
 
 void ConfigHelper::addFilter(const std::string& config) {
   RELEASE_ASSERT(!finalized_);
-  envoy::api::v2::filter::network::HttpConnectionManager hcm_config;
+  envoy::config::filter::network::http_connection_manager::v2::HttpConnectionManager hcm_config;
   loadHttpConnectionManager(hcm_config);
 
   auto* filter_list_back = hcm_config.add_http_filters();
@@ -243,9 +347,10 @@ void ConfigHelper::addFilter(const std::string& config) {
 }
 
 void ConfigHelper::setClientCodec(
-    envoy::api::v2::filter::network::HttpConnectionManager::CodecType type) {
+    envoy::config::filter::network::http_connection_manager::v2::HttpConnectionManager::CodecType
+        type) {
   RELEASE_ASSERT(!finalized_);
-  envoy::api::v2::filter::network::HttpConnectionManager hcm_config;
+  envoy::config::filter::network::http_connection_manager::v2::HttpConnectionManager hcm_config;
   if (loadHttpConnectionManager(hcm_config)) {
     hcm_config.set_codec_type(type);
     storeHttpConnectionManager(hcm_config);
@@ -266,9 +371,9 @@ void ConfigHelper::addSslConfig() {
   auto* validation_context = common_tls_context->mutable_validation_context();
   validation_context->mutable_trusted_ca()->set_filename(
       TestEnvironment::runfilesPath("test/config/integration/certs/cacert.pem"));
-  validation_context->add_verify_certificate_hash("9E:D6:53:36:49:26:9C:69:4F:71:7E:87:29:A1:C8:B5:"
-                                                  "50:06:FD:51:01:3C:0E:0D:42:94:91:6E:00:D7:EA:"
-                                                  "04");
+  validation_context->add_verify_certificate_hash(
+      "E0:F3:C8:CE:5E:2E:A3:05:F0:70:1F:F5:12:E3:6E:2E:"
+      "97:92:82:84:A2:28:BC:F7:73:32:D3:39:30:A1:B6:FD");
 
   auto* tls_certificate = common_tls_context->add_tls_certificates();
   tls_certificate->mutable_certificate_chain()->set_filename(
@@ -277,7 +382,14 @@ void ConfigHelper::addSslConfig() {
       TestEnvironment::runfilesPath("/test/config/integration/certs/serverkey.pem"));
 }
 
-envoy::api::v2::Filter* ConfigHelper::getFilterFromListener() {
+void ConfigHelper::renameListener(const std::string& name) {
+  auto* static_resources = bootstrap_.mutable_static_resources();
+  if (static_resources->listeners_size() > 0) {
+    static_resources->mutable_listeners(0)->set_name(name);
+  }
+}
+
+envoy::api::v2::listener::Filter* ConfigHelper::getFilterFromListener(const std::string& name) {
   RELEASE_ASSERT(!finalized_);
   if (bootstrap_.mutable_static_resources()->listeners_size() == 0) {
     return nullptr;
@@ -287,16 +399,18 @@ envoy::api::v2::Filter* ConfigHelper::getFilterFromListener() {
     return nullptr;
   }
   auto* filter_chain = listener->mutable_filter_chains(0);
-  if (filter_chain->filters_size() == 0) {
-    return nullptr;
+  for (ssize_t i = 0; i < filter_chain->filters_size(); i++) {
+    if (filter_chain->mutable_filters(i)->name() == name) {
+      return filter_chain->mutable_filters(i);
+    }
   }
-  return filter_chain->mutable_filters(0);
+  return nullptr;
 }
 
 bool ConfigHelper::loadHttpConnectionManager(
-    envoy::api::v2::filter::network::HttpConnectionManager& hcm) {
+    envoy::config::filter::network::http_connection_manager::v2::HttpConnectionManager& hcm) {
   RELEASE_ASSERT(!finalized_);
-  auto* hcm_filter = getFilterFromListener();
+  auto* hcm_filter = getFilterFromListener("envoy.http_connection_manager");
   if (hcm_filter) {
     MessageUtil::jsonConvert(*hcm_filter->mutable_config(), hcm);
     return true;
@@ -305,9 +419,10 @@ bool ConfigHelper::loadHttpConnectionManager(
 }
 
 void ConfigHelper::storeHttpConnectionManager(
-    const envoy::api::v2::filter::network::HttpConnectionManager& hcm) {
+    const envoy::config::filter::network::http_connection_manager::v2::HttpConnectionManager& hcm) {
   RELEASE_ASSERT(!finalized_);
-  auto* hcm_config_struct = getFilterFromListener()->mutable_config();
+  auto* hcm_config_struct =
+      getFilterFromListener("envoy.http_connection_manager")->mutable_config();
 
   MessageUtil::jsonConvert(hcm, *hcm_config_struct);
 }
@@ -318,12 +433,39 @@ void ConfigHelper::addConfigModifier(ConfigModifierFunction function) {
 }
 
 void ConfigHelper::addConfigModifier(HttpModifierFunction function) {
-  addConfigModifier([function, this](envoy::api::v2::Bootstrap&) -> void {
-    envoy::api::v2::filter::network::HttpConnectionManager hcm_config;
+  addConfigModifier([function, this](envoy::config::bootstrap::v2::Bootstrap&) -> void {
+    envoy::config::filter::network::http_connection_manager::v2::HttpConnectionManager hcm_config;
     loadHttpConnectionManager(hcm_config);
     function(hcm_config);
     storeHttpConnectionManager(hcm_config);
   });
+}
+
+EdsHelper::EdsHelper() : eds_path_(TestEnvironment::writeStringToFileForTest("eds.pb_text", "")) {
+  // cluster.cluster_0.update_success will be incremented on the initial
+  // load when Envoy comes up.
+  ++update_successes_;
+}
+
+void EdsHelper::setEds(
+    const std::vector<envoy::api::v2::ClusterLoadAssignment>& cluster_load_assignments,
+    IntegrationTestServerStats& server_stats) {
+  // Write to file the DiscoveryResponse and trigger inotify watch.
+  envoy::api::v2::DiscoveryResponse eds_response;
+  eds_response.set_version_info(std::to_string(eds_version_++));
+  eds_response.set_type_url(Config::TypeUrl::get().ClusterLoadAssignment);
+  for (const auto& cluster_load_assignment : cluster_load_assignments) {
+    eds_response.add_resources()->PackFrom(cluster_load_assignment);
+  }
+  // Past the initial write, need move semantics to trigger inotify move event that the
+  // FilesystemSubscriptionImpl is subscribed to.
+  std::string path =
+      TestEnvironment::writeStringToFileForTest("eds.update.pb_text", eds_response.DebugString());
+  RELEASE_ASSERT(::rename(path.c_str(), eds_path_.c_str()) == 0);
+  // Make sure Envoy has consumed the update now that it is running.
+  server_stats.waitForCounterGe("cluster.cluster_0.update_success", ++update_successes_);
+  RELEASE_ASSERT(update_successes_ ==
+                 server_stats.counter("cluster.cluster_0.update_success")->value());
 }
 
 } // namespace Envoy

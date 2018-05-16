@@ -53,12 +53,6 @@ cc_library(
 )
 
 cc_library(
-    name = "ssl",
-    srcs = ["thirdparty_build/lib/libssl.a"],
-    deps = [":crypto"],
-)
-
-cc_library(
     name = "tcmalloc_and_profiler",
     srcs = ["thirdparty_build/lib/libtcmalloc_and_profiler.a"],
     hdrs = glob(["thirdparty_build/include/gperftools/**/*.h"]),
@@ -79,4 +73,5 @@ cc_library(
         "thirdparty_build/include/zconf.h",
         "thirdparty_build/include/zlib.h",
     ],
+    includes = ["thirdparty_build/include"],
 )

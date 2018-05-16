@@ -6,27 +6,29 @@
 #include "common/config/json_utility.h"
 #include "common/config/lds_json.h"
 #include "common/config/utility.h"
-#include "common/config/well_known_names.h"
 #include "common/json/config_schemas.h"
 #include "common/protobuf/utility.h"
+
+#include "extensions/stat_sinks/well_known_names.h"
 
 namespace Envoy {
 namespace Config {
 
-void BootstrapJson::translateClusterManagerBootstrap(const Json::Object& json_cluster_manager,
-                                                     envoy::api::v2::Bootstrap& bootstrap) {
+void BootstrapJson::translateClusterManagerBootstrap(
+    const Json::Object& json_cluster_manager, envoy::config::bootstrap::v2::Bootstrap& bootstrap) {
   json_cluster_manager.validateSchema(Json::Schema::CLUSTER_MANAGER_SCHEMA);
 
-  Optional<envoy::api::v2::ConfigSource> eds_config;
+  absl::optional<envoy::api::v2::core::ConfigSource> eds_config;
   if (json_cluster_manager.hasObject("sds")) {
     const auto json_sds = json_cluster_manager.getObject("sds");
     auto* cluster = bootstrap.mutable_static_resources()->mutable_clusters()->Add();
     Config::CdsJson::translateCluster(*json_sds->getObject("cluster"),
-                                      Optional<envoy::api::v2::ConfigSource>(), *cluster);
+                                      absl::optional<envoy::api::v2::core::ConfigSource>(),
+                                      *cluster);
     Config::Utility::translateEdsConfig(
         *json_sds,
         *bootstrap.mutable_dynamic_resources()->mutable_deprecated_v1()->mutable_sds_config());
-    eds_config.value(bootstrap.dynamic_resources().deprecated_v1().sds_config());
+    eds_config = bootstrap.dynamic_resources().deprecated_v1().sds_config();
   }
 
   if (json_cluster_manager.hasObject("cds")) {
@@ -52,7 +54,7 @@ void BootstrapJson::translateClusterManagerBootstrap(const Json::Object& json_cl
 }
 
 void BootstrapJson::translateBootstrap(const Json::Object& json_config,
-                                       envoy::api::v2::Bootstrap& bootstrap) {
+                                       envoy::config::bootstrap::v2::Bootstrap& bootstrap) {
   json_config.validateSchema(Json::Schema::TOP_LEVEL_CONFIG_SCHEMA);
 
   translateClusterManagerBootstrap(*json_config.getObject("cluster_manager"), bootstrap);
@@ -72,8 +74,8 @@ void BootstrapJson::translateBootstrap(const Json::Object& json_config,
   auto* stats_sinks = bootstrap.mutable_stats_sinks();
   if (json_config.hasObject("statsd_udp_ip_address")) {
     auto* stats_sink = stats_sinks->Add();
-    stats_sink->set_name(Config::StatsSinkNames::get().STATSD);
-    envoy::api::v2::StatsdSink statsd_sink;
+    stats_sink->set_name(Extensions::StatSinks::StatsSinkNames::get().STATSD);
+    envoy::config::metrics::v2::StatsdSink statsd_sink;
     AddressJson::translateAddress(json_config.getString("statsd_udp_ip_address"), false, true,
                                   *statsd_sink.mutable_address());
     MessageUtil::jsonConvert(statsd_sink, *stats_sink->mutable_config());
@@ -81,8 +83,8 @@ void BootstrapJson::translateBootstrap(const Json::Object& json_config,
 
   if (json_config.hasObject("statsd_tcp_cluster_name")) {
     auto* stats_sink = stats_sinks->Add();
-    stats_sink->set_name(Config::StatsSinkNames::get().STATSD);
-    envoy::api::v2::StatsdSink statsd_sink;
+    stats_sink->set_name(Extensions::StatSinks::StatsSinkNames::get().STATSD);
+    envoy::config::metrics::v2::StatsdSink statsd_sink;
     statsd_sink.set_tcp_cluster_name(json_config.getString("statsd_tcp_cluster_name"));
     MessageUtil::jsonConvert(statsd_sink, *stats_sink->mutable_config());
   }

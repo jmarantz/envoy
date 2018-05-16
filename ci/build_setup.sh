@@ -65,6 +65,7 @@ export BAZEL_BUILD_OPTIONS="--strategy=Genrule=standalone --spawn_strategy=stand
   --verbose_failures ${BAZEL_OPTIONS} --action_env=HOME --action_env=PYTHONUSERBASE \
   --jobs=${NUM_CPUS} --show_task_finish ${BAZEL_BUILD_EXTRA_OPTIONS}"
 export BAZEL_TEST_OPTIONS="${BAZEL_BUILD_OPTIONS} --test_env=HOME --test_env=PYTHONUSERBASE \
+  --test_env=UBSAN_OPTIONS=print_stacktrace=1 \
   --cache_test_results=no --test_output=all ${BAZEL_EXTRA_TEST_OPTIONS}"
 [[ "${BAZEL_EXPUNGE}" == "1" ]] && "${BAZEL}" clean --expunge
 ln -sf /thirdparty "${ENVOY_SRCDIR}"/ci/prebuilt
@@ -85,7 +86,7 @@ then
 fi
 
 # This is the hash on https://github.com/envoyproxy/envoy-filter-example.git we pin to.
-(cd "${ENVOY_FILTER_EXAMPLE_SRCDIR}" && git fetch origin && git checkout b904b8ce9cabafb485e6b6fae1d0fd9e33ddfcc1)
+(cd "${ENVOY_FILTER_EXAMPLE_SRCDIR}" && git fetch origin && git checkout -f 4b6c55b726eda8a1f99e6f4ca1a87f6ce670604f)
 cp -f "${ENVOY_SRCDIR}"/ci/WORKSPACE.filter.example "${ENVOY_FILTER_EXAMPLE_SRCDIR}"/WORKSPACE
 
 # Also setup some space for building Envoy standalone.
@@ -115,7 +116,7 @@ mkdir -p "${ENVOY_CI_DIR}"/bazel
 ln -sf "${ENVOY_SRCDIR}"/bazel/get_workspace_status "${ENVOY_FILTER_EXAMPLE_SRCDIR}"/bazel/
 ln -sf "${ENVOY_SRCDIR}"/bazel/get_workspace_status "${ENVOY_CI_DIR}"/bazel/
 
-export BUILDIFIER_BIN="/usr/lib/go/bin/buildifier"
+export BUILDIFIER_BIN="/usr/local/bin/buildifier"
 
 function cleanup() {
   # Remove build artifacts. This doesn't mess with incremental builds as these

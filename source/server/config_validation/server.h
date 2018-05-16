@@ -2,7 +2,6 @@
 
 #include <iostream>
 
-#include "envoy/common/optional.h"
 #include "envoy/server/drain_manager.h"
 #include "envoy/server/instance.h"
 #include "envoy/ssl/context_manager.h"
@@ -23,6 +22,8 @@
 #include "server/http/admin.h"
 #include "server/listener_manager_impl.h"
 #include "server/server.h"
+
+#include "absl/types/optional.h"
 
 namespace Envoy {
 namespace Server {
@@ -58,7 +59,7 @@ public:
   // Server::Instance
   Admin& admin() override { return admin_; }
   Api::Api& api() override { return *api_; }
-  Upstream::ClusterManager& clusterManager() override { return config_->clusterManager(); }
+  Upstream::ClusterManager& clusterManager() override { return *config_->clusterManager(); }
   Ssl::ContextManager& sslContextManager() override { return *ssl_context_manager_; }
   Event::Dispatcher& dispatcher() override { return *dispatcher_; }
   Network::DnsResolverSharedPtr dnsResolver() override { return dns_resolver_; }
@@ -72,7 +73,7 @@ public:
   ListenerManager& listenerManager() override { return listener_manager_; }
   Runtime::RandomGenerator& random() override { return random_generator_; }
   RateLimit::ClientPtr
-  rateLimitClient(const Optional<std::chrono::milliseconds>& timeout) override {
+  rateLimitClient(const absl::optional<std::chrono::milliseconds>& timeout) override {
     return config_->rateLimitClientFactory().create(timeout);
   }
   Runtime::Loader& runtime() override { return *runtime_loader_; }
@@ -89,13 +90,23 @@ public:
   const LocalInfo::LocalInfo& localInfo() override { return *local_info_; }
 
   // Server::ListenerComponentFactory
-  std::vector<Configuration::NetworkFilterFactoryCb>
-  createFilterFactoryList(const Protobuf::RepeatedPtrField<envoy::api::v2::Filter>& filters,
-                          Configuration::FactoryContext& context) override {
-    return ProdListenerComponentFactory::createFilterFactoryList_(filters, context);
+  LdsApiPtr createLdsApi(const envoy::api::v2::core::ConfigSource& lds_config) override {
+    return std::make_unique<LdsApiImpl>(lds_config, clusterManager(), dispatcher(), random(),
+                                        initManager(), localInfo(), stats(), listenerManager());
   }
-  Network::ListenSocketSharedPtr createListenSocket(Network::Address::InstanceConstSharedPtr,
-                                                    bool) override {
+  std::vector<Network::FilterFactoryCb> createNetworkFilterFactoryList(
+      const Protobuf::RepeatedPtrField<envoy::api::v2::listener::Filter>& filters,
+      Configuration::FactoryContext& context) override {
+    return ProdListenerComponentFactory::createNetworkFilterFactoryList_(filters, context);
+  }
+  std::vector<Network::ListenerFilterFactoryCb> createListenerFilterFactoryList(
+      const Protobuf::RepeatedPtrField<envoy::api::v2::listener::ListenerFilter>& filters,
+      Configuration::ListenerFactoryContext& context) override {
+    return ProdListenerComponentFactory::createListenerFilterFactoryList_(filters, context);
+  }
+  Network::SocketSharedPtr createListenSocket(Network::Address::InstanceConstSharedPtr,
+                                              const Network::Socket::OptionsSharedPtr&,
+                                              bool) override {
     // Returned sockets are not currently used so we can return nothing here safely vs. a
     // validation mock.
     return nullptr;
@@ -118,7 +129,6 @@ private:
 
   Options& options_;
   Stats::IsolatedStoreImpl& stats_store_;
-  std::vector<Stats::TagExtractorPtr> tag_extractors_;
   ThreadLocal::InstanceImpl thread_local_;
   Api::ApiPtr api_;
   Event::DispatcherPtr dispatcher_;

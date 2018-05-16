@@ -22,8 +22,10 @@ envoy_cc_library(
     name = "admin_interface",
     hdrs = ["admin.h"],
     deps = [
+        ":config_tracker_interface",
         "//include/envoy/buffer:buffer_interface",
         "//include/envoy/http:codes_interface",
+        "//include/envoy/http:header_map_interface",
         "//include/envoy/network:listen_socket_interface",
     ],
 )
@@ -31,11 +33,20 @@ envoy_cc_library(
 envoy_cc_library(
     name = "configuration_interface",
     hdrs = ["configuration.h"],
+    external_deps = ["abseil_optional"],
     deps = [
-        "//include/envoy/common:optional",
         "//include/envoy/ratelimit:ratelimit_interface",
         "//include/envoy/tracing:http_tracer_interface",
         "//include/envoy/upstream:cluster_manager_interface",
+    ],
+)
+
+envoy_cc_library(
+    name = "config_tracker_interface",
+    hdrs = ["config_tracker.h"],
+    deps = [
+        "//source/common/common:non_copyable",
+        "//source/common/protobuf",
     ],
 )
 
@@ -55,9 +66,18 @@ envoy_cc_library(
 )
 
 envoy_cc_library(
+    name = "health_checker_config_interface",
+    hdrs = ["health_checker_config.h"],
+    deps = ["//include/envoy/upstream:health_checker_interface"],
+)
+
+envoy_cc_library(
     name = "hot_restart_interface",
     hdrs = ["hot_restart.h"],
-    deps = ["//include/envoy/event:dispatcher_interface"],
+    deps = [
+        "//include/envoy/event:dispatcher_interface",
+        "//include/envoy/thread:thread_interface",
+    ],
 )
 
 envoy_cc_library(
@@ -127,13 +147,13 @@ envoy_cc_library(
         "//source/common/common:assert_lib",
         "//source/common/common:macros",
         "//source/common/protobuf",
+        "@envoy_api//envoy/api/v2/core:base_cc",
     ],
 )
 
 envoy_cc_library(
     name = "listener_manager_interface",
     hdrs = ["listener_manager.h"],
-    external_deps = ["envoy_lds"],
     deps = [
         ":drain_manager_interface",
         ":filter_config_interface",
@@ -141,6 +161,17 @@ envoy_cc_library(
         "//include/envoy/network:filter_interface",
         "//include/envoy/network:listen_socket_interface",
         "//include/envoy/ssl:context_interface",
+        "//source/common/protobuf",
+        "@envoy_api//envoy/api/v2/listener:listener_cc",
+    ],
+)
+
+envoy_cc_library(
+    name = "transport_socket_config_interface",
+    hdrs = ["transport_socket_config.h"],
+    deps = [
+        "//include/envoy/network:transport_socket_interface",
+        "//include/envoy/ssl:context_manager_interface",
         "//source/common/protobuf",
     ],
 )

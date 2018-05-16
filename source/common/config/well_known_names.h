@@ -6,9 +6,8 @@
 
 #include "envoy/common/exception.h"
 
+#include "common/common/assert.h"
 #include "common/singleton/const_singleton.h"
-
-#include "fmt/format.h"
 
 namespace Envoy {
 namespace Config {
@@ -25,10 +24,7 @@ public:
     const std::string prefix = "envoy.";
     for (const auto& name : v2_names) {
       // Ensure there are no misplaced names provided to this constructor.
-      if (name.find(prefix) != 0) {
-        throw EnvoyException(fmt::format(
-            "Attempted to create a conversion for a v2 name that isn't prefixed by {}", prefix));
-      }
+      ASSERT(name.find(prefix) == 0);
       v1_to_v2_names_[name.substr(prefix.size())] = name;
     }
   }
@@ -48,36 +44,6 @@ private:
 };
 
 /**
- * Well-known network filter names.
- */
-class NetworkFilterNameValues {
-public:
-  // Client ssl auth filter
-  const std::string CLIENT_SSL_AUTH = "envoy.client_ssl_auth";
-  // Echo filter
-  const std::string ECHO = "envoy.echo";
-  // HTTP connection manager filter
-  const std::string HTTP_CONNECTION_MANAGER = "envoy.http_connection_manager";
-  // Mongo proxy filter
-  const std::string MONGO_PROXY = "envoy.mongo_proxy";
-  // Rate limit filter
-  const std::string RATE_LIMIT = "envoy.ratelimit";
-  // Redis proxy filter
-  const std::string REDIS_PROXY = "envoy.redis_proxy";
-  // IP tagging filter
-  const std::string TCP_PROXY = "envoy.tcp_proxy";
-
-  // Converts names from v1 to v2
-  const V1Converter v1_converter_;
-
-  NetworkFilterNameValues()
-      : v1_converter_({CLIENT_SSL_AUTH, ECHO, HTTP_CONNECTION_MANAGER, MONGO_PROXY, RATE_LIMIT,
-                       REDIS_PROXY, TCP_PROXY}) {}
-};
-
-typedef ConstSingleton<NetworkFilterNameValues> NetworkFilterNames;
-
-/**
  * Well-known address resolver names.
  */
 class AddressResolverNameValues {
@@ -87,83 +53,6 @@ public:
 };
 
 typedef ConstSingleton<AddressResolverNameValues> AddressResolverNames;
-
-/**
- * Well-known http filter names.
- */
-class HttpFilterNameValues {
-public:
-  // Buffer filter
-  const std::string BUFFER = "envoy.buffer";
-  // CORS filter
-  const std::string CORS = "envoy.cors";
-  // Dynamo filter
-  const std::string DYNAMO = "envoy.http_dynamo_filter";
-  // Fault filter
-  const std::string FAULT = "envoy.fault";
-  // GRPC http1 bridge filter
-  const std::string GRPC_HTTP1_BRIDGE = "envoy.grpc_http1_bridge";
-  // GRPC json transcoder filter
-  const std::string GRPC_JSON_TRANSCODER = "envoy.grpc_json_transcoder";
-  // GRPC web filter
-  const std::string GRPC_WEB = "envoy.grpc_web";
-  // IP tagging filter
-  const std::string IP_TAGGING = "envoy.ip_tagging";
-  // Rate limit filter
-  const std::string RATE_LIMIT = "envoy.rate_limit";
-  // Router filter
-  const std::string ROUTER = "envoy.router";
-  // Health checking filter
-  const std::string HEALTH_CHECK = "envoy.health_check";
-  // Lua filter
-  const std::string LUA = "envoy.lua";
-
-  // Converts names from v1 to v2
-  const V1Converter v1_converter_;
-
-  HttpFilterNameValues()
-      : v1_converter_({BUFFER, CORS, DYNAMO, FAULT, GRPC_HTTP1_BRIDGE, GRPC_JSON_TRANSCODER,
-                       GRPC_WEB, HEALTH_CHECK, IP_TAGGING, RATE_LIMIT, ROUTER, LUA}) {}
-};
-
-typedef ConstSingleton<HttpFilterNameValues> HttpFilterNames;
-
-/**
- * Well-known access log names.
- */
-class HttpTracerNameValues {
-public:
-  // Lightstep tracer
-  const std::string LIGHTSTEP = "envoy.lightstep";
-  // Zipkin tracer
-  const std::string ZIPKIN = "envoy.zipkin";
-};
-
-typedef ConstSingleton<HttpTracerNameValues> HttpTracerNames;
-
-/**
- * Well-known stats sink names.
- */
-class StatsSinkNameValues {
-public:
-  // Statsd sink
-  const std::string STATSD = "envoy.statsd";
-  // DogStatsD compatible stastsd sink
-  const std::string DOG_STATSD = "envoy.dog_statsd";
-};
-
-typedef ConstSingleton<StatsSinkNameValues> StatsSinkNames;
-
-/**
- * Well-known access log names.
- */
-class AccessLogNameValues {
-public:
-  // File access log
-  const std::string FILE = "envoy.file_access_log";
-};
-
-typedef ConstSingleton<AccessLogNameValues> AccessLogNames;
 
 /**
  * Well-known metadata filter namespaces.
@@ -177,7 +66,7 @@ public:
 typedef ConstSingleton<MetadataFilterValues> MetadataFilters;
 
 /**
- * Keys for MetadataFilterConstants::ENVOY_LB metadata.
+ * Keys for MetadataFilterValues::ENVOY_LB metadata.
  */
 class MetadataEnvoyLbKeyValues {
 public:
@@ -194,6 +83,22 @@ typedef ConstSingleton<MetadataEnvoyLbKeyValues> MetadataEnvoyLbKeys;
  */
 class TagNameValues {
 public:
+  TagNameValues();
+
+  /**
+   * Represents a tag extraction. This structure may be extended to
+   * allow for an faster pattern-matching engine to be used as an
+   * alternative to regexes, on an individual tag basis. Some of the
+   * tags, such as "_rq_(\\d)xx$", will probably stay as regexes.
+   */
+  struct Descriptor {
+    Descriptor(const std::string& name, const std::string& regex, const std::string& substr = "")
+        : name_(name), regex_(regex), substr_(substr) {}
+    const std::string name_;
+    const std::string regex_;
+    const std::string substr_;
+  };
+
   // Cluster name tag
   const std::string CLUSTER_NAME = "envoy.cluster_name";
   // Listener port tag
@@ -204,6 +109,8 @@ public:
   const std::string HTTP_USER_AGENT = "envoy.http_user_agent";
   // SSL cipher for a connection
   const std::string SSL_CIPHER = "envoy.ssl_cipher";
+  // SSL cipher suite
+  const std::string SSL_CIPHER_SUITE = "cipher_suite";
   // Stats prefix for the Client SSL Auth network filter
   const std::string CLIENTSSL_PREFIX = "envoy.clientssl_prefix";
   // Stats prefix for the Mongo Proxy network filter
@@ -223,7 +130,7 @@ public:
   // Operation name for the Dynamo http filter
   const std::string DYNAMO_OPERATION = "envoy.dynamo_operation";
   // Table name for the Dynamo http filter
-  const std::string DYNAMO_TABLE = "envoy.dyanmo_table";
+  const std::string DYNAMO_TABLE = "envoy.dynamo_table";
   // Partition ID for the Dynamo http filter
   const std::string DYNAMO_PARTITION_ID = "envoy.dynamo_partition_id";
   // Request service name GRPC Bridge http filter
@@ -242,12 +149,14 @@ public:
   // Mapping from the names above to their respective regex strings.
   const std::vector<std::pair<std::string, std::string>> name_regex_pairs_;
 
-  // Constructor to fill map.
-  TagNameValues() : name_regex_pairs_(getRegexMapping()) {}
+  // Returns the list of descriptors.
+  const std::vector<Descriptor>& descriptorVec() const { return descriptor_vec_; }
 
 private:
-  // Creates a regex mapping for all tag names.
-  std::vector<std::pair<std::string, std::string>> getRegexMapping();
+  void addRegex(const std::string& name, const std::string& regex, const std::string& substr = "");
+
+  // Collection of tag descriptors.
+  std::vector<Descriptor> descriptor_vec_;
 };
 
 typedef ConstSingleton<TagNameValues> TagNames;

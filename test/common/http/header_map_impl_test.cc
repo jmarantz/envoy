@@ -283,6 +283,19 @@ TEST(HeaderStringTest, All) {
     EXPECT_FALSE(string.caseInsensitiveContains("keep-alive"));
     EXPECT_FALSE(string.caseInsensitiveContains(""));
   }
+
+  // getString
+  {
+    std::string static_string("HELLO");
+    HeaderString headerString1(static_string);
+    absl::string_view retString1 = headerString1.getStringView();
+    EXPECT_EQ("HELLO", retString1);
+    EXPECT_EQ(5U, retString1.size());
+
+    HeaderString headerString2;
+    absl::string_view retString2 = headerString2.getStringView();
+    EXPECT_EQ(0U, retString2.size());
+  }
 }
 
 TEST(HeaderMapImplTest, InlineInsert) {
@@ -334,6 +347,43 @@ TEST(HeaderMapImplTest, Remove) {
   headers.remove(Headers::get().ContentLength);
   EXPECT_EQ(nullptr, headers.ContentLength());
   EXPECT_EQ(0UL, headers.size());
+}
+
+TEST(HeaderMapImplTest, RemoveRegex) {
+  // These will match.
+  LowerCaseString key1 = LowerCaseString("X-prefix-foo");
+  LowerCaseString key3 = LowerCaseString("X-Prefix-");
+  LowerCaseString key5 = LowerCaseString("x-prefix-eep");
+  // These will not.
+  LowerCaseString key2 = LowerCaseString(" x-prefix-foo");
+  LowerCaseString key4 = LowerCaseString("y-x-prefix-foo");
+
+  HeaderMapImpl headers;
+  headers.addReference(key1, "value");
+  headers.addReference(key2, "value");
+  headers.addReference(key3, "value");
+  headers.addReference(key4, "value");
+  headers.addReference(key5, "value");
+
+  // Test removing the first header, middle headers, and the end header.
+  headers.removePrefix(LowerCaseString("x-prefix-"));
+  EXPECT_EQ(nullptr, headers.get(key1));
+  EXPECT_NE(nullptr, headers.get(key2));
+  EXPECT_EQ(nullptr, headers.get(key3));
+  EXPECT_NE(nullptr, headers.get(key4));
+  EXPECT_EQ(nullptr, headers.get(key5));
+
+  // Remove all headers.
+  headers.removePrefix(LowerCaseString(""));
+  EXPECT_EQ(nullptr, headers.get(key2));
+  EXPECT_EQ(nullptr, headers.get(key4));
+
+  // Add inline and remove by regex
+  headers.insertContentLength().value(5);
+  EXPECT_STREQ("5", headers.ContentLength()->value().c_str());
+  EXPECT_EQ(1UL, headers.size());
+  headers.removePrefix(LowerCaseString("content"));
+  EXPECT_EQ(nullptr, headers.ContentLength());
 }
 
 TEST(HeaderMapImplTest, SetRemovesAllValues) {
@@ -571,5 +621,24 @@ TEST(HeaderMapImplTest, Lookup) {
     EXPECT_EQ(nullptr, entry);
   }
 }
+
+TEST(HeaderMapImplTest, Get) {
+  {
+    const TestHeaderMapImpl headers{{":path", "/"}, {"hello", "world"}};
+    EXPECT_STREQ("/", headers.get(LowerCaseString(":path"))->value().c_str());
+    EXPECT_STREQ("world", headers.get(LowerCaseString("hello"))->value().c_str());
+    EXPECT_EQ(nullptr, headers.get(LowerCaseString("foo")));
+  }
+
+  {
+    TestHeaderMapImpl headers{{":path", "/"}, {"hello", "world"}};
+    headers.get(LowerCaseString(":path"))->value(std::string("/new_path"));
+    EXPECT_STREQ("/new_path", headers.get(LowerCaseString(":path"))->value().c_str());
+    headers.get(LowerCaseString("hello"))->value(std::string("world2"));
+    EXPECT_STREQ("world2", headers.get(LowerCaseString("hello"))->value().c_str());
+    EXPECT_EQ(nullptr, headers.get(LowerCaseString("foo")));
+  }
+}
+
 } // namespace Http
 } // namespace Envoy

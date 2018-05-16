@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "envoy/config/trace/v2/trace.pb.h"
 #include "envoy/network/connection.h"
 #include "envoy/runtime/runtime.h"
 #include "envoy/server/instance.h"
@@ -19,40 +20,40 @@
 #include "common/ratelimit/ratelimit_impl.h"
 #include "common/tracing/http_tracer_impl.h"
 
-#include "api/lds.pb.h"
-#include "api/trace.pb.h"
-#include "fmt/format.h"
-
 namespace Envoy {
 namespace Server {
 namespace Configuration {
 
 bool FilterChainUtility::buildFilterChain(Network::FilterManager& filter_manager,
-                                          const std::vector<NetworkFilterFactoryCb>& factories) {
-  for (const NetworkFilterFactoryCb& factory : factories) {
+                                          const std::vector<Network::FilterFactoryCb>& factories) {
+  for (const Network::FilterFactoryCb& factory : factories) {
     factory(filter_manager);
   }
 
   return filter_manager.initializeReadFilters();
 }
 
-void MainImpl::initialize(const envoy::api::v2::Bootstrap& bootstrap, Instance& server,
+bool FilterChainUtility::buildFilterChain(
+    Network::ListenerFilterManager& filter_manager,
+    const std::vector<Network::ListenerFilterFactoryCb>& factories) {
+  for (const Network::ListenerFilterFactoryCb& factory : factories) {
+    factory(filter_manager);
+  }
+
+  return true;
+}
+
+void MainImpl::initialize(const envoy::config::bootstrap::v2::Bootstrap& bootstrap,
+                          Instance& server,
                           Upstream::ClusterManagerFactory& cluster_manager_factory) {
   cluster_manager_ = cluster_manager_factory.clusterManagerFromProto(
       bootstrap, server.stats(), server.threadLocal(), server.runtime(), server.random(),
-      server.localInfo(), server.accessLogManager());
-
+      server.localInfo(), server.accessLogManager(), server.admin());
   const auto& listeners = bootstrap.static_resources().listeners();
   ENVOY_LOG(info, "loading {} listener(s)", listeners.size());
   for (ssize_t i = 0; i < listeners.size(); i++) {
     ENVOY_LOG(debug, "listener #{}:", i);
-    server.listenerManager().addOrUpdateListener(listeners[i]);
-  }
-
-  if (bootstrap.dynamic_resources().has_lds_config()) {
-    lds_api_.reset(new LdsApi(bootstrap.dynamic_resources().lds_config(), *cluster_manager_,
-                              server.dispatcher(), server.random(), server.initManager(),
-                              server.localInfo(), server.stats(), server.listenerManager()));
+    server.listenerManager().addOrUpdateListener(listeners[i], "", false);
   }
 
   stats_flush_interval_ =
@@ -72,7 +73,8 @@ void MainImpl::initialize(const envoy::api::v2::Bootstrap& bootstrap, Instance& 
 
   if (bootstrap.has_rate_limit_service()) {
     ratelimit_client_factory_.reset(
-        new RateLimit::GrpcFactoryImpl(bootstrap.rate_limit_service(), *cluster_manager_));
+        new RateLimit::GrpcFactoryImpl(bootstrap.rate_limit_service(),
+                                       cluster_manager_->grpcAsyncClientManager(), server.stats()));
   } else {
     ratelimit_client_factory_.reset(new RateLimit::NullFactoryImpl());
   }
@@ -80,17 +82,13 @@ void MainImpl::initialize(const envoy::api::v2::Bootstrap& bootstrap, Instance& 
   initializeStatsSinks(bootstrap, server);
 }
 
-void MainImpl::initializeTracers(const envoy::api::v2::Tracing& configuration, Instance& server) {
+void MainImpl::initializeTracers(const envoy::config::trace::v2::Tracing& configuration,
+                                 Instance& server) {
   ENVOY_LOG(info, "loading tracing configuration");
 
   if (!configuration.has_http()) {
     http_tracer_.reset(new Tracing::HttpNullTracer());
     return;
-  }
-
-  if (server.localInfo().clusterName().empty()) {
-    throw EnvoyException("cluster name must be defined if tracing is enabled. See "
-                         "--service-cluster option.");
   }
 
   // Initialize tracing driver.
@@ -102,14 +100,15 @@ void MainImpl::initializeTracers(const envoy::api::v2::Tracing& configuration, I
       MessageUtil::getJsonObjectFromMessage(configuration.http().config());
 
   // Now see if there is a factory that will accept the config.
-  auto& factory = Config::Utility::getAndCheckFactory<HttpTracerFactory>(type);
-  http_tracer_ = factory.createHttpTracer(*driver_config, server, *cluster_manager_);
+  auto& factory = Config::Utility::getAndCheckFactory<TracerFactory>(type);
+  http_tracer_ = factory.createHttpTracer(*driver_config, server);
 }
 
-void MainImpl::initializeStatsSinks(const envoy::api::v2::Bootstrap& bootstrap, Instance& server) {
+void MainImpl::initializeStatsSinks(const envoy::config::bootstrap::v2::Bootstrap& bootstrap,
+                                    Instance& server) {
   ENVOY_LOG(info, "loading stats sink configuration");
 
-  for (const envoy::api::v2::StatsSink& sink_object : bootstrap.stats_sinks()) {
+  for (const envoy::config::metrics::v2::StatsSink& sink_object : bootstrap.stats_sinks()) {
     // Generate factory and translate stats sink custom config
     auto& factory = Config::Utility::getAndCheckFactory<StatsSinkFactory>(sink_object.name());
     ProtobufTypes::MessagePtr message =
@@ -119,7 +118,7 @@ void MainImpl::initializeStatsSinks(const envoy::api::v2::Bootstrap& bootstrap, 
   }
 }
 
-InitialImpl::InitialImpl(const envoy::api::v2::Bootstrap& bootstrap) {
+InitialImpl::InitialImpl(const envoy::config::bootstrap::v2::Bootstrap& bootstrap) {
   const auto& admin = bootstrap.admin();
   admin_.access_log_path_ = admin.access_log_path();
   admin_.profile_path_ =
@@ -127,7 +126,7 @@ InitialImpl::InitialImpl(const envoy::api::v2::Bootstrap& bootstrap) {
   admin_.address_ = Network::Address::resolveProtoAddress(admin.address());
 
   if (!bootstrap.flags_path().empty()) {
-    flags_path_.value(bootstrap.flags_path());
+    flags_path_ = bootstrap.flags_path();
   }
 
   if (bootstrap.has_runtime()) {

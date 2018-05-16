@@ -1,22 +1,21 @@
 #include "common/router/rds_subscription.h"
 
 #include "common/common/assert.h"
+#include "common/common/fmt.h"
 #include "common/config/rds_json.h"
 #include "common/config/utility.h"
 #include "common/http/headers.h"
 #include "common/json/json_loader.h"
 
-#include "fmt/format.h"
-
 namespace Envoy {
 namespace Router {
 
-RdsSubscription::RdsSubscription(Envoy::Config::SubscriptionStats stats,
-                                 const envoy::api::v2::filter::network::Rds& rds,
-                                 Upstream::ClusterManager& cm, Event::Dispatcher& dispatcher,
-                                 Runtime::RandomGenerator& random,
-                                 const LocalInfo::LocalInfo& local_info)
-    : RestApiFetcher(cm, rds.config_source().api_config_source().cluster_name()[0], dispatcher,
+RdsSubscription::RdsSubscription(
+    Envoy::Config::SubscriptionStats stats,
+    const envoy::config::filter::network::http_connection_manager::v2::Rds& rds,
+    Upstream::ClusterManager& cm, Event::Dispatcher& dispatcher, Runtime::RandomGenerator& random,
+    const LocalInfo::LocalInfo& local_info)
+    : RestApiFetcher(cm, rds.config_source().api_config_source().cluster_names()[0], dispatcher,
                      random,
                      Envoy::Config::Utility::apiConfigSourceRefreshDelay(
                          rds.config_source().api_config_source())),
@@ -24,11 +23,11 @@ RdsSubscription::RdsSubscription(Envoy::Config::SubscriptionStats stats,
   const auto& api_config_source = rds.config_source().api_config_source();
   UNREFERENCED_PARAMETER(api_config_source);
   // If we are building an RdsSubscription, the ConfigSource should be REST_LEGACY.
-  ASSERT(api_config_source.api_type() == envoy::api::v2::ApiConfigSource::REST_LEGACY);
+  ASSERT(api_config_source.api_type() == envoy::api::v2::core::ApiConfigSource::REST_LEGACY);
   // TODO(htuch): Add support for multiple clusters, #1170.
-  ASSERT(api_config_source.cluster_name().size() == 1);
+  ASSERT(api_config_source.cluster_names().size() == 1);
   ASSERT(api_config_source.has_refresh_delay());
-  Envoy::Config::Utility::checkClusterAndLocalInfo("rds", api_config_source.cluster_name()[0], cm,
+  Envoy::Config::Utility::checkClusterAndLocalInfo("rds", api_config_source.cluster_names()[0], cm,
                                                    local_info);
 }
 
@@ -48,10 +47,9 @@ void RdsSubscription::parseResponse(const Http::Message& response) {
   Protobuf::RepeatedPtrField<envoy::api::v2::RouteConfiguration> resources;
   Envoy::Config::RdsJson::translateRouteConfiguration(*response_json, *resources.Add());
   resources[0].set_name(route_config_name_);
-  callbacks_->onConfigUpdate(resources);
   std::pair<std::string, uint64_t> hash =
       Envoy::Config::Utility::computeHashedVersion(response_body);
-  version_info_ = hash.first;
+  callbacks_->onConfigUpdate(resources, hash.first);
   stats_.version_.set(hash.second);
   stats_.update_success_.inc();
 }

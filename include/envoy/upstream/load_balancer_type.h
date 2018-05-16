@@ -4,9 +4,9 @@
 #include <string>
 #include <vector>
 
-#include "common/protobuf/protobuf.h"
+#include "envoy/api/v2/cds.pb.h"
 
-#include "api/cds.pb.h"
+#include "common/protobuf/protobuf.h"
 
 namespace Envoy {
 namespace Upstream {
@@ -14,7 +14,7 @@ namespace Upstream {
 /**
  * Type of load balancing to perform.
  */
-enum class LoadBalancerType { RoundRobin, LeastRequest, Random, RingHash, OriginalDst };
+enum class LoadBalancerType { RoundRobin, LeastRequest, Random, RingHash, OriginalDst, Maglev };
 
 /**
  * Load Balancer subset configuration.

@@ -11,6 +11,7 @@ envoy_cc_library(
     deps = [
         "//include/envoy/server:admin_interface",
         "//source/common/common:assert_lib",
+        "//source/server/http:config_tracker_lib",
     ],
 )
 
@@ -52,9 +53,13 @@ envoy_cc_library(
 envoy_cc_library(
     name = "dispatcher_lib",
     srcs = ["dispatcher.cc"],
-    hdrs = ["dispatcher.h"],
+    hdrs = [
+        "connection.h",
+        "dispatcher.h",
+    ],
     deps = [
         "//include/envoy/event:dispatcher_interface",
+        "//include/envoy/network:connection_interface",
         "//source/common/common:assert_lib",
         "//source/common/event:dispatcher_lib",
     ],
@@ -74,13 +79,12 @@ envoy_cc_library(
     name = "server_lib",
     srcs = ["server.cc"],
     hdrs = ["server.h"],
-    external_deps = ["envoy_bootstrap"],
+    external_deps = ["abseil_optional"],
     deps = [
         ":admin_lib",
         ":api_lib",
         ":cluster_manager_lib",
         ":dns_lib",
-        "//include/envoy/common:optional",
         "//include/envoy/server:drain_manager_interface",
         "//include/envoy/server:instance_interface",
         "//include/envoy/ssl:context_manager_interface",
@@ -100,5 +104,6 @@ envoy_cc_library(
         "//source/server:configuration_lib",
         "//source/server:server_lib",
         "//source/server/http:admin_lib",
+        "@envoy_api//envoy/config/bootstrap/v2:bootstrap_cc",
     ],
 )

@@ -1,5 +1,8 @@
 #pragma once
 
+#include "envoy/api/v2/core/base.pb.h"
+#include "envoy/config/bootstrap/v2/bootstrap.pb.h"
+#include "envoy/config/filter/network/http_connection_manager/v2/http_connection_manager.pb.h"
 #include "envoy/config/grpc_mux.h"
 #include "envoy/config/subscription.h"
 #include "envoy/json/json_object.h"
@@ -16,18 +19,11 @@
 #include "common/protobuf/utility.h"
 #include "common/singleton/const_singleton.h"
 
-#include "api/base.pb.h"
-#include "api/cds.pb.h"
-#include "api/eds.pb.h"
-#include "api/filter/network/http_connection_manager.pb.h"
-#include "api/lds.pb.h"
-#include "api/rds.pb.h"
-
 namespace Envoy {
 namespace Config {
 
 /**
- * Constant Api Type Values, used by envoy::api::v2::ApiConfigSource.
+ * Constant Api Type Values, used by envoy::api::v2::core::ApiConfigSource.
  */
 class ApiTypeValues {
 public:
@@ -72,21 +68,23 @@ public:
   }
 
   /**
-   * Extract refresh_delay as a std::chrono::milliseconds from envoy::api::v2::ApiConfigSource.
+   * Extract refresh_delay as a std::chrono::milliseconds from
+   * envoy::api::v2::core::ApiConfigSource.
    */
   static std::chrono::milliseconds
-  apiConfigSourceRefreshDelay(const envoy::api::v2::ApiConfigSource& api_config_source);
+  apiConfigSourceRefreshDelay(const envoy::api::v2::core::ApiConfigSource& api_config_source);
 
   /**
-   * Populate an envoy::api::v2::ApiConfigSource.
+   * Populate an envoy::api::v2::core::ApiConfigSource.
    * @param cluster supplies the cluster name for the ApiConfigSource.
    * @param refresh_delay_ms supplies the refresh delay for the ApiConfigSource in ms.
    * @param api_type supplies the type of subscription to use for the ApiConfigSource.
-   * @param api_config_source a reference to the envoy::api::v2::ApiConfigSource object to populate.
+   * @param api_config_source a reference to the envoy::api::v2::core::ApiConfigSource object to
+   * populate.
    */
   static void translateApiConfigSource(const std::string& cluster, uint32_t refresh_delay_ms,
                                        const std::string& api_type,
-                                       envoy::api::v2::ApiConfigSource& api_config_source);
+                                       envoy::api::v2::core::ApiConfigSource& api_config_source);
 
   /**
    * Check cluster info for API config sanity. Throws on error.
@@ -124,45 +122,66 @@ public:
   static void checkFilesystemSubscriptionBackingPath(const std::string& path);
 
   /**
+   * Check the grpc_services and cluster_names for API config sanity. Throws on error.
+   * @param api_config_source the config source to validate.
+   * @throws EnvoyException when an API config has the wrong number of gRPC
+   * services or cluster names, depending on expectations set by its API type.
+   */
+  static void
+  checkApiConfigSourceNames(const envoy::api::v2::core::ApiConfigSource& api_config_source);
+
+  /**
    * Check the validity of a cluster backing an api config source. Throws on error.
    * @param clusters the clusters currently loaded in the cluster manager.
    * @param api_config_source the config source to validate.
+   * @throws EnvoyException when an API config doesn't have a statically defined non-EDS cluster.
+   */
+  static void validateClusterName(const Upstream::ClusterManager::ClusterInfoMap& clusters,
+                                  const std::string& cluster_name);
+
+  /**
+   * Potentially calls Utility::validateClusterName, if a cluster name can be found.
+   * @param clusters the clusters currently loaded in the cluster manager.
+   * @param api_config_source the config source to validate.
+   * @throws EnvoyException when an API config doesn't have a statically defined non-EDS cluster.
    */
   static void checkApiConfigSourceSubscriptionBackingCluster(
       const Upstream::ClusterManager::ClusterInfoMap& clusters,
-      const envoy::api::v2::ApiConfigSource& api_config_source);
+      const envoy::api::v2::core::ApiConfigSource& api_config_source);
 
   /**
-   * Convert a v1 SDS JSON config to v2 EDS envoy::api::v2::ConfigSource.
+   * Convert a v1 SDS JSON config to v2 EDS envoy::api::v2::core::ConfigSource.
    * @param json_config source v1 SDS JSON config.
-   * @param eds_config destination v2 EDS envoy::api::v2::ConfigSource.
+   * @param eds_config destination v2 EDS envoy::api::v2::core::ConfigSource.
    */
   static void translateEdsConfig(const Json::Object& json_config,
-                                 envoy::api::v2::ConfigSource& eds_config);
+                                 envoy::api::v2::core::ConfigSource& eds_config);
 
   /**
-   * Convert a v1 CDS JSON config to v2 CDS envoy::api::v2::ConfigSource.
+   * Convert a v1 CDS JSON config to v2 CDS envoy::api::v2::core::ConfigSource.
    * @param json_config source v1 CDS JSON config.
-   * @param cds_config destination v2 CDS envoy::api::v2::ConfigSource.
+   * @param cds_config destination v2 CDS envoy::api::v2::core::ConfigSource.
    */
   static void translateCdsConfig(const Json::Object& json_config,
-                                 envoy::api::v2::ConfigSource& cds_config);
+                                 envoy::api::v2::core::ConfigSource& cds_config);
 
   /**
-   * Convert a v1 RDS JSON config to v2 RDS envoy::api::v2::filter::network::Rds.
+   * Convert a v1 RDS JSON config to v2 RDS
+   * envoy::config::filter::network::http_connection_manager::v2::Rds.
    * @param json_rds source v1 RDS JSON config.
-   * @param rds destination v2 RDS envoy::api::v2::filter::network::Rds.
+   * @param rds destination v2 RDS envoy::config::filter::network::http_connection_manager::v2::Rds.
    */
-  static void translateRdsConfig(const Json::Object& json_rds,
-                                 envoy::api::v2::filter::network::Rds& rds);
+  static void
+  translateRdsConfig(const Json::Object& json_rds,
+                     envoy::config::filter::network::http_connection_manager::v2::Rds& rds);
 
   /**
-   * Convert a v1 LDS JSON config to v2 LDS envoy::api::v2::ConfigSource.
+   * Convert a v1 LDS JSON config to v2 LDS envoy::api::v2::core::ConfigSource.
    * @param json_lds source v1 LDS JSON config.
-   * @param lds_config destination v2 LDS envoy::api::v2::ConfigSource.
+   * @param lds_config destination v2 LDS envoy::api::v2::core::ConfigSource.
    */
   static void translateLdsConfig(const Json::Object& json_lds,
-                                 envoy::api::v2::ConfigSource& lds_config);
+                                 envoy::api::v2::core::ConfigSource& lds_config);
 
   /**
    * Generate a SubscriptionStats object from stats scope.
@@ -207,10 +226,8 @@ public:
                                                             Factory& factory) {
     ProtobufTypes::MessagePtr config = factory.createEmptyConfigProto();
 
-    if (config == nullptr) {
-      throw EnvoyException(fmt::format(
-          "{} factory returned nullptr instead of empty config message.", factory.name()));
-    }
+    // Fail in an obvious way if a plugin does not return a proto.
+    RELEASE_ASSERT(config != nullptr);
 
     if (enclosing_message.has_config()) {
       MessageUtil::jsonConvert(enclosing_message.config(), *config);
@@ -220,23 +237,34 @@ public:
   }
 
   /**
-   * Obtain the "name" of a v2 API resource in a google.protobuf.Any, e.g. the route config name for
-   * a Routeconfiguration, based on the underlying resource type.
-   * TODO(htuch): This is kind of a hack. If we had a better support for resource names as first
-   * class in the API, this would not be necessary.
-   * @param resource google.protobuf.Any v2 API resource.
-   * @return std::string resource name.
+   * Translate a nested config into a route-specific proto message provided by
+   * the implementation factory.
+   * @param source a message that contains the opaque config for the given factory's route-local
+   *        configuration.
+   * @param factory implementation factory with the method
+   *        'createEmptyRouteConfigProto' to produce a proto to be filled with
+   *        the translated configuration.
    */
-  static std::string resourceName(const ProtobufWkt::Any& resource);
+  template <class Factory>
+  static ProtobufTypes::MessagePtr translateToFactoryRouteConfig(const Protobuf::Message& source,
+                                                                 Factory& factory) {
+    ProtobufTypes::MessagePtr config = factory.createEmptyRouteConfigProto();
+
+    // Fail in an obvious way if a plugin does not return a proto.
+    RELEASE_ASSERT(config != nullptr);
+
+    MessageUtil::jsonConvert(source, *config);
+    return config;
+  }
 
   /**
-   * Creates the set of stats tag extractors requested by the config and transfers ownership to the
-   * caller.
+   * Create TagProducer instance. Check all tag names for conflicts to avoid
+   * unexpected tag name overwriting.
    * @param bootstrap bootstrap proto.
-   * @return std::vector<Stats::TagExtractorPtr> tag extractor vector.
+   * @throws EnvoyException when the conflict of tag names is found.
    */
-  static std::vector<Stats::TagExtractorPtr>
-  createTagExtractors(const envoy::api::v2::Bootstrap& bootstrap);
+  static Stats::TagProducerPtr
+  createTagProducer(const envoy::config::bootstrap::v2::Bootstrap& bootstrap);
 
   /**
    * Check user supplied name in RDS/CDS/LDS for sanity.
@@ -245,6 +273,17 @@ public:
    * @param name supplies the name to check for length limits.
    */
   static void checkObjNameLength(const std::string& error_prefix, const std::string& name);
+
+  /**
+   * Obtain gRPC async client factory from a envoy::api::v2::core::ApiConfigSource.
+   * @param async_client_manager gRPC async client manager.
+   * @param api_config_source envoy::api::v2::core::ApiConfigSource. Must have config type GRPC.
+   * @return Grpc::AsyncClientFactoryPtr gRPC async client factory.
+   */
+  static Grpc::AsyncClientFactoryPtr
+  factoryForGrpcApiConfigSource(Grpc::AsyncClientManager& async_client_manager,
+                                const envoy::api::v2::core::ApiConfigSource& api_config_source,
+                                Stats::Scope& scope);
 };
 
 } // namespace Config

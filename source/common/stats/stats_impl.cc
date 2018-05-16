@@ -8,8 +8,13 @@
 
 #include "envoy/common/exception.h"
 
+#include "common/common/perf_annotation.h"
+#include "common/common/thread.h"
 #include "common/common/utility.h"
 #include "common/config/well_known_names.h"
+
+#include "absl/strings/ascii.h"
+#include "absl/strings/match.h"
 
 namespace Envoy {
 namespace Stats {
@@ -23,6 +28,10 @@ size_t roundUpMultipleNaturalAlignment(size_t val) {
   static_assert(multiple == 1 || multiple == 2 || multiple == 4 || multiple == 8 || multiple == 16,
                 "multiple must be a power of 2 for this algorithm to work");
   return (val + multiple - 1) & ~(multiple - 1);
+}
+
+bool regexStartsWithDot(absl::string_view regex) {
+  return absl::StartsWith(regex, "\\.") || absl::StartsWith(regex, "(?=\\.)");
 }
 
 } // namespace
@@ -61,39 +70,61 @@ std::string Utility::sanitizeStatsName(const std::string& name) {
   return stats_name;
 }
 
-TagExtractorImpl::TagExtractorImpl(const std::string& name, const std::string& regex)
-    : name_(name), regex_(regex) {}
+TagExtractorImpl::TagExtractorImpl(const std::string& name, const std::string& regex,
+                                   const std::string& substr)
+    : name_(name), prefix_(std::string(extractRegexPrefix(regex))), substr_(substr),
+      regex_(RegexUtil::parseRegex(regex)) {}
+
+std::string TagExtractorImpl::extractRegexPrefix(absl::string_view regex) {
+  std::string prefix;
+  if (absl::StartsWith(regex, "^")) {
+    for (absl::string_view::size_type i = 1; i < regex.size(); ++i) {
+      if (!absl::ascii_isalnum(regex[i]) && (regex[i] != '_')) {
+        if (i > 1) {
+          const bool last_char = i == regex.size() - 1;
+          if ((!last_char && regexStartsWithDot(regex.substr(i))) ||
+              (last_char && (regex[i] == '$'))) {
+            prefix.append(regex.data() + 1, i - 1);
+          }
+        }
+        break;
+      }
+    }
+  }
+  return prefix;
+}
 
 TagExtractorPtr TagExtractorImpl::createTagExtractor(const std::string& name,
-                                                     const std::string& regex) {
+                                                     const std::string& regex,
+                                                     const std::string& substr) {
 
   if (name.empty()) {
     throw EnvoyException("tag_name cannot be empty");
   }
 
-  if (!regex.empty()) {
-    return TagExtractorPtr{new TagExtractorImpl(name, regex)};
-  } else {
-    // Look up the default for that name.
-    const auto& name_regex_pairs = Config::TagNames::get().name_regex_pairs_;
-    auto it = std::find_if(name_regex_pairs.begin(), name_regex_pairs.end(),
-                           [&name](const std::pair<std::string, std::string>& name_regex_pair) {
-                             return name == name_regex_pair.first;
-                           });
-    if (it != name_regex_pairs.end()) {
-      return TagExtractorPtr{new TagExtractorImpl(name, it->second)};
-    } else {
-      throw EnvoyException(fmt::format(
-          "No regex specified for tag specifier and no default regex for name: '{}'", name));
-    }
+  if (regex.empty()) {
+    throw EnvoyException(fmt::format(
+        "No regex specified for tag specifier and no default regex for name: '{}'", name));
   }
+  return TagExtractorPtr{new TagExtractorImpl(name, regex, substr)};
 }
 
-std::string TagExtractorImpl::extractTag(const std::string& tag_extracted_name,
-                                         std::vector<Tag>& tags) const {
+bool TagExtractorImpl::substrMismatch(const std::string& stat_name) const {
+  return !substr_.empty() && stat_name.find(substr_) == std::string::npos;
+}
+
+bool TagExtractorImpl::extractTag(const std::string& stat_name, std::vector<Tag>& tags,
+                                  IntervalSet<size_t>& remove_characters) const {
+  PERF_OPERATION(perf);
+
+  if (substrMismatch(stat_name)) {
+    PERF_RECORD(perf, "re-skip-substr", name_);
+    return false;
+  }
+
   std::smatch match;
   // The regex must match and contain one or more subexpressions (all after the first are ignored).
-  if (std::regex_search(tag_extracted_name, match, regex_) && match.size() > 1) {
+  if (std::regex_search(stat_name, match, regex_) && match.size() > 1) {
     // remove_subexpr is the first submatch. It represents the portion of the string to be removed.
     const auto& remove_subexpr = match[1];
 
@@ -108,37 +139,202 @@ std::string TagExtractorImpl::extractTag(const std::string& tag_extracted_name,
     tag.name_ = name_;
     tag.value_ = value_subexpr.str();
 
-    // Reconstructs the tag_extracted_name without remove_subexpr.
-    return std::string(match.prefix().first, remove_subexpr.first)
-        .append(remove_subexpr.second, match.suffix().second);
+    // Determines which characters to remove from stat_name to elide remove_subexpr.
+    std::string::size_type start = remove_subexpr.first - stat_name.begin();
+    std::string::size_type end = remove_subexpr.second - stat_name.begin();
+    remove_characters.insert(start, end);
+    PERF_RECORD(perf, "re-match", name_);
+    return true;
   }
-  return tag_extracted_name;
+  PERF_RECORD(perf, "re-miss", name_);
+  return false;
 }
 
 RawStatData* HeapRawStatDataAllocator::alloc(const std::string& name) {
-  // This must be zero-initialized
   RawStatData* data = static_cast<RawStatData*>(::calloc(RawStatData::size(), 1));
   data->initialize(name);
-  return data;
+
+  // Because the RawStatData object is initialized with and contains a truncated
+  // version of the std::string name, storing the stats in a map would require
+  // storing the name twice. Performing a lookup on the set is similarly
+  // expensive to performing a map lookup, since both require copying a truncated version of the
+  // string before doing the hash lookup.
+  absl::ReleasableMutexLock lock(&mutex_);
+  auto ret = stats_.insert(data);
+  RawStatData* existing_data = *ret.first;
+  lock.Release();
+
+  if (!ret.second) {
+    ::free(data);
+    ++existing_data->ref_count_;
+    return existing_data;
+  } else {
+    return data;
+  }
+}
+
+TagProducerImpl::TagProducerImpl(const envoy::config::metrics::v2::StatsConfig& config)
+    : TagProducerImpl() {
+  // To check name conflict.
+  reserveResources(config);
+  std::unordered_set<std::string> names = addDefaultExtractors(config);
+
+  for (const auto& tag_specifier : config.stats_tags()) {
+    const std::string& name = tag_specifier.tag_name();
+    if (!names.emplace(name).second) {
+      throw EnvoyException(fmt::format("Tag name '{}' specified twice.", name));
+    }
+
+    // If no tag value is found, fallback to default regex to keep backward compatibility.
+    if (tag_specifier.tag_value_case() ==
+            envoy::config::metrics::v2::TagSpecifier::TAG_VALUE_NOT_SET ||
+        tag_specifier.tag_value_case() == envoy::config::metrics::v2::TagSpecifier::kRegex) {
+
+      if (tag_specifier.regex().empty()) {
+        if (addExtractorsMatching(name) == 0) {
+          throw EnvoyException(fmt::format(
+              "No regex specified for tag specifier and no default regex for name: '{}'", name));
+        }
+      } else {
+        addExtractor(Stats::TagExtractorImpl::createTagExtractor(name, tag_specifier.regex()));
+      }
+    } else if (tag_specifier.tag_value_case() ==
+               envoy::config::metrics::v2::TagSpecifier::kFixedValue) {
+      default_tags_.emplace_back(Stats::Tag{.name_ = name, .value_ = tag_specifier.fixed_value()});
+    }
+  }
+}
+
+int TagProducerImpl::addExtractorsMatching(absl::string_view name) {
+  int num_found = 0;
+  for (const auto& desc : Config::TagNames::get().descriptorVec()) {
+    if (desc.name_ == name) {
+      addExtractor(
+          Stats::TagExtractorImpl::createTagExtractor(desc.name_, desc.regex_, desc.substr_));
+      ++num_found;
+    }
+  }
+  return num_found;
+}
+
+void TagProducerImpl::addExtractor(TagExtractorPtr extractor) {
+  const absl::string_view prefix = extractor->prefixToken();
+  if (prefix.empty()) {
+    tag_extractors_without_prefix_.emplace_back(std::move(extractor));
+  } else {
+    tag_extractor_prefix_map_[prefix].emplace_back(std::move(extractor));
+  }
+}
+
+void TagProducerImpl::forEachExtractorMatching(
+    const std::string& stat_name, std::function<void(const TagExtractorPtr&)> f) const {
+  IntervalSetImpl<size_t> remove_characters;
+  for (const TagExtractorPtr& tag_extractor : tag_extractors_without_prefix_) {
+    f(tag_extractor);
+  }
+  const std::string::size_type dot = stat_name.find('.');
+  if (dot != std::string::npos) {
+    const absl::string_view token = absl::string_view(stat_name.data(), dot);
+    const auto iter = tag_extractor_prefix_map_.find(token);
+    if (iter != tag_extractor_prefix_map_.end()) {
+      for (const TagExtractorPtr& tag_extractor : iter->second) {
+        f(tag_extractor);
+      }
+    }
+  }
+}
+
+std::string TagProducerImpl::produceTags(const std::string& metric_name,
+                                         std::vector<Tag>& tags) const {
+  tags.insert(tags.end(), default_tags_.begin(), default_tags_.end());
+  IntervalSetImpl<size_t> remove_characters;
+  forEachExtractorMatching(
+      metric_name, [&remove_characters, &tags, &metric_name](const TagExtractorPtr& tag_extractor) {
+        tag_extractor->extractTag(metric_name, tags, remove_characters);
+      });
+  return StringUtil::removeCharacters(metric_name, remove_characters);
+}
+
+void TagProducerImpl::reserveResources(const envoy::config::metrics::v2::StatsConfig& config) {
+  default_tags_.reserve(config.stats_tags().size());
+}
+
+std::unordered_set<std::string>
+TagProducerImpl::addDefaultExtractors(const envoy::config::metrics::v2::StatsConfig& config) {
+  std::unordered_set<std::string> names;
+  if (!config.has_use_all_default_tags() || config.use_all_default_tags().value()) {
+    for (const auto& desc : Config::TagNames::get().descriptorVec()) {
+      names.emplace(desc.name_);
+      addExtractor(
+          Stats::TagExtractorImpl::createTagExtractor(desc.name_, desc.regex_, desc.substr_));
+    }
+  }
+  return names;
 }
 
 void HeapRawStatDataAllocator::free(RawStatData& data) {
-  // This allocator does not ever have concurrent access to the raw data.
-  ASSERT(data.ref_count_ == 1);
+  ASSERT(data.ref_count_ > 0);
+  if (--data.ref_count_ > 0) {
+    return;
+  }
+
+  size_t key_removed;
+  {
+    absl::MutexLock lock(&mutex_);
+    key_removed = stats_.erase(&data);
+  }
+
+  ASSERT(key_removed == 1);
   ::free(&data);
 }
 
-void RawStatData::initialize(const std::string& name) {
+void RawStatData::initialize(absl::string_view key) {
   ASSERT(!initialized());
-  ASSERT(name.size() <= maxNameLength());
-  ASSERT(std::string::npos == name.find(':'));
+  if (key.size() > Stats::RawStatData::maxNameLength()) {
+    ENVOY_LOG_MISC(
+        warn,
+        "Statistic '{}' is too long with {} characters, it will be truncated to {} characters", key,
+        key.size(), Stats::RawStatData::maxNameLength());
+  }
   ref_count_ = 1;
-  StringUtil::strlcpy(name_, name.substr(0, maxNameLength()).c_str(), nameSize());
+
+  // key is not necessarily nul-terminated, but we want to make sure name_ is.
+  size_t xfer_size = std::min(nameSize() - 1, key.size());
+  memcpy(name_, key.data(), xfer_size);
+  name_[xfer_size] = '\0';
 }
 
-bool RawStatData::matches(const std::string& name) {
-  // In case a stat got truncated, match on the truncated name.
-  return 0 == strcmp(name.substr(0, maxNameLength()).c_str(), name_);
+HistogramStatisticsImpl::HistogramStatisticsImpl(const histogram_t* histogram_ptr)
+    : computed_quantiles_(supportedQuantiles().size(), 0.0) {
+  hist_approx_quantile(histogram_ptr, supportedQuantiles().data(), supportedQuantiles().size(),
+                       computed_quantiles_.data());
+}
+
+const std::vector<double>& HistogramStatisticsImpl::supportedQuantiles() const {
+  static const std::vector<double> supported_quantiles = {0,    0.25, 0.5,   0.75, 0.90,
+                                                          0.95, 0.99, 0.999, 1};
+  return supported_quantiles;
+}
+
+std::string HistogramStatisticsImpl::summary() const {
+  std::vector<std::string> summary;
+  const std::vector<double>& supported_quantiles_ref = supportedQuantiles();
+  summary.reserve(supported_quantiles_ref.size());
+  for (size_t i = 0; i < supported_quantiles_ref.size(); ++i) {
+    summary.push_back(
+        fmt::format("P{}: {}", 100 * supported_quantiles_ref[i], computed_quantiles_[i]));
+  }
+  return absl::StrJoin(summary, ", ");
+}
+
+/**
+ * Clears the old computed values and refreshes it with values computed from passed histogram.
+ */
+void HistogramStatisticsImpl::refresh(const histogram_t* new_histogram_ptr) {
+  std::fill(computed_quantiles_.begin(), computed_quantiles_.end(), 0.0);
+  ASSERT(supportedQuantiles().size() == computed_quantiles_.size());
+  hist_approx_quantile(new_histogram_ptr, supportedQuantiles().data(), supportedQuantiles().size(),
+                       computed_quantiles_.data());
 }
 
 } // namespace Stats

@@ -3,13 +3,12 @@
 #include <cstdint>
 #include <string>
 
+#include "envoy/api/v2/core/base.pb.h"
+#include "envoy/api/v2/eds.pb.h"
 #include "envoy/config/subscription.h"
 
 #include "common/common/assert.h"
 #include "common/http/rest_api_fetcher.h"
-
-#include "api/base.pb.h"
-#include "api/eds.pb.h"
 
 namespace Envoy {
 namespace Upstream {
@@ -22,12 +21,9 @@ class SdsSubscription : public Http::RestApiFetcher,
                         public Config::Subscription<envoy::api::v2::ClusterLoadAssignment>,
                         Logger::Loggable<Logger::Id::upstream> {
 public:
-  SdsSubscription(ClusterStats& stats, const envoy::api::v2::ConfigSource& eds_config,
+  SdsSubscription(ClusterStats& stats, const envoy::api::v2::core::ConfigSource& eds_config,
                   ClusterManager& cm, Event::Dispatcher& dispatcher,
                   Runtime::RandomGenerator& random);
-
-  // Config::Subscription
-  const std::string versionInfo() const override { return version_info_; }
 
 private:
   // Config::Subscription
@@ -56,7 +52,6 @@ private:
   void onFetchFailure(const EnvoyException* e) override;
 
   std::string cluster_name_;
-  std::string version_info_;
   Config::SubscriptionCallbacks<envoy::api::v2::ClusterLoadAssignment>* callbacks_ = nullptr;
   ClusterStats& stats_;
 };

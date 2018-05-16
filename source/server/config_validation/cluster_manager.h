@@ -19,20 +19,19 @@ public:
                                   ThreadLocal::Instance& tls, Runtime::RandomGenerator& random,
                                   Network::DnsResolverSharedPtr dns_resolver,
                                   Ssl::ContextManager& ssl_context_manager,
-                                  Event::Dispatcher& primary_dispatcher,
+                                  Event::Dispatcher& main_thread_dispatcher,
                                   const LocalInfo::LocalInfo& local_info);
 
-  ClusterManagerPtr clusterManagerFromProto(const envoy::api::v2::Bootstrap& bootstrap,
-                                            Stats::Store& stats, ThreadLocal::Instance& tls,
-                                            Runtime::Loader& runtime,
-                                            Runtime::RandomGenerator& random,
-                                            const LocalInfo::LocalInfo& local_info,
-                                            AccessLog::AccessLogManager& log_manager) override;
+  ClusterManagerPtr
+  clusterManagerFromProto(const envoy::config::bootstrap::v2::Bootstrap& bootstrap,
+                          Stats::Store& stats, ThreadLocal::Instance& tls, Runtime::Loader& runtime,
+                          Runtime::RandomGenerator& random, const LocalInfo::LocalInfo& local_info,
+                          AccessLog::AccessLogManager& log_manager, Server::Admin& admin) override;
 
   // Delegates to ProdClusterManagerFactory::createCds, but discards the result and returns nullptr
   // unconditionally.
-  CdsApiPtr createCds(const envoy::api::v2::ConfigSource& cds_config,
-                      const Optional<envoy::api::v2::ConfigSource>& eds_config,
+  CdsApiPtr createCds(const envoy::api::v2::core::ConfigSource& cds_config,
+                      const absl::optional<envoy::api::v2::core::ConfigSource>& eds_config,
                       ClusterManager& cm) override;
 };
 
@@ -41,13 +40,15 @@ public:
  */
 class ValidationClusterManager : public ClusterManagerImpl {
 public:
-  ValidationClusterManager(const envoy::api::v2::Bootstrap& bootstrap,
+  ValidationClusterManager(const envoy::config::bootstrap::v2::Bootstrap& bootstrap,
                            ClusterManagerFactory& factory, Stats::Store& stats,
                            ThreadLocal::Instance& tls, Runtime::Loader& runtime,
                            Runtime::RandomGenerator& random, const LocalInfo::LocalInfo& local_info,
-                           AccessLog::AccessLogManager& log_manager, Event::Dispatcher& dispatcher);
+                           AccessLog::AccessLogManager& log_manager, Event::Dispatcher& dispatcher,
+                           Server::Admin& admin);
 
   Http::ConnectionPool::Instance* httpConnPoolForCluster(const std::string&, ResourcePriority,
+                                                         Http::Protocol,
                                                          LoadBalancerContext*) override;
   Host::CreateConnectionData tcpConnForCluster(const std::string&, LoadBalancerContext*) override;
   Http::AsyncClient& httpAsyncClientForCluster(const std::string&) override;

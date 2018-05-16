@@ -15,62 +15,15 @@ namespace Upstream {
 RingHashLoadBalancer::RingHashLoadBalancer(
     PrioritySet& priority_set, ClusterStats& stats, Runtime::Loader& runtime,
     Runtime::RandomGenerator& random,
-    const Optional<envoy::api::v2::Cluster::RingHashLbConfig>& config)
-    : LoadBalancerBase(priority_set, stats, runtime, random), config_(config),
-      factory_(new LoadBalancerFactoryImpl(stats, random)) {
-  // Make sure we correctly return nullptr for any early chooseHost() calls.
-  factory_->current_ring_ = std::make_shared<Ring>(config_, std::vector<HostSharedPtr>{});
-}
+    const absl::optional<envoy::api::v2::Cluster::RingHashLbConfig>& config,
+    const envoy::api::v2::Cluster::CommonLbConfig& common_config)
+    : ThreadAwareLoadBalancerBase(priority_set, stats, runtime, random, common_config),
+      config_(config) {}
 
-void RingHashLoadBalancer::initialize() {
-  // TODO(mattklein123): In the future, once initialized and the initial ring is built, it would be
-  // better to use a background thread for computing ring updates. This has the substantial benefit
-  // that if the ring computation thread falls behind, host set updates can be trivially collapsed.
-  // I will look into doing this in a follow up. Doing everything using a background thread heavily
-  // complicated initialization as the load balancer would need its own initialized callback. I
-  // think the synchronous/asynchronous split is probably the best option.
-  priority_set_.addMemberUpdateCb([this](uint32_t, const std::vector<HostSharedPtr>&,
-                                         const std::vector<HostSharedPtr>&) -> void { refresh(); });
-
-  refresh();
-}
-
-HostConstSharedPtr
-RingHashLoadBalancer::LoadBalancerImpl::chooseHost(LoadBalancerContext* context) {
-  if (global_panic_) {
-    stats_.lb_healthy_panic_.inc();
-  }
-  return ring_->chooseHost(context, random_);
-}
-
-LoadBalancerPtr RingHashLoadBalancer::LoadBalancerFactoryImpl::create() {
-  // We must protect current_ring_ via a RW lock since it is accessed and written to by multiple
-  // threads. All complex processing happens outside of locking however.
-  RingConstSharedPtr ring_to_use;
-  bool global_panic_to_use;
-  {
-    std::shared_lock<std::shared_timed_mutex> lock(mutex_);
-    ring_to_use = current_ring_;
-    global_panic_to_use = global_panic_;
-  }
-
-  return std::make_unique<LoadBalancerImpl>(stats_, random_, ring_to_use, global_panic_to_use);
-}
-
-HostConstSharedPtr RingHashLoadBalancer::Ring::chooseHost(LoadBalancerContext* context,
-                                                          Runtime::RandomGenerator& random) const {
+HostConstSharedPtr RingHashLoadBalancer::Ring::chooseHost(uint64_t h) const {
   if (ring_.empty()) {
     return nullptr;
   }
-
-  // If there is no hash in the context, just choose a random value (this effectively becomes
-  // the random LB but it won't crash if someone configures it this way).
-  // computeHashKey() may be computed on demand, so get it only once.
-  Optional<uint64_t> hash;
-  if (context) {
-    hash = context->computeHashKey();
-  }
-  const uint64_t h = hash.valid() ? hash.value() : random.random();
 
   // Ported from https://github.com/RJ/ketama/blob/master/libketama/ketama.c (ketama_get_server)
   // I've generally kept the variable names to make the code easier to compare.
@@ -104,8 +57,9 @@ HostConstSharedPtr RingHashLoadBalancer::Ring::chooseHost(LoadBalancerContext* c
   }
 }
 
-RingHashLoadBalancer::Ring::Ring(const Optional<envoy::api::v2::Cluster::RingHashLbConfig>& config,
-                                 const std::vector<HostSharedPtr>& hosts) {
+RingHashLoadBalancer::Ring::Ring(
+    const absl::optional<envoy::api::v2::Cluster::RingHashLbConfig>& config,
+    const HostVector& hosts) {
   ENVOY_LOG(trace, "ring hash: building ring");
   if (hosts.empty()) {
     return;
@@ -120,8 +74,7 @@ RingHashLoadBalancer::Ring::Ring(const Optional<envoy::api::v2::Cluster::RingHas
   //       to generate the rings centrally and then just RCU them out to each thread. This is
   //       sufficient for getting started.
   const uint64_t min_ring_size =
-      config.valid() ? PROTOBUF_GET_WRAPPED_OR_DEFAULT(config.value(), minimum_ring_size, 1024)
-                     : 1024;
+      config ? PROTOBUF_GET_WRAPPED_OR_DEFAULT(config.value(), minimum_ring_size, 1024) : 1024;
 
   uint64_t hashes_per_host = 1;
   if (hosts.size() < min_ring_size) {
@@ -135,9 +88,8 @@ RingHashLoadBalancer::Ring::Ring(const Optional<envoy::api::v2::Cluster::RingHas
   ring_.reserve(hosts.size() * hashes_per_host);
 
   const bool use_std_hash =
-      config.valid()
-          ? PROTOBUF_GET_WRAPPED_OR_DEFAULT(config.value().deprecated_v1(), use_std_hash, true)
-          : true;
+      config ? PROTOBUF_GET_WRAPPED_OR_DEFAULT(config.value().deprecated_v1(), use_std_hash, true)
+             : true;
 
   char hash_key_buffer[196];
   for (const auto& host : hosts) {
@@ -173,31 +125,13 @@ RingHashLoadBalancer::Ring::Ring(const Optional<envoy::api::v2::Cluster::RingHas
   std::sort(ring_.begin(), ring_.end(), [](const RingEntry& lhs, const RingEntry& rhs) -> bool {
     return lhs.hash_ < rhs.hash_;
   });
-#ifndef NVLOG
-  for (auto entry : ring_) {
-    ENVOY_LOG(trace, "ring hash: host={} hash={}", entry.host_->address()->asString(), entry.hash_);
-  }
-#endif
-}
 
-void RingHashLoadBalancer::refresh() {
-  // Note that we only compute global panic on host set refresh. Given that the runtime setting will
-  // rarely change, this is a reasonable compromise to avoid creating multiple rings when we only
-  // need to create one for LB.
-  RingConstSharedPtr new_ring;
-  bool new_global_panic;
-  const auto& host_set = chooseHostSet();
-  if (isGlobalPanic(host_set, runtime_)) {
-    new_ring = std::make_shared<Ring>(config_, host_set.hosts());
-    new_global_panic = true;
-  } else {
-    new_ring = std::make_shared<Ring>(config_, host_set.healthyHosts());
-    new_global_panic = false;
+  if (ENVOY_LOG_CHECK_LEVEL(trace)) {
+    for (auto entry : ring_) {
+      ENVOY_LOG(trace, "ring hash: host={} hash={}", entry.host_->address()->asString(),
+                entry.hash_);
+    }
   }
-
-  std::unique_lock<std::shared_timed_mutex> lock(factory_->mutex_);
-  factory_->current_ring_ = new_ring;
-  factory_->global_panic_ = new_global_panic;
 }
 
 } // namespace Upstream

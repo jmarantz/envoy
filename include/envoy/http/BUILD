@@ -11,9 +11,9 @@ envoy_package()
 envoy_cc_library(
     name = "async_client_interface",
     hdrs = ["async_client.h"],
+    external_deps = ["abseil_optional"],
     deps = [
         ":message_interface",
-        "//include/envoy/common:optional",
         "//include/envoy/event:dispatcher_interface",
     ],
 )
@@ -58,7 +58,7 @@ envoy_cc_library(
 )
 
 envoy_cc_library(
-    name = "wshandler_callback_interface",
+    name = "websocket_interface",
     hdrs = ["websocket.h"],
     deps = [
         ":header_map_interface",

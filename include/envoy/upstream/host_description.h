@@ -3,12 +3,11 @@
 #include <memory>
 #include <string>
 
+#include "envoy/api/v2/core/base.pb.h"
 #include "envoy/network/address.h"
 #include "envoy/stats/stats_macros.h"
 #include "envoy/upstream/health_check_host_monitor.h"
 #include "envoy/upstream/outlier_detection.h"
-
-#include "api/base.pb.h"
 
 namespace Envoy {
 namespace Upstream {
@@ -17,8 +16,8 @@ namespace Upstream {
  * All per host stats. @see stats_macros.h
  *
  * {rq_success, rq_error} have specific semantics driven by the needs of EDS load reporting. See
- * envoy.api.v2.UpstreamLocalityStats for the definitions of success/error. These are latched by
- * LoadStatsReporter, independent of the normal stats sink flushing.
+ * envoy.api.v2.endpoint.UpstreamLocalityStats for the definitions of success/error. These are
+ * latched by LoadStatsReporter, independent of the normal stats sink flushing.
  */
 // clang-format off
 #define ALL_HOST_STATS(COUNTER, GAUGE)                                                             \
@@ -56,7 +55,7 @@ public:
   /**
    * @return the metadata associated with this host
    */
-  virtual const envoy::api::v2::Metadata& metadata() const PURE;
+  virtual const envoy::api::v2::core::Metadata& metadata() const PURE;
 
   /**
    * @return the cluster the host is a member of.
@@ -93,7 +92,12 @@ public:
    * @return the locality of the host (deployment specific). This will be the default instance if
    *         unknown.
    */
-  virtual const envoy::api::v2::Locality& locality() const PURE;
+  virtual const envoy::api::v2::core::Locality& locality() const PURE;
+
+  /**
+   * @return the address used to health check the host.
+   */
+  virtual Network::Address::InstanceConstSharedPtr healthCheckAddress() const PURE;
 };
 
 typedef std::shared_ptr<const HostDescription> HostDescriptionConstSharedPtr;

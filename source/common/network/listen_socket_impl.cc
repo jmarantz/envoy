@@ -8,10 +8,9 @@
 #include "envoy/common/exception.h"
 
 #include "common/common/assert.h"
+#include "common/common/fmt.h"
 #include "common/network/address_impl.h"
 #include "common/network/utility.h"
-
-#include "fmt/format.h"
 
 namespace Envoy {
 namespace Network {
@@ -30,32 +29,44 @@ void ListenSocketImpl::doBind() {
   }
 }
 
-TcpListenSocket::TcpListenSocket(Address::InstanceConstSharedPtr address, bool bind_to_port) {
-  local_address_ = address;
-  fd_ = local_address_->socket(Address::SocketType::Stream);
+void ListenSocketImpl::setListenSocketOptions(const Network::Socket::OptionsSharedPtr& options) {
+  if (!Network::Socket::applyOptions(options, *this, Socket::SocketState::PreBind)) {
+    throw EnvoyException("ListenSocket: Setting socket options failed");
+  }
+}
+
+TcpListenSocket::TcpListenSocket(const Address::InstanceConstSharedPtr& address,
+                                 const Network::Socket::OptionsSharedPtr& options,
+                                 bool bind_to_port)
+    : ListenSocketImpl(address->socket(Address::SocketType::Stream), address) {
   RELEASE_ASSERT(fd_ != -1);
 
+  // TODO(htuch): This might benefit from moving to SocketOptionImpl.
   int on = 1;
   int rc = setsockopt(fd_, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
   RELEASE_ASSERT(rc != -1);
+
+  setListenSocketOptions(options);
 
   if (bind_to_port) {
     doBind();
   }
 }
 
-TcpListenSocket::TcpListenSocket(int fd, Address::InstanceConstSharedPtr address) {
-  fd_ = fd;
-  local_address_ = address;
+TcpListenSocket::TcpListenSocket(int fd, const Address::InstanceConstSharedPtr& address,
+                                 const Network::Socket::OptionsSharedPtr& options)
+    : ListenSocketImpl(fd, address) {
+  setListenSocketOptions(options);
 }
 
-UdsListenSocket::UdsListenSocket(const std::string& uds_path) {
-  remove(uds_path.c_str());
-  local_address_.reset(new Address::PipeInstance(uds_path));
-  fd_ = local_address_->socket(Address::SocketType::Stream);
+UdsListenSocket::UdsListenSocket(const Address::InstanceConstSharedPtr& address)
+    : ListenSocketImpl(address->socket(Address::SocketType::Stream), address) {
   RELEASE_ASSERT(fd_ != -1);
   doBind();
 }
+
+UdsListenSocket::UdsListenSocket(int fd, const Address::InstanceConstSharedPtr& address)
+    : ListenSocketImpl(fd, address) {}
 
 } // namespace Network
 } // namespace Envoy

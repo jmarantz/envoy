@@ -7,10 +7,12 @@
 #include "common/config/protocol_json.h"
 #include "common/config/rds_json.h"
 #include "common/config/utility.h"
-#include "common/config/well_known_names.h"
 #include "common/json/config_schemas.h"
 #include "common/protobuf/protobuf.h"
 #include "common/protobuf/utility.h"
+
+#include "extensions/access_loggers/well_known_names.h"
+#include "extensions/filters/http/well_known_names.h"
 
 namespace Envoy {
 namespace Config {
@@ -18,13 +20,13 @@ namespace Config {
 namespace {
 
 void translateComparisonFilter(const Json::Object& json_config,
-                               envoy::api::v2::filter::accesslog::ComparisonFilter& filter) {
+                               envoy::config::filter::accesslog::v2::ComparisonFilter& filter) {
   const std::string op = json_config.getString("op");
   if (op == ">=") {
-    filter.set_op(envoy::api::v2::filter::accesslog::ComparisonFilter::GE);
+    filter.set_op(envoy::config::filter::accesslog::v2::ComparisonFilter::GE);
   } else {
     ASSERT(op == "=");
-    filter.set_op(envoy::api::v2::filter::accesslog::ComparisonFilter::EQ);
+    filter.set_op(envoy::config::filter::accesslog::v2::ComparisonFilter::EQ);
   }
 
   auto* runtime = filter.mutable_value();
@@ -33,41 +35,41 @@ void translateComparisonFilter(const Json::Object& json_config,
 }
 
 void translateStatusCodeFilter(const Json::Object& json_config,
-                               envoy::api::v2::filter::accesslog::StatusCodeFilter& filter) {
+                               envoy::config::filter::accesslog::v2::StatusCodeFilter& filter) {
   translateComparisonFilter(json_config, *filter.mutable_comparison());
 }
 
 void translateDurationFilter(const Json::Object& json_config,
-                             envoy::api::v2::filter::accesslog::DurationFilter& filter) {
+                             envoy::config::filter::accesslog::v2::DurationFilter& filter) {
   translateComparisonFilter(json_config, *filter.mutable_comparison());
 }
 
 void translateRuntimeFilter(const Json::Object& json_config,
-                            envoy::api::v2::filter::accesslog::RuntimeFilter& filter) {
+                            envoy::config::filter::accesslog::v2::RuntimeFilter& filter) {
   filter.set_runtime_key(json_config.getString("key"));
 }
 
 void translateRepeatedFilter(
     const Json::Object& json_config,
-    Protobuf::RepeatedPtrField<envoy::api::v2::filter::accesslog::AccessLogFilter>& filters) {
+    Protobuf::RepeatedPtrField<envoy::config::filter::accesslog::v2::AccessLogFilter>& filters) {
   for (const auto& json_filter : json_config.getObjectArray("filters")) {
     FilterJson::translateAccessLogFilter(*json_filter, *filters.Add());
   }
 }
 
 void translateOrFilter(const Json::Object& json_config,
-                       envoy::api::v2::filter::accesslog::OrFilter& filter) {
+                       envoy::config::filter::accesslog::v2::OrFilter& filter) {
   translateRepeatedFilter(json_config, *filter.mutable_filters());
 }
 
 void translateAndFilter(const Json::Object& json_config,
-                        envoy::api::v2::filter::accesslog::AndFilter& filter) {
+                        envoy::config::filter::accesslog::v2::AndFilter& filter) {
   translateRepeatedFilter(json_config, *filter.mutable_filters());
 }
 
 void translateRepeatedAccessLog(
     const std::vector<Json::ObjectSharedPtr>& json,
-    Protobuf::RepeatedPtrField<envoy::api::v2::filter::accesslog::AccessLog>& access_logs) {
+    Protobuf::RepeatedPtrField<envoy::config::filter::accesslog::v2::AccessLog>& access_logs) {
   for (const auto& json_access_log : json) {
     auto* access_log = access_logs.Add();
     FilterJson::translateAccessLog(*json_access_log, *access_log);
@@ -78,7 +80,7 @@ void translateRepeatedAccessLog(
 
 void FilterJson::translateAccessLogFilter(
     const Json::Object& json_config,
-    envoy::api::v2::filter::accesslog::AccessLogFilter& proto_config) {
+    envoy::config::filter::accesslog::v2::AccessLogFilter& proto_config) {
   const std::string type = json_config.getString("type");
   if (type == "status_code") {
     translateStatusCodeFilter(json_config, *proto_config.mutable_status_code_filter());
@@ -99,10 +101,10 @@ void FilterJson::translateAccessLogFilter(
 }
 
 void FilterJson::translateAccessLog(const Json::Object& json_config,
-                                    envoy::api::v2::filter::accesslog::AccessLog& proto_config) {
+                                    envoy::config::filter::accesslog::v2::AccessLog& proto_config) {
   json_config.validateSchema(Json::Schema::ACCESS_LOG_SCHEMA);
 
-  envoy::api::v2::filter::accesslog::FileAccessLog file_access_log;
+  envoy::config::filter::accesslog::v2::FileAccessLog file_access_log;
 
   JSON_UTIL_SET_STRING(json_config, file_access_log, path);
   JSON_UTIL_SET_STRING(json_config, file_access_log, format);
@@ -112,7 +114,7 @@ void FilterJson::translateAccessLog(const Json::Object& json_config,
 
   // Statically registered access logs are a v2-only feature, so use the standard internal file
   // access log for json config conversion.
-  proto_config.set_name(Config::AccessLogNames::get().FILE);
+  proto_config.set_name(Extensions::AccessLoggers::AccessLogNames::get().FILE);
 
   if (json_config.hasObject("filter")) {
     translateAccessLogFilter(*json_config.getObject("filter"), *proto_config.mutable_filter());
@@ -121,12 +123,14 @@ void FilterJson::translateAccessLog(const Json::Object& json_config,
 
 void FilterJson::translateHttpConnectionManager(
     const Json::Object& json_config,
-    envoy::api::v2::filter::network::HttpConnectionManager& proto_config) {
+    envoy::config::filter::network::http_connection_manager::v2::HttpConnectionManager&
+        proto_config) {
   json_config.validateSchema(Json::Schema::HTTP_CONN_NETWORK_FILTER_SCHEMA);
 
-  envoy::api::v2::filter::network::HttpConnectionManager::CodecType codec_type{};
-  envoy::api::v2::filter::network::HttpConnectionManager::CodecType_Parse(
-      StringUtil::toUpper(json_config.getString("codec_type")), &codec_type);
+  envoy::config::filter::network::http_connection_manager::v2::HttpConnectionManager::CodecType
+      codec_type{};
+  envoy::config::filter::network::http_connection_manager::v2::HttpConnectionManager::
+      CodecType_Parse(StringUtil::toUpper(json_config.getString("codec_type")), &codec_type);
   proto_config.set_codec_type(codec_type);
 
   JSON_UTIL_SET_STRING(json_config, proto_config, stat_prefix);
@@ -148,8 +152,8 @@ void FilterJson::translateHttpConnectionManager(
     JSON_UTIL_SET_STRING(*json_filter, *filter, name);
 
     // Translate v1 name to v2 name.
-    filter->set_name(
-        Config::HttpFilterNames::get().v1_converter_.getV2Name(json_filter->getString("name")));
+    filter->set_name(Extensions::HttpFilters::HttpFilterNames::get().v1_converter_.getV2Name(
+        json_filter->getString("name")));
     JSON_UTIL_SET_STRING(*json_filter, *filter->mutable_deprecated_v1(), type);
 
     const std::string deprecated_config = "{\"deprecated_v1\": true, \"value\": " +
@@ -159,7 +163,6 @@ void FilterJson::translateHttpConnectionManager(
         Protobuf::util::JsonStringToMessage(deprecated_config, filter->mutable_config());
     // JSON schema has already validated that this is a valid JSON object.
     ASSERT(status.ok());
-    UNREFERENCED_PARAMETER(status);
   }
 
   JSON_UTIL_SET_BOOL(json_config, proto_config, add_user_agent);
@@ -168,9 +171,11 @@ void FilterJson::translateHttpConnectionManager(
     const auto json_tracing = json_config.getObject("tracing");
     auto* tracing = proto_config.mutable_tracing();
 
-    envoy::api::v2::filter::network::HttpConnectionManager::Tracing::OperationName operation_name{};
-    envoy::api::v2::filter::network::HttpConnectionManager::Tracing::OperationName_Parse(
-        StringUtil::toUpper(json_tracing->getString("operation_name")), &operation_name);
+    envoy::config::filter::network::http_connection_manager::v2::HttpConnectionManager::Tracing::
+        OperationName operation_name{};
+    envoy::config::filter::network::http_connection_manager::v2::HttpConnectionManager::Tracing::
+        OperationName_Parse(StringUtil::toUpper(json_tracing->getString("operation_name")),
+                            &operation_name);
     tracing->set_operation_name(operation_name);
 
     for (const std::string& header :
@@ -199,9 +204,12 @@ void FilterJson::translateHttpConnectionManager(
   JSON_UTIL_SET_BOOL(json_config, proto_config, use_remote_address);
   JSON_UTIL_SET_BOOL(json_config, proto_config, generate_request_id);
 
-  envoy::api::v2::filter::network::HttpConnectionManager::ForwardClientCertDetails fcc_details{};
-  envoy::api::v2::filter::network::HttpConnectionManager::ForwardClientCertDetails_Parse(
-      StringUtil::toUpper(json_config.getString("forward_client_cert", "sanitize")), &fcc_details);
+  envoy::config::filter::network::http_connection_manager::v2::HttpConnectionManager::
+      ForwardClientCertDetails fcc_details{};
+  envoy::config::filter::network::http_connection_manager::v2::HttpConnectionManager::
+      ForwardClientCertDetails_Parse(
+          StringUtil::toUpper(json_config.getString("forward_client_cert", "sanitize")),
+          &fcc_details);
   proto_config.set_forward_client_cert_details(fcc_details);
 
   for (const std::string& detail :
@@ -215,8 +223,9 @@ void FilterJson::translateHttpConnectionManager(
   }
 }
 
-void FilterJson::translateRedisProxy(const Json::Object& json_config,
-                                     envoy::api::v2::filter::network::RedisProxy& proto_config) {
+void FilterJson::translateRedisProxy(
+    const Json::Object& json_config,
+    envoy::config::filter::network::redis_proxy::v2::RedisProxy& proto_config) {
   json_config.validateSchema(Json::Schema::REDIS_PROXY_NETWORK_FILTER_SCHEMA);
   JSON_UTIL_SET_STRING(json_config, proto_config, stat_prefix);
   proto_config.set_cluster(json_config.getString("cluster_name"));
@@ -228,8 +237,9 @@ void FilterJson::translateRedisProxy(const Json::Object& json_config,
   JSON_UTIL_SET_DURATION(*json_conn_pool, *conn_pool, op_timeout);
 }
 
-void FilterJson::translateMongoProxy(const Json::Object& json_config,
-                                     envoy::api::v2::filter::network::MongoProxy& proto_config) {
+void FilterJson::translateMongoProxy(
+    const Json::Object& json_config,
+    envoy::config::filter::network::mongo_proxy::v2::MongoProxy& proto_config) {
   json_config.validateSchema(Json::Schema::MONGO_PROXY_NETWORK_FILTER_SCHEMA);
 
   JSON_UTIL_SET_STRING(json_config, proto_config, stat_prefix);
@@ -238,14 +248,15 @@ void FilterJson::translateMongoProxy(const Json::Object& json_config,
     const auto json_fault = json_config.getObject("fault")->getObject("fixed_delay");
     auto* delay = proto_config.mutable_delay();
 
-    delay->set_type(envoy::api::v2::filter::FaultDelay::FIXED);
+    delay->set_type(envoy::config::filter::fault::v2::FaultDelay::FIXED);
     delay->set_percent(static_cast<uint32_t>(json_fault->getInteger("percent")));
     JSON_UTIL_SET_DURATION_FROM_FIELD(*json_fault, *delay, fixed_delay, duration);
   }
 }
 
-void FilterJson::translateFaultFilter(const Json::Object& json_config,
-                                      envoy::api::v2::filter::http::HTTPFault& proto_config) {
+void FilterJson::translateFaultFilter(
+    const Json::Object& json_config,
+    envoy::config::filter::http::fault::v2::HTTPFault& proto_config) {
   json_config.validateSchema(Json::Schema::FAULT_HTTP_FILTER_SCHEMA);
 
   const Json::ObjectSharedPtr json_config_abort = json_config.getObject("abort", true);
@@ -262,7 +273,7 @@ void FilterJson::translateFaultFilter(const Json::Object& json_config,
 
   if (!json_config_delay->empty()) {
     auto* delay = proto_config.mutable_delay();
-    delay->set_type(envoy::api::v2::filter::FaultDelay::FIXED);
+    delay->set_type(envoy::config::filter::fault::v2::FaultDelay::FIXED);
     delay->set_percent(static_cast<uint32_t>(json_config_delay->getInteger("fixed_delay_percent")));
     JSON_UTIL_SET_DURATION_FROM_FIELD(*json_config_delay, *delay, fixed_delay, fixed_duration);
   }
@@ -281,7 +292,8 @@ void FilterJson::translateFaultFilter(const Json::Object& json_config,
 }
 
 void FilterJson::translateHealthCheckFilter(
-    const Json::Object& json_config, envoy::api::v2::filter::http::HealthCheck& proto_config) {
+    const Json::Object& json_config,
+    envoy::config::filter::http::health_check::v2::HealthCheck& proto_config) {
   json_config.validateSchema(Json::Schema::HEALTH_CHECK_HTTP_FILTER_SCHEMA);
 
   JSON_UTIL_SET_BOOL(json_config, proto_config, pass_through_mode);
@@ -291,7 +303,7 @@ void FilterJson::translateHealthCheckFilter(
 
 void FilterJson::translateGrpcJsonTranscoder(
     const Json::Object& json_config,
-    envoy::api::v2::filter::http::GrpcJsonTranscoder& proto_config) {
+    envoy::config::filter::http::transcoder::v2::GrpcJsonTranscoder& proto_config) {
   json_config.validateSchema(Json::Schema::GRPC_JSON_TRANSCODER_FILTER_SCHEMA);
   JSON_UTIL_SET_STRING(json_config, proto_config, proto_descriptor);
   auto* services = proto_config.mutable_services();
@@ -313,16 +325,32 @@ void FilterJson::translateGrpcJsonTranscoder(
   }
 }
 
+void FilterJson::translateSquashConfig(
+    const Json::Object& json_config,
+    envoy::config::filter::http::squash::v2::Squash& proto_config) {
+  json_config.validateSchema(Json::Schema::SQUASH_HTTP_FILTER_SCHEMA);
+
+  JSON_UTIL_SET_STRING(json_config, proto_config, cluster);
+  // convert json object to google.protobuf.Struct
+  std::string json_string = json_config.getObject("attachment_template")->asJsonString();
+  MessageUtil::loadFromJson(json_string, *proto_config.mutable_attachment_template());
+
+  JSON_UTIL_SET_DURATION(json_config, proto_config, attachment_timeout);
+  JSON_UTIL_SET_DURATION(json_config, proto_config, attachment_poll_period);
+  JSON_UTIL_SET_DURATION(json_config, proto_config, request_timeout);
+}
+
 void FilterJson::translateRouter(const Json::Object& json_config,
-                                 envoy::api::v2::filter::http::Router& proto_config) {
+                                 envoy::config::filter::http::router::v2::Router& proto_config) {
   json_config.validateSchema(Json::Schema::ROUTER_HTTP_FILTER_SCHEMA);
 
   proto_config.mutable_dynamic_stats()->set_value(json_config.getBoolean("dynamic_stats", true));
   proto_config.set_start_child_span(json_config.getBoolean("start_child_span", false));
 }
 
-void FilterJson::translateBufferFilter(const Json::Object& json_config,
-                                       envoy::api::v2::filter::http::Buffer& proto_config) {
+void FilterJson::translateBufferFilter(
+    const Json::Object& json_config,
+    envoy::config::filter::http::buffer::v2::Buffer& proto_config) {
   json_config.validateSchema(Json::Schema::BUFFER_HTTP_FILTER_SCHEMA);
 
   JSON_UTIL_SET_INTEGER(json_config, proto_config, max_request_bytes);
@@ -330,13 +358,14 @@ void FilterJson::translateBufferFilter(const Json::Object& json_config,
 }
 
 void FilterJson::translateLuaFilter(const Json::Object& json_config,
-                                    envoy::api::v2::filter::http::Lua& proto_config) {
+                                    envoy::config::filter::http::lua::v2::Lua& proto_config) {
   json_config.validateSchema(Json::Schema::LUA_HTTP_FILTER_SCHEMA);
   JSON_UTIL_SET_STRING(json_config, proto_config, inline_code);
 }
 
-void FilterJson::translateTcpProxy(const Json::Object& json_config,
-                                   envoy::api::v2::filter::network::TcpProxy& proto_config) {
+void FilterJson::translateTcpProxy(
+    const Json::Object& json_config,
+    envoy::config::filter::network::tcp_proxy::v2::TcpProxy& proto_config) {
   json_config.validateSchema(Json::Schema::TCP_PROXY_NETWORK_FILTER_SCHEMA);
 
   JSON_UTIL_SET_STRING(json_config, proto_config, stat_prefix);
@@ -345,7 +374,7 @@ void FilterJson::translateTcpProxy(const Json::Object& json_config,
 
   for (const Json::ObjectSharedPtr& route_desc :
        json_config.getObject("route_config")->getObjectArray("routes")) {
-    envoy::api::v2::filter::network::TcpProxy::DeprecatedV1::TCPRoute* route =
+    envoy::config::filter::network::tcp_proxy::v2::TcpProxy::DeprecatedV1::TCPRoute* route =
         proto_config.mutable_deprecated_v1()->mutable_routes()->Add();
     JSON_UTIL_SET_STRING(*route_desc, *route, cluster);
     JSON_UTIL_SET_STRING(*route_desc, *route, destination_ports);
@@ -358,7 +387,8 @@ void FilterJson::translateTcpProxy(const Json::Object& json_config,
 }
 
 void FilterJson::translateTcpRateLimitFilter(
-    const Json::Object& json_config, envoy::api::v2::filter::network::RateLimit& proto_config) {
+    const Json::Object& json_config,
+    envoy::config::filter::network::rate_limit::v2::RateLimit& proto_config) {
   json_config.validateSchema(Json::Schema::RATELIMIT_NETWORK_FILTER_SCHEMA);
 
   JSON_UTIL_SET_STRING(json_config, proto_config, stat_prefix);
@@ -377,7 +407,8 @@ void FilterJson::translateTcpRateLimitFilter(
 }
 
 void FilterJson::translateHttpRateLimitFilter(
-    const Json::Object& json_config, envoy::api::v2::filter::http::RateLimit& proto_config) {
+    const Json::Object& json_config,
+    envoy::config::filter::http::rate_limit::v2::RateLimit& proto_config) {
   json_config.validateSchema(Json::Schema::RATE_LIMIT_HTTP_FILTER_SCHEMA);
 
   JSON_UTIL_SET_STRING(json_config, proto_config, domain);
@@ -388,7 +419,8 @@ void FilterJson::translateHttpRateLimitFilter(
 }
 
 void FilterJson::translateClientSslAuthFilter(
-    const Json::Object& json_config, envoy::api::v2::filter::network::ClientSSLAuth& proto_config) {
+    const Json::Object& json_config,
+    envoy::config::filter::network::client_ssl_auth::v2::ClientSSLAuth& proto_config) {
   json_config.validateSchema(Json::Schema::CLIENT_SSL_NETWORK_FILTER_SCHEMA);
 
   JSON_UTIL_SET_STRING(json_config, proto_config, auth_api_cluster);

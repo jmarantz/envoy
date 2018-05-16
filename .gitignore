@@ -12,3 +12,5 @@ BROWSE
 .deps
 *.pyc
 SOURCE_VERSION
+.cache
+.vimrc

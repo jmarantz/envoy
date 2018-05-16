@@ -2,15 +2,16 @@
 #include <string>
 #include <vector>
 
+#include "common/common/fmt.h"
 #include "common/network/utility.h"
 #include "common/runtime/runtime_impl.h"
 #include "common/upstream/load_balancer_impl.h"
 #include "common/upstream/upstream_impl.h"
 
+#include "test/common/upstream/utility.h"
 #include "test/mocks/runtime/mocks.h"
 #include "test/mocks/upstream/mocks.h"
 
-#include "fmt/format.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
@@ -23,11 +24,12 @@ namespace Upstream {
 static HostSharedPtr newTestHost(Upstream::ClusterInfoConstSharedPtr cluster,
                                  const std::string& url, uint32_t weight = 1,
                                  const std::string& zone = "") {
-  envoy::api::v2::Locality locality;
+  envoy::api::v2::core::Locality locality;
   locality.set_zone(zone);
-  return HostSharedPtr{new HostImpl(cluster, "", Network::Utility::resolveUrl(url),
-                                    envoy::api::v2::Metadata::default_instance(), weight,
-                                    locality)};
+  return HostSharedPtr{
+      new HostImpl(cluster, "", Network::Utility::resolveUrl(url),
+                   envoy::api::v2::core::Metadata::default_instance(), weight, locality,
+                   envoy::api::v2::endpoint::Endpoint::HealthCheckConfig::default_instance())};
 }
 
 /**
@@ -56,10 +58,12 @@ public:
            std::vector<uint32_t> healthy_destination_cluster) {
     local_priority_set_ = new PrioritySetImpl;
     // TODO(mattklein123): make load balancer per originating cluster host.
-    RandomLoadBalancer lb(priority_set_, local_priority_set_, stats_, runtime_, random_);
+    RandomLoadBalancer lb(priority_set_, local_priority_set_, stats_, runtime_, random_,
+                          common_config_);
 
-    HostListsSharedPtr upstream_per_zone_hosts = generateHostsPerZone(healthy_destination_cluster);
-    HostListsSharedPtr local_per_zone_hosts = generateHostsPerZone(originating_cluster);
+    HostsPerLocalitySharedPtr upstream_per_zone_hosts =
+        generateHostsPerZone(healthy_destination_cluster);
+    HostsPerLocalitySharedPtr local_per_zone_hosts = generateHostsPerZone(originating_cluster);
 
     HostVectorSharedPtr originating_hosts = generateHostList(originating_cluster);
     HostVectorSharedPtr healthy_destination = generateHostList(healthy_destination_cluster);
@@ -73,31 +77,33 @@ public:
       uint32_t from_zone = atoi(from_host->locality().zone().c_str());
 
       // Populate host set for upstream cluster.
-      HostListsSharedPtr per_zone_upstream(new std::vector<std::vector<HostSharedPtr>>());
-      per_zone_upstream->push_back((*upstream_per_zone_hosts)[from_zone]);
-      for (size_t zone = 0; zone < upstream_per_zone_hosts->size(); ++zone) {
+      std::vector<HostVector> per_zone_upstream;
+      per_zone_upstream.push_back(upstream_per_zone_hosts->get()[from_zone]);
+      for (size_t zone = 0; zone < upstream_per_zone_hosts->get().size(); ++zone) {
         if (zone == from_zone) {
           continue;
         }
 
-        per_zone_upstream->push_back((*upstream_per_zone_hosts)[zone]);
+        per_zone_upstream.push_back(upstream_per_zone_hosts->get()[zone]);
       }
-      host_set_.hosts_per_locality_ = *per_zone_upstream;
-      host_set_.healthy_hosts_per_locality_ = *per_zone_upstream;
+      auto per_zone_upstream_shared = makeHostsPerLocality(std::move(per_zone_upstream));
+      host_set_.hosts_per_locality_ = per_zone_upstream_shared;
+      host_set_.healthy_hosts_per_locality_ = per_zone_upstream_shared;
 
       // Populate host set for originating cluster.
-      HostListsSharedPtr per_zone_local(new std::vector<std::vector<HostSharedPtr>>());
-      per_zone_local->push_back((*local_per_zone_hosts)[from_zone]);
-      for (size_t zone = 0; zone < local_per_zone_hosts->size(); ++zone) {
+      std::vector<HostVector> per_zone_local;
+      per_zone_local.push_back(local_per_zone_hosts->get()[from_zone]);
+      for (size_t zone = 0; zone < local_per_zone_hosts->get().size(); ++zone) {
         if (zone == from_zone) {
           continue;
         }
 
-        per_zone_local->push_back((*local_per_zone_hosts)[zone]);
+        per_zone_local.push_back(local_per_zone_hosts->get()[zone]);
       }
-      local_priority_set_->getOrCreateHostSet(0).updateHosts(originating_hosts, originating_hosts,
-                                                             per_zone_local, per_zone_local,
-                                                             empty_vector_, empty_vector_);
+      auto per_zone_local_shared = makeHostsPerLocality(std::move(per_zone_local));
+      local_priority_set_->getOrCreateHostSet(0).updateHosts(
+          originating_hosts, originating_hosts, per_zone_local_shared, per_zone_local_shared, {},
+          empty_vector_, empty_vector_);
 
       HostConstSharedPtr selected = lb.chooseHost(nullptr);
       hits[selected->address()->asString()]++;
@@ -112,7 +118,7 @@ public:
     }
   }
 
-  HostSharedPtr selectOriginatingHost(const std::vector<HostSharedPtr>& hosts) {
+  HostSharedPtr selectOriginatingHost(const HostVector& hosts) {
     // Originating cluster should have roughly the same per host request distribution.
     return hosts[random_.random() % hosts.size()];
   }
@@ -122,7 +128,7 @@ public:
    * @param hosts number of hosts per zone.
    */
   HostVectorSharedPtr generateHostList(const std::vector<uint32_t>& hosts) {
-    HostVectorSharedPtr ret(new std::vector<HostSharedPtr>());
+    HostVectorSharedPtr ret(new HostVector());
     for (size_t i = 0; i < hosts.size(); ++i) {
       const std::string zone = std::to_string(i);
       for (uint32_t j = 0; j < hosts[i]; ++j) {
@@ -138,25 +144,25 @@ public:
    * Generate hosts by zone.
    * @param hosts number of hosts per zone.
    */
-  HostListsSharedPtr generateHostsPerZone(const std::vector<uint32_t>& hosts) {
-    HostListsSharedPtr ret(new std::vector<std::vector<HostSharedPtr>>());
+  HostsPerLocalitySharedPtr generateHostsPerZone(const std::vector<uint32_t>& hosts) {
+    std::vector<HostVector> ret;
     for (size_t i = 0; i < hosts.size(); ++i) {
       const std::string zone = std::to_string(i);
-      std::vector<HostSharedPtr> zone_hosts;
+      HostVector zone_hosts;
 
       for (uint32_t j = 0; j < hosts[i]; ++j) {
         const std::string url = fmt::format("tcp://host.{}.{}:80", i, j);
         zone_hosts.push_back(newTestHost(info_, url, 1, zone));
       }
 
-      ret->push_back(std::move(zone_hosts));
+      ret.push_back(std::move(zone_hosts));
     }
 
-    return ret;
+    return makeHostsPerLocality(std::move(ret));
   };
 
   const uint32_t total_number_of_requests = 1000000;
-  std::vector<HostSharedPtr> empty_vector_;
+  HostVector empty_vector_;
 
   PrioritySetImpl* local_priority_set_;
   NiceMock<MockPrioritySet> priority_set_;
@@ -166,6 +172,7 @@ public:
   Runtime::RandomGeneratorImpl random_;
   Stats::IsolatedStoreImpl stats_store_;
   ClusterStats stats_;
+  envoy::api::v2::Cluster::CommonLbConfig common_config_;
 };
 
 TEST_F(DISABLED_SimulationTest, strictlyEqualDistribution) {

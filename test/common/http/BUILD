@@ -54,6 +54,16 @@ envoy_cc_test(
 )
 
 envoy_cc_test(
+    name = "codec_wrappers_test",
+    srcs = ["codec_wrappers_test.cc"],
+    deps = [
+        "//source/common/http:codec_wrappers_lib",
+        "//test/mocks/http:http_mocks",
+        "//test/test_common:utility_lib",
+    ],
+)
+
+envoy_cc_test(
     name = "codes_test",
     srcs = ["codes_test.cc"],
     deps = [
@@ -75,6 +85,7 @@ envoy_cc_test_library(
         "//include/envoy/http:header_map_interface",
         "//source/common/http:codec_client_lib",
         "//test/mocks:common_lib",
+        "//test/mocks/event:event_mocks",
     ],
 )
 
@@ -96,10 +107,12 @@ envoy_cc_test(
         "//source/common/http:exception_lib",
         "//source/common/http:header_map_lib",
         "//source/common/http:headers_lib",
+        "//source/common/http/websocket:ws_handler_lib",
         "//source/common/network:address_lib",
         "//source/common/stats:stats_lib",
         "//source/common/upstream:upstream_includes",
         "//source/common/upstream:upstream_lib",
+        "//source/extensions/access_loggers/file:file_access_log_lib",
         "//test/mocks:common_lib",
         "//test/mocks/access_log:access_log_mocks",
         "//test/mocks/buffer:buffer_mocks",
@@ -107,6 +120,7 @@ envoy_cc_test(
         "//test/mocks/local_info:local_info_mocks",
         "//test/mocks/network:network_mocks",
         "//test/mocks/runtime:runtime_mocks",
+        "//test/mocks/server:server_mocks",
         "//test/mocks/ssl:ssl_mocks",
         "//test/mocks/tracing:tracing_mocks",
         "//test/mocks/upstream:upstream_mocks",
@@ -150,6 +164,15 @@ envoy_cc_test(
     srcs = ["header_map_impl_test.cc"],
     deps = [
         "//source/common/http:header_map_lib",
+        "//test/test_common:utility_lib",
+    ],
+)
+
+envoy_cc_test(
+    name = "header_utility_test",
+    srcs = ["header_utility_test.cc"],
+    deps = [
+        "//source/common/http:header_utility_lib",
         "//test/test_common:utility_lib",
     ],
 )

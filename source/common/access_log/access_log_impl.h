@@ -5,13 +5,13 @@
 #include <vector>
 
 #include "envoy/access_log/access_log.h"
+#include "envoy/config/filter/accesslog/v2/accesslog.pb.h"
 #include "envoy/request_info/request_info.h"
 #include "envoy/runtime/runtime.h"
 #include "envoy/server/access_log_config.h"
 
+#include "common/http/header_utility.h"
 #include "common/protobuf/protobuf.h"
-
-#include "api/filter/accesslog/accesslog.pb.h"
 
 namespace Envoy {
 namespace AccessLog {
@@ -24,8 +24,8 @@ public:
   /**
    * Read a filter definition from proto and instantiate a concrete filter class.
    */
-  static FilterPtr fromProto(const envoy::api::v2::filter::accesslog::AccessLogFilter& config,
-                             Runtime::Loader& runtime);
+  static FilterPtr fromProto(const envoy::config::filter::accesslog::v2::AccessLogFilter& config,
+                             Runtime::Loader& runtime, Runtime::RandomGenerator& random);
 };
 
 /**
@@ -33,12 +33,12 @@ public:
  */
 class ComparisonFilter : public Filter {
 protected:
-  ComparisonFilter(const envoy::api::v2::filter::accesslog::ComparisonFilter& config,
+  ComparisonFilter(const envoy::config::filter::accesslog::v2::ComparisonFilter& config,
                    Runtime::Loader& runtime);
 
   bool compareAgainstValue(uint64_t lhs);
 
-  envoy::api::v2::filter::accesslog::ComparisonFilter config_;
+  envoy::config::filter::accesslog::v2::ComparisonFilter config_;
   Runtime::Loader& runtime_;
 };
 
@@ -47,7 +47,7 @@ protected:
  */
 class StatusCodeFilter : public ComparisonFilter {
 public:
-  StatusCodeFilter(const envoy::api::v2::filter::accesslog::StatusCodeFilter& config,
+  StatusCodeFilter(const envoy::config::filter::accesslog::v2::StatusCodeFilter& config,
                    Runtime::Loader& runtime)
       : ComparisonFilter(config.comparison(), runtime) {}
 
@@ -61,7 +61,7 @@ public:
  */
 class DurationFilter : public ComparisonFilter {
 public:
-  DurationFilter(const envoy::api::v2::filter::accesslog::DurationFilter& config,
+  DurationFilter(const envoy::config::filter::accesslog::v2::DurationFilter& config,
                  Runtime::Loader& runtime)
       : ComparisonFilter(config.comparison(), runtime) {}
 
@@ -75,9 +75,9 @@ public:
  */
 class OperatorFilter : public Filter {
 public:
-  OperatorFilter(
-      const Protobuf::RepeatedPtrField<envoy::api::v2::filter::accesslog::AccessLogFilter>& configs,
-      Runtime::Loader& runtime);
+  OperatorFilter(const Protobuf::RepeatedPtrField<
+                     envoy::config::filter::accesslog::v2::AccessLogFilter>& configs,
+                 Runtime::Loader& runtime, Runtime::RandomGenerator& random);
 
 protected:
   std::vector<FilterPtr> filters_;
@@ -88,7 +88,8 @@ protected:
  */
 class AndFilter : public OperatorFilter {
 public:
-  AndFilter(const envoy::api::v2::filter::accesslog::AndFilter& config, Runtime::Loader& runtime);
+  AndFilter(const envoy::config::filter::accesslog::v2::AndFilter& config, Runtime::Loader& runtime,
+            Runtime::RandomGenerator& random);
 
   // AccessLog::Filter
   bool evaluate(const RequestInfo::RequestInfo& info,
@@ -100,7 +101,8 @@ public:
  */
 class OrFilter : public OperatorFilter {
 public:
-  OrFilter(const envoy::api::v2::filter::accesslog::OrFilter& config, Runtime::Loader& runtime);
+  OrFilter(const envoy::config::filter::accesslog::v2::OrFilter& config, Runtime::Loader& runtime,
+           Runtime::RandomGenerator& random);
 
   // AccessLog::Filter
   bool evaluate(const RequestInfo::RequestInfo& info,
@@ -134,8 +136,8 @@ public:
  */
 class RuntimeFilter : public Filter {
 public:
-  RuntimeFilter(const envoy::api::v2::filter::accesslog::RuntimeFilter& config,
-                Runtime::Loader& runtime);
+  RuntimeFilter(const envoy::config::filter::accesslog::v2::RuntimeFilter& config,
+                Runtime::Loader& runtime, Runtime::RandomGenerator& random);
 
   // AccessLog::Filter
   bool evaluate(const RequestInfo::RequestInfo& info,
@@ -143,7 +145,25 @@ public:
 
 private:
   Runtime::Loader& runtime_;
+  Runtime::RandomGenerator& random_;
   const std::string runtime_key_;
+  const envoy::type::FractionalPercent percent_;
+  const bool use_independent_randomness_;
+};
+
+/**
+ * Filter based on headers.
+ */
+class HeaderFilter : public Filter {
+public:
+  HeaderFilter(const envoy::config::filter::accesslog::v2::HeaderFilter& config);
+
+  // AccessLog::Filter
+  bool evaluate(const RequestInfo::RequestInfo& info,
+                const Http::HeaderMap& request_headers) override;
+
+private:
+  std::vector<Http::HeaderUtility::HeaderData> header_data_;
 };
 
 /**
@@ -154,26 +174,8 @@ public:
   /**
    * Read a filter definition from proto and instantiate an Instance.
    */
-  static InstanceSharedPtr fromProto(const envoy::api::v2::filter::accesslog::AccessLog& config,
+  static InstanceSharedPtr fromProto(const envoy::config::filter::accesslog::v2::AccessLog& config,
                                      Server::Configuration::FactoryContext& context);
-};
-
-/**
- * Access log Instance that writes logs to a file.
- */
-class FileAccessLog : public Instance {
-public:
-  FileAccessLog(const std::string& access_log_path, FilterPtr&& filter, FormatterPtr&& formatter,
-                Envoy::AccessLog::AccessLogManager& log_manager);
-
-  // AccessLog::Instance
-  void log(const Http::HeaderMap* request_headers, const Http::HeaderMap* response_headers,
-           const RequestInfo::RequestInfo& request_info) override;
-
-private:
-  Filesystem::FileSharedPtr log_file_;
-  FilterPtr filter_;
-  FormatterPtr formatter_;
 };
 
 } // namespace AccessLog

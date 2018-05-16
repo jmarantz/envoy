@@ -24,13 +24,14 @@ namespace Http2 {
 class ConnPoolImpl : Logger::Loggable<Logger::Id::pool>, public ConnectionPool::Instance {
 public:
   ConnPoolImpl(Event::Dispatcher& dispatcher, Upstream::HostConstSharedPtr host,
-               Upstream::ResourcePriority priority);
+               Upstream::ResourcePriority priority,
+               const Network::ConnectionSocket::OptionsSharedPtr& options);
   ~ConnPoolImpl();
 
   // Http::ConnectionPool::Instance
   Http::Protocol protocol() const override { return Http::Protocol::Http2; }
   void addDrainedCallback(DrainedCb cb) override;
-  void closeConnections() override;
+  void drainConnections() override;
   ConnectionPool::Cancellable* newStream(Http::StreamDecoder& response_decoder,
                                          ConnectionPool::Callbacks& callbacks) override;
 
@@ -88,6 +89,7 @@ protected:
   ActiveClientPtr draining_client_;
   std::list<DrainedCb> drained_callbacks_;
   Upstream::ResourcePriority priority_;
+  const Network::ConnectionSocket::OptionsSharedPtr socket_options_;
 };
 
 /**

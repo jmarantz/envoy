@@ -26,11 +26,6 @@ void FilterManagerImpl::addReadFilter(ReadFilterSharedPtr filter) {
   new_filter->moveIntoListBack(std::move(new_filter), upstream_filters_);
 }
 
-void FilterManagerImpl::destroyFilters() {
-  upstream_filters_.clear();
-  downstream_filters_.clear();
-}
-
 bool FilterManagerImpl::initializeReadFilters() {
   if (upstream_filters_.empty()) {
     return false;
@@ -56,9 +51,9 @@ void FilterManagerImpl::onContinueReading(ActiveReadFilter* filter) {
       }
     }
 
-    Buffer::Instance& read_buffer = buffer_source_.getReadBuffer();
-    if (read_buffer.length() > 0) {
-      FilterStatus status = (*entry)->filter_->onData(read_buffer);
+    BufferSource::StreamBuffer read_buffer = buffer_source_.getReadBuffer();
+    if (read_buffer.buffer.length() > 0 || read_buffer.end_stream) {
+      FilterStatus status = (*entry)->filter_->onData(read_buffer.buffer, read_buffer.end_stream);
       if (status == FilterStatus::StopIteration) {
         return;
       }
@@ -73,7 +68,8 @@ void FilterManagerImpl::onRead() {
 
 FilterStatus FilterManagerImpl::onWrite() {
   for (const WriteFilterSharedPtr& filter : downstream_filters_) {
-    FilterStatus status = filter->onWrite(buffer_source_.getWriteBuffer());
+    BufferSource::StreamBuffer write_buffer = buffer_source_.getWriteBuffer();
+    FilterStatus status = filter->onWrite(write_buffer.buffer, write_buffer.end_stream);
     if (status == FilterStatus::StopIteration) {
       return status;
     }

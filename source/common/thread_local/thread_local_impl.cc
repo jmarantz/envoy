@@ -48,9 +48,11 @@ void InstanceImpl::registerThread(Event::Dispatcher& dispatcher, bool main_threa
 
   if (main_thread) {
     main_thread_dispatcher_ = &dispatcher;
+    thread_local_data_.dispatcher_ = &dispatcher;
   } else {
     ASSERT(!containsReference(registered_threads_, dispatcher));
     registered_threads_.push_back(dispatcher);
+    dispatcher.post([&dispatcher] { thread_local_data_.dispatcher_ = &dispatcher; });
   }
 }
 
@@ -87,6 +89,21 @@ void InstanceImpl::runOnAllThreads(Event::PostCb cb) {
 
   // Handle main thread.
   cb();
+}
+
+void InstanceImpl::runOnAllThreads(Event::PostCb cb, Event::PostCb all_threads_complete_cb) {
+  ASSERT(std::this_thread::get_id() == main_thread_id_);
+  ASSERT(!shutdown_);
+  std::shared_ptr<std::atomic<uint64_t>> worker_count =
+      std::make_shared<std::atomic<uint64_t>>(registered_threads_.size());
+  for (Event::Dispatcher& dispatcher : registered_threads_) {
+    dispatcher.post([this, worker_count, cb, all_threads_complete_cb]() -> void {
+      cb();
+      if (--*worker_count == 0) {
+        main_thread_dispatcher_->post(all_threads_complete_cb);
+      }
+    });
+  }
 }
 
 void InstanceImpl::SlotImpl::set(InitializeCb cb) {
@@ -146,6 +163,11 @@ void InstanceImpl::shutdownThread() {
     it->reset();
   }
   thread_local_data_.data_.clear();
+}
+
+Event::Dispatcher& InstanceImpl::dispatcher() {
+  ASSERT(thread_local_data_.dispatcher_ != nullptr);
+  return *thread_local_data_.dispatcher_;
 }
 
 } // namespace ThreadLocal

@@ -70,15 +70,15 @@ config, and then change the first `HttpConnectionManager` to be different from t
 An example of modifying the bootstrap proto to overwrite runtime defaults:
 ```c++
 TestEnvironment::writeStringToFileForTest("runtime/ssl.alt_alpn", "100");
-config_helper_.addConfigModifier([&](envoy::api::v2::Bootstrap& bootstrap) -> void {
+config_helper_.addConfigModifier([&](envoy::config::bootstrap::v2::Bootstrap& bootstrap) -> void {
   bootstrap.mutable_runtime()->set_symlink_root(TestEnvironment::temporaryPath("runtime");
 });
 ```
 
 An example of modifying `HttpConnectionManager` to change Envoy’s HTTP/1.1 processing:
 ```c++
-config_helper_.addConfigModifier([&](envoy::api::v2::filter::HttpConnectionManager& hcm) -> void {
-  envoy::api::v2::Http1ProtocolOptions options;
+config_helper_.addConfigModifier([&](envoy::config::filter::network::http_connection_manager::v2::HttpConnectionManager& hcm) -> void {
+  envoy::api::v2::core::Http1ProtocolOptions options;
   options.mutable_allow_absolute_url()->set_value(true);
   hcm.mutable_http_protocol_options()->CopyFrom(options);
 };);
@@ -86,7 +86,7 @@ config_helper_.addConfigModifier([&](envoy::api::v2::filter::HttpConnectionManag
 An example of modifying `HttpConnectionManager` to add an additional upstream
 cluster:
 ```c++
-   config_helper_.addConfigModifier([](envoy::api::v2::Bootstrap& bootstrap) {
+   config_helper_.addConfigModifier([](envoy::config::bootstrap::v2::Bootstrap& bootstrap) {
       bootstrap.mutable_rate_limit_service()->set_cluster_name("ratelimit");
       auto* ratelimit_cluster = bootstrap.mutable_static_resources()->add_clusters();
       ratelimit_cluster->MergeFrom(bootstrap.static_resources().clusters()[0]);

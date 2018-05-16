@@ -1,5 +1,6 @@
 #include "test/integration/integration.h"
 #include "test/mocks/runtime/mocks.h"
+#include "test/test_common/utility.h"
 
 #include "gtest/gtest.h"
 
@@ -58,7 +59,7 @@ TEST_P(LegacyJsonIntegrationTest, TestServerXfc) {
   param_map["set_current_client_cert_details"] = "";
   std::string config = TestEnvironment::temporaryFileSubstitute(
       "test/config/integration/server_xfcc.json", param_map, port_map_, version_);
-  IntegrationTestServer::create(config, version_, nullptr);
+  IntegrationTestServer::create(config, version_, nullptr, false);
 }
 
 TEST_P(LegacyJsonIntegrationTest, TestEchoServer) {
@@ -70,5 +71,6 @@ TEST_P(LegacyJsonIntegrationTest, TestServerGrpcJsonTranscoder) {
 }
 
 INSTANTIATE_TEST_CASE_P(IpVersions, LegacyJsonIntegrationTest,
-                        testing::ValuesIn(TestEnvironment::getIpVersionsForTest()));
+                        testing::ValuesIn(TestEnvironment::getIpVersionsForTest()),
+                        TestUtility::ipTestParamsToString);
 } // namespace Envoy

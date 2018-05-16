@@ -32,7 +32,6 @@ envoy_cc_library(
         "//source/common/network:connection_lib",
         "//source/common/network:dns_lib",
         "//source/common/network:listener_lib",
-        "//source/common/ssl:connection_lib",
     ],
 )
 
@@ -49,7 +48,7 @@ envoy_cc_library(
         "//include/envoy/event:dispatcher_interface",
         "//include/envoy/event:file_event_interface",
         "//include/envoy/network:connection_handler_interface",
-        "//source/common/common:logger_lib",
+        "//source/common/common:minimal_logger_lib",
         "//source/common/common:thread_lib",
     ],
 )
@@ -79,7 +78,7 @@ envoy_cc_library(
     deps = [
         ":dispatcher_lib",
         "//include/envoy/event:dispatcher_interface",
-        "//source/common/common:logger_lib",
+        "//source/common/common:minimal_logger_lib",
         "//source/common/common:thread_lib",
         "//source/server:guarddog_lib",
     ],

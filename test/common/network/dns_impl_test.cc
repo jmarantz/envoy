@@ -12,6 +12,7 @@
 #include "envoy/network/dns.h"
 
 #include "common/buffer/buffer_impl.h"
+#include "common/common/utility.h"
 #include "common/event/dispatcher_impl.h"
 #include "common/network/dns_impl.h"
 #include "common/network/filter_impl.h"
@@ -23,6 +24,7 @@
 #include "test/test_common/environment.h"
 #include "test/test_common/network_utility.h"
 #include "test/test_common/printers.h"
+#include "test/test_common/utility.h"
 
 #include "ares.h"
 #include "ares_dns.h"
@@ -43,25 +45,42 @@ namespace {
 typedef std::list<std::string> IpList;
 // Map from hostname to IpList.
 typedef std::unordered_map<std::string, IpList> HostMap;
+// Map from hostname to CNAME
+typedef std::unordered_map<std::string, std::string> CNameMap;
 // Represents a single TestDnsServer query state and lifecycle. This implements
 // just enough of RFC 1035 to handle queries we generate in the tests below.
 enum record_type { A, AAAA };
 
 class TestDnsServerQuery {
 public:
-  TestDnsServerQuery(ConnectionPtr connection, const HostMap& hosts_A, const HostMap& hosts_AAAA)
-      : connection_(std::move(connection)), hosts_A_(hosts_A), hosts_AAAA_(hosts_AAAA) {
+  TestDnsServerQuery(ConnectionPtr connection, const HostMap& hosts_A, const HostMap& hosts_AAAA,
+                     const CNameMap& cnames)
+      : connection_(std::move(connection)), hosts_A_(hosts_A), hosts_AAAA_(hosts_AAAA),
+        cnames_(cnames) {
     connection_->addReadFilter(Network::ReadFilterSharedPtr{new ReadFilter(*this)});
   }
 
   ~TestDnsServerQuery() { connection_->close(ConnectionCloseType::NoFlush); }
+
+  // Utility to encode a dns string in the rfc format. Example: \004some\004good\006domain
+  // RFC link: https://www.ietf.org/rfc/rfc1035.txt
+  static std::string encodeDnsName(const std::string& input) {
+    auto name_split = StringUtil::splitToken(input, ".");
+    std::string res;
+    for (const auto& it : name_split) {
+      res += static_cast<char>(it.size());
+      const std::string part{it};
+      res.append(part);
+    }
+    return res;
+  }
 
 private:
   struct ReadFilter : public Network::ReadFilterBaseImpl {
     ReadFilter(TestDnsServerQuery& parent) : parent_(parent) {}
 
     // Network::ReadFilter
-    Network::FilterStatus onData(Buffer::Instance& data) override {
+    Network::FilterStatus onData(Buffer::Instance& data, bool) override {
       onDataInternal(data);
       return Network::FilterStatus::StopIteration;
     }
@@ -107,19 +126,41 @@ private:
         const std::list<std::string>* ips = nullptr;
         // We only expect resources of type A or AAAA.
         const int q_type = DNS_QUESTION_TYPE(question + name_len);
+        std::string cname;
+        // check if we have a cname. If so, we will need to send a response element with the cname
+        // and lookup the ips of the cname and send back those ips (if any) too
+        auto cit = parent_.cnames_.find(name);
+        if (cit != parent_.cnames_.end()) {
+          cname = cit->second;
+        }
+        const char* hostLookup = name;
+        const unsigned char* ip_question = question;
+        long ip_name_len = name_len;
+        std::string encodedCname;
+        if (!cname.empty()) {
+          ASSERT_TRUE(cname.size() <= 253);
+          hostLookup = cname.c_str();
+          encodedCname = TestDnsServerQuery::encodeDnsName(cname);
+          ip_question = reinterpret_cast<const unsigned char*>(encodedCname.c_str());
+          ip_name_len =
+              encodedCname.size() + 1; //+1 as we need to include the final null terminator
+        }
         ASSERT_TRUE(q_type == T_A || q_type == T_AAAA);
         if (q_type == T_A) {
-          auto it = parent_.hosts_A_.find(name);
+          auto it = parent_.hosts_A_.find(hostLookup);
           if (it != parent_.hosts_A_.end()) {
             ips = &it->second;
           }
         } else {
-          auto it = parent_.hosts_AAAA_.find(name);
+          auto it = parent_.hosts_AAAA_.find(hostLookup);
           if (it != parent_.hosts_AAAA_.end()) {
             ips = &it->second;
           }
         }
         ares_free_string(name);
+
+        int answer_size = ips != nullptr ? ips->size() : 0;
+        answer_size += !encodedCname.empty() ? 1 : 0;
 
         // The response begins with the intial part of the request
         // (including the question section).
@@ -128,10 +169,39 @@ private:
         memcpy(response_base, request, response_base_len);
         DNS_HEADER_SET_QR(response_base, 1);
         DNS_HEADER_SET_AA(response_base, 0);
-        DNS_HEADER_SET_RCODE(response_base, ips != nullptr ? NOERROR : NXDOMAIN);
-        DNS_HEADER_SET_ANCOUNT(response_base, ips != nullptr ? ips->size() : 0);
+        DNS_HEADER_SET_RCODE(response_base, answer_size > 0 ? NOERROR : NXDOMAIN);
+        DNS_HEADER_SET_ANCOUNT(response_base, answer_size);
         DNS_HEADER_SET_NSCOUNT(response_base, 0);
         DNS_HEADER_SET_ARCOUNT(response_base, 0);
+        // Total response size will be computed according to cname response size + ip response sizes
+        size_t response_ip_rest_len;
+        if (q_type == T_A) {
+          response_ip_rest_len =
+              ips != nullptr ? ips->size() * (ip_name_len + RRFIXEDSZ + sizeof(in_addr)) : 0;
+        } else {
+          response_ip_rest_len =
+              ips != nullptr ? ips->size() * (ip_name_len + RRFIXEDSZ + sizeof(in6_addr)) : 0;
+        }
+        size_t response_cname_len =
+            !encodedCname.empty() ? name_len + RRFIXEDSZ + encodedCname.size() + 1 : 0;
+        const uint16_t response_size_n =
+            htons(response_base_len + response_ip_rest_len + response_cname_len);
+        Buffer::OwnedImpl write_buffer;
+        // Write response header
+        write_buffer.add(&response_size_n, sizeof(response_size_n));
+        write_buffer.add(response_base, response_base_len);
+
+        // if we have a cname, create a resource record
+        if (!encodedCname.empty()) {
+          unsigned char cname_rr_fixed[RRFIXEDSZ];
+          DNS_RR_SET_TYPE(cname_rr_fixed, T_CNAME);
+          DNS_RR_SET_LEN(cname_rr_fixed, encodedCname.size() + 1);
+          DNS_RR_SET_CLASS(cname_rr_fixed, C_IN);
+          DNS_RR_SET_TTL(cname_rr_fixed, 0);
+          write_buffer.add(question, name_len);
+          write_buffer.add(cname_rr_fixed, RRFIXEDSZ);
+          write_buffer.add(encodedCname.c_str(), encodedCname.size() + 1);
+        }
 
         // Create a resource record for each IP found in the host map.
         unsigned char response_rr_fixed[RRFIXEDSZ];
@@ -144,36 +214,22 @@ private:
         }
         DNS_RR_SET_CLASS(response_rr_fixed, C_IN);
         DNS_RR_SET_TTL(response_rr_fixed, 0);
-
-        size_t response_rest_len;
-        if (q_type == T_A) {
-          response_rest_len =
-              ips != nullptr ? ips->size() * (name_len + RRFIXEDSZ + sizeof(in_addr)) : 0;
-        } else {
-          response_rest_len =
-              ips != nullptr ? ips->size() * (name_len + RRFIXEDSZ + sizeof(in6_addr)) : 0;
-        }
-        // Send response to client.
-        const uint16_t response_size_n = htons(response_base_len + response_rest_len);
-        Buffer::OwnedImpl write_buffer_;
-        write_buffer_.add(&response_size_n, sizeof(response_size_n));
-        write_buffer_.add(response_base, response_base_len);
         if (ips != nullptr) {
           for (const auto& it : *ips) {
-            write_buffer_.add(question, name_len);
-            write_buffer_.add(response_rr_fixed, RRFIXEDSZ);
+            write_buffer.add(ip_question, ip_name_len);
+            write_buffer.add(response_rr_fixed, RRFIXEDSZ);
             if (q_type == T_A) {
               in_addr addr;
               ASSERT_EQ(1, inet_pton(AF_INET, it.c_str(), &addr));
-              write_buffer_.add(&addr, sizeof(addr));
+              write_buffer.add(&addr, sizeof(addr));
             } else {
               in6_addr addr;
               ASSERT_EQ(1, inet_pton(AF_INET6, it.c_str(), &addr));
-              write_buffer_.add(&addr, sizeof(addr));
+              write_buffer.add(&addr, sizeof(addr));
             }
           }
         }
-        parent_.connection_->write(write_buffer_);
+        parent_.connection_->write(write_buffer, false);
 
         // Reset query state, time for the next one.
         buffer_.drain(size_);
@@ -194,13 +250,22 @@ private:
   ConnectionPtr connection_;
   const HostMap& hosts_A_;
   const HostMap& hosts_AAAA_;
+  const CNameMap& cnames_;
 };
 
 class TestDnsServer : public ListenerCallbacks {
 public:
+  TestDnsServer(Event::DispatcherImpl& dispatcher) : dispatcher_(dispatcher) {}
+
+  void onAccept(ConnectionSocketPtr&& socket, bool) override {
+    Network::ConnectionPtr new_connection = dispatcher_.createServerConnection(
+        std::move(socket), Network::Test::createRawBufferSocket());
+    onNewConnection(std::move(new_connection));
+  }
+
   void onNewConnection(ConnectionPtr&& new_connection) override {
     TestDnsServerQuery* query =
-        new TestDnsServerQuery(std::move(new_connection), hosts_A_, hosts_AAAA_);
+        new TestDnsServerQuery(std::move(new_connection), hosts_A_, hosts_AAAA_, cnames_);
     queries_.emplace_back(query);
   }
 
@@ -212,9 +277,16 @@ public:
     }
   }
 
+  void addCName(const std::string& hostname, const std::string& cname) {
+    cnames_[hostname] = cname;
+  }
+
 private:
+  Event::DispatcherImpl& dispatcher_;
+
   HostMap hosts_A_;
   HostMap hosts_AAAA_;
+  CNameMap cnames_;
   // All queries are tracked so we can do resource reclamation when the test is
   // over.
   std::vector<std::unique_ptr<TestDnsServerQuery>> queries_;
@@ -270,20 +342,25 @@ TEST(DnsImplConstructor, SupportsCustomResolvers) {
   ares_free_data(resolvers);
 }
 
+TEST(DnsImplConstructor, BadCustomResolvers) {
+  Event::DispatcherImpl dispatcher;
+  envoy::api::v2::core::Address pipe_address;
+  pipe_address.mutable_pipe()->set_path("foo");
+  auto pipe_instance = Network::Utility::protobufAddressToAddress(pipe_address);
+  EXPECT_THROW_WITH_MESSAGE(dispatcher.createDnsResolver({pipe_instance}), EnvoyException,
+                            "DNS resolver 'foo' is not an IP address");
+}
+
 class DnsImplTest : public testing::TestWithParam<Address::IpVersion> {
 public:
   void SetUp() override {
     resolver_ = dispatcher_.createDnsResolver({});
 
     // Instantiate TestDnsServer and listen on a random port on the loopback address.
-    server_.reset(new TestDnsServer());
-    socket_.reset(
-        new Network::TcpListenSocket(Network::Test::getCanonicalLoopbackAddress(GetParam()), true));
-    listener_ = dispatcher_.createListener(connection_handler_, *socket_, *server_, stats_store_,
-                                           {.bind_to_port_ = true,
-                                            .use_proxy_proto_ = false,
-                                            .use_original_dst_ = false,
-                                            .per_connection_buffer_limit_bytes_ = 0});
+    server_.reset(new TestDnsServer(dispatcher_));
+    socket_.reset(new Network::TcpListenSocket(
+        Network::Test::getCanonicalLoopbackAddress(GetParam()), nullptr, true));
+    listener_ = dispatcher_.createListener(*socket_, *server_, true, false);
 
     // Point c-ares at the listener with no search domains and TCP-only.
     peer_.reset(new DnsResolverImplPeer(dynamic_cast<DnsResolverImpl*>(resolver_.get())));
@@ -322,7 +399,8 @@ static bool hasAddress(const std::list<Address::InstanceConstSharedPtr>& results
 
 // Parameterize the DNS test server socket address.
 INSTANTIATE_TEST_CASE_P(IpVersions, DnsImplTest,
-                        testing::ValuesIn(TestEnvironment::getIpVersionsForTest()));
+                        testing::ValuesIn(TestEnvironment::getIpVersionsForTest()),
+                        TestUtility::ipTestParamsToString);
 
 // Validate that when DnsResolverImpl is destructed with outstanding requests,
 // that we don't invoke any callbacks. This is a regression test from
@@ -500,6 +578,36 @@ TEST_P(DnsImplTest, MultiARecordLookup) {
   EXPECT_TRUE(hasAddress(address_list, "6.5.4.3"));
 }
 
+TEST_P(DnsImplTest, CNameARecordLookupV4) {
+  server_->addCName("root.cnam.domain", "result.cname.domain");
+  server_->addHosts("result.cname.domain", {"201.134.56.7"}, A);
+  std::list<Address::InstanceConstSharedPtr> address_list;
+  EXPECT_NE(nullptr,
+            resolver_->resolve("root.cnam.domain", DnsLookupFamily::V4Only,
+                               [&](std::list<Address::InstanceConstSharedPtr>&& results) -> void {
+                                 address_list = results;
+                                 dispatcher_.exit();
+                               }));
+
+  dispatcher_.run(Event::Dispatcher::RunType::Block);
+  EXPECT_TRUE(hasAddress(address_list, "201.134.56.7"));
+}
+
+TEST_P(DnsImplTest, CNameARecordLookupWithV6) {
+  server_->addCName("root.cnam.domain", "result.cname.domain");
+  server_->addHosts("result.cname.domain", {"201.134.56.7"}, A);
+  std::list<Address::InstanceConstSharedPtr> address_list;
+  EXPECT_NE(nullptr,
+            resolver_->resolve("root.cnam.domain", DnsLookupFamily::Auto,
+                               [&](std::list<Address::InstanceConstSharedPtr>&& results) -> void {
+                                 address_list = results;
+                                 dispatcher_.exit();
+                               }));
+
+  dispatcher_.run(Event::Dispatcher::RunType::Block);
+  EXPECT_TRUE(hasAddress(address_list, "201.134.56.7"));
+}
+
 TEST_P(DnsImplTest, MultiARecordLookupWithV6) {
   server_->addHosts("some.good.domain", {"201.134.56.7", "123.4.5.6", "6.5.4.3"}, A);
   server_->addHosts("some.good.domain", {"1::2", "1::2:3", "1::2:3:4"}, AAAA);
@@ -571,7 +679,8 @@ protected:
 
 // Parameterize the DNS test server socket address.
 INSTANTIATE_TEST_CASE_P(IpVersions, DnsImplZeroTimeoutTest,
-                        testing::ValuesIn(TestEnvironment::getIpVersionsForTest()));
+                        testing::ValuesIn(TestEnvironment::getIpVersionsForTest()),
+                        TestUtility::ipTestParamsToString);
 
 // Validate that timeouts result in an empty callback.
 TEST_P(DnsImplZeroTimeoutTest, Timeout) {

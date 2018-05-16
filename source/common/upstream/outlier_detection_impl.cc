@@ -10,11 +10,10 @@
 
 #include "common/common/assert.h"
 #include "common/common/enum_to_int.h"
+#include "common/common/fmt.h"
 #include "common/common/utility.h"
 #include "common/http/codes.h"
 #include "common/protobuf/utility.h"
-
-#include "fmt/format.h"
 
 namespace Envoy {
 namespace Upstream {
@@ -35,11 +34,11 @@ void DetectorHostMonitorImpl::eject(MonotonicTime ejection_time) {
   ASSERT(!host_.lock()->healthFlagGet(Host::HealthFlag::FAILED_OUTLIER_CHECK));
   host_.lock()->healthFlagSet(Host::HealthFlag::FAILED_OUTLIER_CHECK);
   num_ejections_++;
-  last_ejection_time_.value(ejection_time);
+  last_ejection_time_ = ejection_time;
 }
 
 void DetectorHostMonitorImpl::uneject(MonotonicTime unejection_time) {
-  last_unejection_time_.value(unejection_time);
+  last_unejection_time_ = (unejection_time);
 }
 
 void DetectorHostMonitorImpl::updateCurrentSuccessRateBucket() {
@@ -76,7 +75,7 @@ void DetectorHostMonitorImpl::putHttpResponseCode(uint64_t response_code) {
   }
 }
 
-void DetectorHostMonitorImpl::putResult(Result result) {
+Http::Code DetectorHostMonitorImpl::resultToHttpCode(Result result) {
   Http::Code http_code = Http::Code::InternalServerError;
 
   switch (result) {
@@ -97,10 +96,14 @@ void DetectorHostMonitorImpl::putResult(Result result) {
     break;
   }
 
-  putHttpResponseCode(enumToInt(http_code));
+  return http_code;
 }
 
-DetectorConfig::DetectorConfig(const envoy::api::v2::Cluster::OutlierDetection& config)
+void DetectorHostMonitorImpl::putResult(Result result) {
+  putHttpResponseCode(enumToInt(resultToHttpCode(result)));
+}
+
+DetectorConfig::DetectorConfig(const envoy::api::v2::cluster::OutlierDetection& config)
     : interval_ms_(static_cast<uint64_t>(PROTOBUF_GET_MS_OR_DEFAULT(config, interval, 10000))),
       base_ejection_time_ms_(
           static_cast<uint64_t>(PROTOBUF_GET_MS_OR_DEFAULT(config, base_ejection_time, 30000))),
@@ -124,7 +127,7 @@ DetectorConfig::DetectorConfig(const envoy::api::v2::Cluster::OutlierDetection& 
           PROTOBUF_GET_WRAPPED_OR_DEFAULT(config, enforcing_success_rate, 100))) {}
 
 DetectorImpl::DetectorImpl(const Cluster& cluster,
-                           const envoy::api::v2::Cluster::OutlierDetection& config,
+                           const envoy::api::v2::cluster::OutlierDetection& config,
                            Event::Dispatcher& dispatcher, Runtime::Loader& runtime,
                            MonotonicTimeSource& time_source, EventLoggerSharedPtr event_logger)
     : config_(config), dispatcher_(dispatcher), runtime_(runtime), time_source_(time_source),
@@ -144,7 +147,7 @@ DetectorImpl::~DetectorImpl() {
 
 std::shared_ptr<DetectorImpl>
 DetectorImpl::create(const Cluster& cluster,
-                     const envoy::api::v2::Cluster::OutlierDetection& config,
+                     const envoy::api::v2::cluster::OutlierDetection& config,
                      Event::Dispatcher& dispatcher, Runtime::Loader& runtime,
                      MonotonicTimeSource& time_source, EventLoggerSharedPtr event_logger) {
   std::shared_ptr<DetectorImpl> detector(
@@ -160,8 +163,7 @@ void DetectorImpl::initialize(const Cluster& cluster) {
     }
   }
   cluster.prioritySet().addMemberUpdateCb(
-      [this](uint32_t, const std::vector<HostSharedPtr>& hosts_added,
-             const std::vector<HostSharedPtr>& hosts_removed) -> void {
+      [this](uint32_t, const HostVector& hosts_added, const HostVector& hosts_removed) -> void {
         for (const HostSharedPtr& host : hosts_added) {
           addHostMonitor(host);
         }
@@ -201,7 +203,7 @@ void DetectorImpl::checkHostForUneject(HostSharedPtr host, DetectorHostMonitorIm
   std::chrono::milliseconds base_eject_time =
       std::chrono::milliseconds(runtime_.snapshot().getInteger(
           "outlier_detection.base_ejection_time_ms", config_.baseEjectionTimeMs()));
-  ASSERT(monitor->numEjections() > 0)
+  ASSERT(monitor->numEjections() > 0);
   if ((base_eject_time * monitor->numEjections()) <= (now - monitor->lastEjectionTime().value())) {
     stats_.ejections_active_.dec();
     host->healthFlagClear(Host::HealthFlag::FAILED_OUTLIER_CHECK);
@@ -397,10 +399,10 @@ void DetectorImpl::processSuccessRateEjections() {
   for (const auto& host : host_monitors_) {
     // Don't do work if the host is already ejected.
     if (!host.first->healthFlagGet(Host::HealthFlag::FAILED_OUTLIER_CHECK)) {
-      Optional<double> host_success_rate =
+      absl::optional<double> host_success_rate =
           host.second->successRateAccumulator().getSuccessRate(success_rate_request_volume);
 
-      if (host_success_rate.valid()) {
+      if (host_success_rate) {
         valid_success_rate_hosts.emplace_back(
             HostSuccessRatePair(host.first, host_success_rate.value()));
         success_rate_sum += host_success_rate.value();
@@ -464,7 +466,7 @@ void EventLoggerImpl::logEject(HostDescriptionConstSharedPtr host, Detector& det
     "\"upstream_url\": \"{}\", " +
     "\"action\": \"eject\", " +
     "\"type\": \"{}\", " +
-    "\"num_ejections\": \"{}\", " +
+    "\"num_ejections\": {}, " +
     "\"enforced\": \"{}\"" +
     "}}\n";
 
@@ -476,7 +478,7 @@ void EventLoggerImpl::logEject(HostDescriptionConstSharedPtr host, Detector& det
     "\"upstream_url\": \"{}\", " +
     "\"action\": \"eject\", " +
     "\"type\": \"{}\", " +
-    "\"num_ejections\": \"{}\", " +
+    "\"num_ejections\": {}, " +
     "\"enforced\": \"{}\", " +
     "\"host_success_rate\": \"{}\", " +
     "\"cluster_average_success_rate\": \"{}\", " +
@@ -540,9 +542,9 @@ std::string EventLoggerImpl::typeToString(EjectionType type) {
   NOT_REACHED;
 }
 
-int EventLoggerImpl::secsSinceLastAction(const Optional<MonotonicTime>& lastActionTime,
+int EventLoggerImpl::secsSinceLastAction(const absl::optional<MonotonicTime>& lastActionTime,
                                          MonotonicTime now) {
-  if (lastActionTime.valid()) {
+  if (lastActionTime) {
     return std::chrono::duration_cast<std::chrono::seconds>(now - lastActionTime.value()).count();
   }
   return -1;
@@ -558,13 +560,14 @@ SuccessRateAccumulatorBucket* SuccessRateAccumulator::updateCurrentWriter() {
   return current_success_rate_bucket_.get();
 }
 
-Optional<double> SuccessRateAccumulator::getSuccessRate(uint64_t success_rate_request_volume) {
+absl::optional<double>
+SuccessRateAccumulator::getSuccessRate(uint64_t success_rate_request_volume) {
   if (backup_success_rate_bucket_->total_request_counter_ < success_rate_request_volume) {
-    return Optional<double>();
+    return absl::optional<double>();
   }
 
-  return Optional<double>(backup_success_rate_bucket_->success_request_counter_ * 100.0 /
-                          backup_success_rate_bucket_->total_request_counter_);
+  return absl::optional<double>(backup_success_rate_bucket_->success_request_counter_ * 100.0 /
+                                backup_success_rate_bucket_->total_request_counter_);
 }
 
 } // namespace Outlier

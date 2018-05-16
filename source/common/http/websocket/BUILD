@@ -15,15 +15,15 @@ envoy_cc_library(
     deps = [
         "//include/envoy/http:codec_interface",
         "//include/envoy/http:header_map_interface",
-        "//include/envoy/http:wshandler_callback_interface",
+        "//include/envoy/http:websocket_interface",
         "//include/envoy/network:connection_interface",
         "//include/envoy/network:filter_interface",
         "//include/envoy/router:router_interface",
         "//include/envoy/upstream:cluster_manager_interface",
         "//source/common/common:enum_to_int",
-        "//source/common/filter:tcp_proxy_lib",
         "//source/common/http:codes_lib",
         "//source/common/http:header_map_lib",
         "//source/common/http/http1:codec_lib",
+        "//source/extensions/filters/network/tcp_proxy",
     ],
 )

@@ -12,9 +12,11 @@ envoy_cc_library(
     name = "codec_lib",
     srcs = ["codec_impl.cc"],
     hdrs = ["codec_impl.h"],
-    external_deps = ["nghttp2"],
+    external_deps = [
+        "nghttp2",
+        "abseil_optional",
+    ],
     deps = [
-        "//include/envoy/common:optional",
         "//include/envoy/event:deferred_deletable",
         "//include/envoy/event:dispatcher_interface",
         "//include/envoy/http:codec_interface",
@@ -28,7 +30,7 @@ envoy_cc_library(
         "//source/common/common:assert_lib",
         "//source/common/common:enum_to_int",
         "//source/common/common:linked_object",
-        "//source/common/common:logger_lib",
+        "//source/common/common:minimal_logger_lib",
         "//source/common/common:utility_lib",
         "//source/common/http:codec_helper_lib",
         "//source/common/http:codes_lib",

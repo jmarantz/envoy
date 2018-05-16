@@ -1,10 +1,11 @@
 #pragma once
 
-#include "envoy/common/optional.h"
+#include "envoy/api/v2/cds.pb.h"
+#include "envoy/api/v2/cluster/circuit_breaker.pb.h"
 #include "envoy/json/json_object.h"
 #include "envoy/upstream/cluster_manager.h"
 
-#include "api/cds.pb.h"
+#include "absl/types/optional.h"
 
 namespace Envoy {
 namespace Config {
@@ -21,12 +22,12 @@ public:
                             envoy::api::v2::Cluster::RingHashLbConfig& ring_hash_lb_config);
 
   /**
-   * Translate a v1 JSON health check object to v2 envoy::api::v2::HealthCheck.
+   * Translate a v1 JSON health check object to v2 envoy::api::v2::core::HealthCheck.
    * @param json_health_check source v1 JSON health check object.
-   * @param health_check destination v2 envoy::api::v2::HealthCheck.
+   * @param health_check destination v2 envoy::api::v2::core::HealthCheck.
    */
   static void translateHealthCheck(const Json::Object& json_health_check,
-                                   envoy::api::v2::HealthCheck& health_check);
+                                   envoy::api::v2::core::HealthCheck& health_check);
 
   /**
    * Translate a v1 JSON thresholds object to v2 envoy::api::v2::Thresholds.
@@ -35,16 +36,16 @@ public:
    * @param thresholds destination v2 envoy::api::v2::Thresholds.
    */
   static void translateThresholds(const Json::Object& json_thresholds,
-                                  const envoy::api::v2::RoutingPriority& priority,
-                                  envoy::api::v2::CircuitBreakers::Thresholds& thresholds);
+                                  const envoy::api::v2::core::RoutingPriority& priority,
+                                  envoy::api::v2::cluster::CircuitBreakers::Thresholds& thresholds);
 
   /**
-   * Translate a v1 JSON circuit breakers object to v2 envoy::api::v2::CircuitBreakers.
+   * Translate a v1 JSON circuit breakers object to v2 envoy::api::v2::cluster::CircuitBreakers.
    * @param json_circuit_breakers source v1 JSON circuit breakers object.
-   * @param circuit_breakers destination v2 envoy::api::v2::CircuitBreakers.
+   * @param circuit_breakers destination v2 envoy::api::v2::cluster::CircuitBreakers.
    */
   static void translateCircuitBreakers(const Json::Object& json_circuit_breakers,
-                                       envoy::api::v2::CircuitBreakers& circuit_breakers);
+                                       envoy::api::v2::cluster::CircuitBreakers& circuit_breakers);
 
   /**
    * Translate a v1 JSON outlier detection object to v2 envoy::api::v2::OutlierDetection.
@@ -53,7 +54,7 @@ public:
    */
   static void
   translateOutlierDetection(const Json::Object& json_outlier_detection,
-                            envoy::api::v2::Cluster::OutlierDetection& outlier_detection);
+                            envoy::api::v2::cluster::OutlierDetection& outlier_detection);
 
   /**
    * Translate a v1 JSON Cluster to v2 envoy::api::v2::Cluster.
@@ -62,7 +63,7 @@ public:
    * @param cluster destination v2 envoy::api::v2::Cluster.
    */
   static void translateCluster(const Json::Object& json_cluster,
-                               const Optional<envoy::api::v2::ConfigSource>& eds_config,
+                               const absl::optional<envoy::api::v2::core::ConfigSource>& eds_config,
                                envoy::api::v2::Cluster& cluster);
 };
 

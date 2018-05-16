@@ -14,6 +14,7 @@
 #include "envoy/network/connection_handler.h"
 #include "envoy/network/filter.h"
 #include "envoy/server/configuration.h"
+#include "envoy/server/listener_manager.h"
 
 #include "common/buffer/buffer_impl.h"
 #include "common/buffer/zero_copy_input_stream_impl.h"
@@ -42,6 +43,7 @@ public:
   uint64_t bodyLength() { return body_.length(); }
   Buffer::Instance& body() { return body_; }
   bool complete() { return end_stream_; }
+  void encode100ContinueHeaders(const Http::HeaderMapImpl& headers);
   void encodeHeaders(const Http::HeaderMapImpl& headers, bool end_stream);
   void encodeData(uint64_t size, bool end_stream);
   void encodeData(Buffer::Instance& data, bool end_stream);
@@ -65,6 +67,10 @@ public:
   }
   template <class T> void decodeGrpcFrame(T& message) {
     EXPECT_GE(decoded_grpc_frames_.size(), 1);
+    if (decoded_grpc_frames_[0].length_ == 0) {
+      decoded_grpc_frames_.erase(decoded_grpc_frames_.begin());
+      return;
+    }
     Buffer::ZeroCopyInputStreamImpl stream(std::move(decoded_grpc_frames_[0].data_));
     EXPECT_TRUE(decoded_grpc_frames_[0].flags_ == Grpc::GRPC_FH_DEFAULT);
     EXPECT_TRUE(message.ParseFromZeroCopyStream(&stream));
@@ -72,6 +78,7 @@ public:
     decoded_grpc_frames_.erase(decoded_grpc_frames_.begin());
   }
   template <class T> void waitForGrpcMessage(Event::Dispatcher& client_dispatcher, T& message) {
+    ENVOY_LOG(debug, "Waiting for gRPC message...");
     if (!decoded_grpc_frames_.empty()) {
       decodeGrpcFrame(message);
       return;
@@ -89,9 +96,11 @@ public:
       }
     }
     decodeGrpcFrame(message);
+    ENVOY_LOG(debug, "Received gRPC message: {}", message.DebugString());
   }
 
   // Http::StreamDecoder
+  void decode100ContinueHeaders(Http::HeaderMapPtr&&) override {}
   void decodeHeaders(Http::HeaderMapPtr&& headers, bool end_stream) override;
   void decodeData(Buffer::Instance& data, bool end_stream) override;
   void decodeTrailers(Http::HeaderMapPtr&& trailers) override;
@@ -171,10 +180,11 @@ public:
   ~FakeConnectionBase() { ASSERT(initialized_); }
   void close();
   void readDisable(bool disable);
-  // By default waitForDisconnect assumes the next event is a disconnect and
-  // fails an assert if an unexpected event occurs. If a caller truly wishes to
-  // wait until disconnect, set ignore_spurious_events = true.
+  // By default waitForDisconnect and waitForHalfClose assume the next event is a disconnect and
+  // fails an assert if an unexpected event occurs. If a caller truly wishes to wait until
+  // disconnect, set ignore_spurious_events = true.
   void waitForDisconnect(bool ignore_spurious_events = false);
+  void waitForHalfClose(bool ignore_spurious_events = false);
 
   // Network::ConnectionCallbacks
   void onEvent(Network::ConnectionEvent event) override;
@@ -186,6 +196,11 @@ public:
     connection_wrapper_->set_parented();
     connection_.dispatcher().post([this]() -> void { connection_.addConnectionCallbacks(*this); });
   }
+  void enableHalfClose(bool enabled);
+  bool connected() const {
+    std::unique_lock<std::mutex> lock(lock_);
+    return !disconnected_;
+  }
 
 protected:
   FakeConnectionBase(QueuedConnectionWrapperPtr connection_wrapper)
@@ -193,9 +208,10 @@ protected:
         connection_wrapper_(std::move(connection_wrapper)) {}
 
   Network::Connection& connection_;
-  std::mutex lock_;
+  mutable std::mutex lock_;
   std::condition_variable connection_event_;
   bool disconnected_{};
+  bool half_closed_{};
   bool initialized_{false};
 
 private:
@@ -228,7 +244,7 @@ private:
     ReadFilter(FakeHttpConnection& parent) : parent_(parent) {}
 
     // Network::ReadFilter
-    Network::FilterStatus onData(Buffer::Instance& data) override {
+    Network::FilterStatus onData(Buffer::Instance& data, bool) override {
       parent_.codec_->dispatch(data);
       return Network::FilterStatus::StopIteration;
     }
@@ -253,14 +269,14 @@ public:
   }
 
   std::string waitForData(uint64_t num_bytes);
-  void write(const std::string& data);
+  void write(const std::string& data, bool end_stream = false);
 
 private:
   struct ReadFilter : public Network::ReadFilterBaseImpl {
     ReadFilter(FakeRawConnection& parent) : parent_(parent) {}
 
     // Network::ReadFilter
-    Network::FilterStatus onData(Buffer::Instance& data) override;
+    Network::FilterStatus onData(Buffer::Instance& data, bool) override;
 
     FakeRawConnection& parent_;
   };
@@ -276,14 +292,16 @@ typedef std::unique_ptr<FakeRawConnection> FakeRawConnectionPtr;
 class FakeUpstream : Logger::Loggable<Logger::Id::testing>, public Network::FilterChainFactory {
 public:
   FakeUpstream(const std::string& uds_path, FakeHttpConnection::Type type);
-  FakeUpstream(uint32_t port, FakeHttpConnection::Type type, Network::Address::IpVersion version);
-  FakeUpstream(Ssl::ServerContext* ssl_ctx, uint32_t port, FakeHttpConnection::Type type,
-               Network::Address::IpVersion version);
+  FakeUpstream(uint32_t port, FakeHttpConnection::Type type, Network::Address::IpVersion version,
+               bool enable_half_close = false);
+  FakeUpstream(Network::TransportSocketFactoryPtr&& transport_socket_factory, uint32_t port,
+               FakeHttpConnection::Type type, Network::Address::IpVersion version);
   ~FakeUpstream();
 
   FakeHttpConnection::Type httpType() { return http_type_; }
   FakeHttpConnectionPtr waitForHttpConnection(Event::Dispatcher& client_dispatcher);
-  FakeRawConnectionPtr waitForRawConnection();
+  FakeRawConnectionPtr
+  waitForRawConnection(std::chrono::milliseconds wait_for_ms = std::chrono::milliseconds{10000});
   Network::Address::InstanceConstSharedPtr localAddress() const { return socket_->localAddress(); }
 
   // Wait for one of the upstreams to receive a connection
@@ -292,7 +310,8 @@ public:
                         std::vector<std::unique_ptr<FakeUpstream>>& upstreams);
 
   // Network::FilterChainFactory
-  bool createFilterChain(Network::Connection& connection) override;
+  bool createNetworkFilterChain(Network::Connection& connection) override;
+  bool createListenerFilterChain(Network::ListenerFilterManager& listener) override;
   void set_allow_unexpected_disconnects(bool value) { allow_unexpected_disconnects_ = value; }
 
 protected:
@@ -301,12 +320,36 @@ protected:
   void cleanUp();
 
 private:
-  FakeUpstream(Ssl::ServerContext* ssl_ctx, Network::ListenSocketPtr&& connection,
-               FakeHttpConnection::Type type);
+  FakeUpstream(Network::TransportSocketFactoryPtr&& transport_socket_factory,
+               Network::SocketPtr&& connection, FakeHttpConnection::Type type,
+               bool enable_half_close);
+
+  class FakeListener : public Network::ListenerConfig {
+  public:
+    FakeListener(FakeUpstream& parent) : parent_(parent), name_("fake_upstream") {}
+
+  private:
+    // Network::ListenerConfig
+    Network::FilterChainFactory& filterChainFactory() override { return parent_; }
+    Network::Socket& socket() override { return *parent_.socket_; }
+    Network::TransportSocketFactory& transportSocketFactory() override {
+      return *parent_.transport_socket_factory_;
+    }
+    bool bindToPort() override { return true; }
+    bool handOffRestoredDestinationConnections() const override { return false; }
+    uint32_t perConnectionBufferLimitBytes() override { return 0; }
+    Stats::Scope& listenerScope() override { return parent_.stats_store_; }
+    uint64_t listenerTag() const override { return 0; }
+    const std::string& name() const override { return name_; }
+
+    FakeUpstream& parent_;
+    std::string name_;
+  };
+
   void threadRoutine();
 
-  Ssl::ServerContext* ssl_ctx_{};
-  Network::ListenSocketPtr socket_;
+  Network::TransportSocketFactoryPtr transport_socket_factory_;
+  Network::SocketPtr socket_;
   ConditionalInitializer server_initialized_;
   // Guards any objects which can be altered both in the upstream thread and the
   // main test thread.
@@ -318,5 +361,7 @@ private:
   Network::ConnectionHandlerPtr handler_;
   std::list<QueuedConnectionWrapperPtr> new_connections_; // Guarded by lock_
   bool allow_unexpected_disconnects_;
+  const bool enable_half_close_;
+  FakeListener listener_;
 };
 } // namespace Envoy

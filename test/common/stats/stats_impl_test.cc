@@ -1,11 +1,14 @@
 #include <algorithm>
 #include <chrono>
+#include <string>
 
+#include "envoy/config/metrics/v2/stats.pb.h"
 #include "envoy/stats/stats_macros.h"
 
 #include "common/config/well_known_names.h"
 #include "common/stats/stats_impl.h"
 
+#include "test/test_common/logging.h"
 #include "test/test_common/utility.h"
 
 #include "gtest/gtest.h"
@@ -37,6 +40,7 @@ TEST(StatsIsolatedStoreImplTest, All) {
 
   Histogram& h1 = store.histogram("h1");
   Histogram& h2 = scope1->histogram("h2");
+  scope1->deliverHistogramToSinks(h2, 0);
   EXPECT_EQ("h1", h1.name());
   EXPECT_EQ("scope1.h2", h2.name());
   EXPECT_EQ("h1", h1.tagExtractedName());
@@ -85,9 +89,12 @@ TEST(StatsMacros, All) {
 
 TEST(TagExtractorTest, TwoSubexpressions) {
   TagExtractorImpl tag_extractor("cluster_name", "^cluster\\.((.+?)\\.)");
+  EXPECT_EQ("cluster_name", tag_extractor.name());
   std::string name = "cluster.test_cluster.upstream_cx_total";
   std::vector<Tag> tags;
-  std::string tag_extracted_name = tag_extractor.extractTag(name, tags);
+  IntervalSetImpl<size_t> remove_characters;
+  ASSERT_TRUE(tag_extractor.extractTag(name, tags, remove_characters));
+  std::string tag_extracted_name = StringUtil::removeCharacters(name, remove_characters);
   EXPECT_EQ("cluster.upstream_cx_total", tag_extracted_name);
   ASSERT_EQ(1, tags.size());
   EXPECT_EQ("test_cluster", tags.at(0).value_);
@@ -98,11 +105,25 @@ TEST(TagExtractorTest, SingleSubexpression) {
   TagExtractorImpl tag_extractor("listner_port", "^listener\\.(\\d+?\\.)");
   std::string name = "listener.80.downstream_cx_total";
   std::vector<Tag> tags;
-  std::string tag_extracted_name = tag_extractor.extractTag(name, tags);
+  IntervalSetImpl<size_t> remove_characters;
+  ASSERT_TRUE(tag_extractor.extractTag(name, tags, remove_characters));
+  std::string tag_extracted_name = StringUtil::removeCharacters(name, remove_characters);
   EXPECT_EQ("listener.downstream_cx_total", tag_extracted_name);
   ASSERT_EQ(1, tags.size());
   EXPECT_EQ("80.", tags.at(0).value_);
   EXPECT_EQ("listner_port", tags.at(0).name_);
+}
+
+TEST(TagExtractorTest, substrMismatch) {
+  TagExtractorImpl tag_extractor("listner_port", "^listener\\.(\\d+?\\.)\\.foo\\.", ".foo.");
+  EXPECT_TRUE(tag_extractor.substrMismatch("listener.80.downstream_cx_total"));
+  EXPECT_FALSE(tag_extractor.substrMismatch("listener.80.downstream_cx_total.foo.bar"));
+}
+
+TEST(TagExtractorTest, noSubstrMismatch) {
+  TagExtractorImpl tag_extractor("listner_port", "^listener\\.(\\d+?\\.)\\.foo\\.");
+  EXPECT_FALSE(tag_extractor.substrMismatch("listener.80.downstream_cx_total"));
+  EXPECT_FALSE(tag_extractor.substrMismatch("listener.80.downstream_cx_total.foo.bar"));
 }
 
 TEST(TagExtractorTest, EmptyName) {
@@ -110,24 +131,21 @@ TEST(TagExtractorTest, EmptyName) {
                             EnvoyException, "tag_name cannot be empty");
 }
 
+TEST(TagExtractorTest, BadRegex) {
+  EXPECT_THROW_WITH_REGEX(TagExtractorImpl::createTagExtractor("cluster_name", "+invalid"),
+                          EnvoyException, "Invalid regex '\\+invalid':");
+}
+
 class DefaultTagRegexTester {
 public:
-  DefaultTagRegexTester() {
-    const auto& tag_names = Config::TagNames::get();
+  DefaultTagRegexTester() : tag_extractors_(envoy::config::metrics::v2::StatsConfig()) {}
 
-    for (const std::pair<std::string, std::string>& name_and_regex : tag_names.name_regex_pairs_) {
-      tag_extractors_.emplace_back(TagExtractorImpl::createTagExtractor(name_and_regex.first, ""));
-    }
-  }
   void testRegex(const std::string& stat_name, const std::string& expected_tag_extracted_name,
                  const std::vector<Tag>& expected_tags) {
 
     // Test forward iteration through the regexes
-    std::string tag_extracted_name = stat_name;
     std::vector<Tag> tags;
-    for (const TagExtractorPtr& tag_extractor : tag_extractors_) {
-      tag_extracted_name = tag_extractor->extractTag(tag_extracted_name, tags);
-    }
+    const std::string tag_extracted_name = tag_extractors_.produceTags(stat_name, tags);
 
     auto cmp = [](const Tag& lhs, const Tag& rhs) {
       return lhs.name_ == rhs.name_ && lhs.value_ == rhs.value_;
@@ -140,11 +158,8 @@ public:
         << fmt::format("Stat name '{}' did not produce the expected tags", stat_name);
 
     // Reverse iteration through regexes to ensure ordering invariance
-    std::string rev_tag_extracted_name = stat_name;
     std::vector<Tag> rev_tags;
-    for (auto it = tag_extractors_.rbegin(); it != tag_extractors_.rend(); ++it) {
-      rev_tag_extracted_name = (*it)->extractTag(rev_tag_extracted_name, rev_tags);
-    }
+    const std::string rev_tag_extracted_name = produceTagsReverse(stat_name, rev_tags);
 
     EXPECT_EQ(expected_tag_extracted_name, rev_tag_extracted_name);
     ASSERT_EQ(expected_tags.size(), rev_tags.size())
@@ -158,7 +173,33 @@ public:
                        stat_name);
   }
 
-  std::vector<TagExtractorPtr> tag_extractors_;
+  /**
+   * Reimplements TagProducerImpl::produceTags, but extracts the tags in reverse order.
+   * This helps demonstrate that the order of extractors does not matter to the end result,
+   * assuming we don't care about tag-order. This is in large part correct by design because
+   * stat_name is not mutated until all the extraction is done.
+   * @param metric_name std::string a name of Stats::Metric (Counter, Gauge, Histogram).
+   * @param tags std::vector<Tag>& a set of Stats::Tag.
+   * @return std::string the metric_name with tags removed.
+   */
+  std::string produceTagsReverse(const std::string& metric_name, std::vector<Tag>& tags) const {
+    // Note: one discrepency between this and TagProducerImpl::produceTags is that this
+    // version does not add in tag_extractors_.default_tags_ into tags. That doesn't matter
+    // for this test, however.
+    std::list<const TagExtractor*> extractors; // Note push-front is used to reverse order.
+    tag_extractors_.forEachExtractorMatching(metric_name,
+                                             [&extractors](const TagExtractorPtr& tag_extractor) {
+                                               extractors.push_front(tag_extractor.get());
+                                             });
+
+    IntervalSetImpl<size_t> remove_characters;
+    for (const TagExtractor* tag_extractor : extractors) {
+      tag_extractor->extractTag(metric_name, tags, remove_characters);
+    }
+    return StringUtil::removeCharacters(metric_name, remove_characters);
+  }
+
+  TagProducerImpl tag_extractors_;
 };
 
 TEST(TagExtractorTest, DefaultTagExtractors) {
@@ -189,6 +230,14 @@ TEST(TagExtractorTest, DefaultTagExtractors) {
 
   regex_tester.testRegex("listener.[__1]_0.ssl.cipher.AES256-SHA", "listener.ssl.cipher",
                          {listener_address, cipher_name});
+
+  // Cipher suite
+  Tag cipher_suite;
+  cipher_suite.name_ = tag_names.SSL_CIPHER_SUITE;
+  cipher_suite.value_ = "ECDHE-RSA-AES128-GCM-SHA256";
+
+  regex_tester.testRegex("cluster.ratelimit.ssl.ciphers.ECDHE-RSA-AES128-GCM-SHA256",
+                         "cluster.ssl.ciphers", {cluster_tag, cipher_suite});
 
   // ipv6 non-loopback (for alphabetical chars)
   listener_address.value_ = "[2001_0db8_85a3_0000_0000_8a2e_0370_7334]_3543";
@@ -351,6 +400,98 @@ TEST(TagExtractorTest, DefaultTagExtractors) {
   regex_tester.testRegex("http.fault_connection_manager.fault.fault_cluster.aborts_injected",
                          "http.fault.aborts_injected",
                          {fault_connection_manager, fault_downstream_cluster});
+}
+
+TEST(TagExtractorTest, ExtractRegexPrefix) {
+  TagExtractorPtr tag_extractor; // Keep tag_extractor in this scope to prolong prefix lifetime.
+  auto extractRegexPrefix = [&tag_extractor](const std::string& regex) -> absl::string_view {
+    tag_extractor = TagExtractorImpl::createTagExtractor("foo", regex);
+    return tag_extractor->prefixToken();
+  };
+
+  EXPECT_EQ("", extractRegexPrefix("^prefix(foo)."));
+  EXPECT_EQ("prefix", extractRegexPrefix("^prefix\\.foo"));
+  EXPECT_EQ("prefix_optional", extractRegexPrefix("^prefix_optional(?=\\.)"));
+  EXPECT_EQ("", extractRegexPrefix("^notACompleteToken"));   //
+  EXPECT_EQ("onlyToken", extractRegexPrefix("^onlyToken$")); //
+  EXPECT_EQ("", extractRegexPrefix("(prefix)"));
+  EXPECT_EQ("", extractRegexPrefix("^(prefix)"));
+  EXPECT_EQ("", extractRegexPrefix("prefix(foo)"));
+}
+
+TEST(TagExtractorTest, CreateTagExtractorNoRegex) {
+  EXPECT_THROW_WITH_REGEX(TagExtractorImpl::createTagExtractor("no such default tag", ""),
+                          EnvoyException, "^No regex specified for tag specifier and no default");
+}
+
+TEST(TagProducerTest, CheckConstructor) {
+  envoy::config::metrics::v2::StatsConfig stats_config;
+
+  // Should pass there were no tag name conflict.
+  auto& tag_specifier1 = *stats_config.mutable_stats_tags()->Add();
+  tag_specifier1.set_tag_name("test.x");
+  tag_specifier1.set_fixed_value("xxx");
+  TagProducerImpl{stats_config};
+
+  // Should raise an error when duplicate tag names are specified.
+  auto& tag_specifier2 = *stats_config.mutable_stats_tags()->Add();
+  tag_specifier2.set_tag_name("test.x");
+  tag_specifier2.set_fixed_value("yyy");
+  EXPECT_THROW_WITH_MESSAGE(TagProducerImpl{stats_config}, EnvoyException,
+                            fmt::format("Tag name '{}' specified twice.", "test.x"));
+
+  // Also should raise an error when user defined tag name conflicts with Envoy's default tag names.
+  stats_config.clear_stats_tags();
+  stats_config.mutable_use_all_default_tags()->set_value(true);
+  auto& custom_tag_extractor = *stats_config.mutable_stats_tags()->Add();
+  custom_tag_extractor.set_tag_name(Config::TagNames::get().CLUSTER_NAME);
+  EXPECT_THROW_WITH_MESSAGE(
+      TagProducerImpl{stats_config}, EnvoyException,
+      fmt::format("Tag name '{}' specified twice.", Config::TagNames::get().CLUSTER_NAME));
+
+  // Non-default custom name without regex should throw
+  stats_config.mutable_use_all_default_tags()->set_value(true);
+  stats_config.clear_stats_tags();
+  custom_tag_extractor = *stats_config.mutable_stats_tags()->Add();
+  custom_tag_extractor.set_tag_name("test_extractor");
+  EXPECT_THROW_WITH_MESSAGE(
+      TagProducerImpl{stats_config}, EnvoyException,
+      "No regex specified for tag specifier and no default regex for name: 'test_extractor'");
+
+  // Also empty regex should throw
+  stats_config.mutable_use_all_default_tags()->set_value(true);
+  stats_config.clear_stats_tags();
+  custom_tag_extractor = *stats_config.mutable_stats_tags()->Add();
+  custom_tag_extractor.set_tag_name("test_extractor");
+  custom_tag_extractor.set_regex("");
+  EXPECT_THROW_WITH_MESSAGE(
+      TagProducerImpl{stats_config}, EnvoyException,
+      "No regex specified for tag specifier and no default regex for name: 'test_extractor'");
+}
+
+// Validate truncation behavior of RawStatData.
+TEST(RawStatDataTest, Truncate) {
+  HeapRawStatDataAllocator alloc;
+  const std::string long_string(RawStatData::maxNameLength() + 1, 'A');
+  RawStatData* stat{};
+  EXPECT_LOG_CONTAINS("warning", "is too long with", stat = alloc.alloc(long_string));
+  alloc.free(*stat);
+}
+
+TEST(RawStatDataTest, HeapAlloc) {
+  HeapRawStatDataAllocator alloc;
+  RawStatData* stat_1 = alloc.alloc("ref_name");
+  ASSERT_NE(stat_1, nullptr);
+  RawStatData* stat_2 = alloc.alloc("ref_name");
+  ASSERT_NE(stat_2, nullptr);
+  RawStatData* stat_3 = alloc.alloc("not_ref_name");
+  ASSERT_NE(stat_3, nullptr);
+  EXPECT_EQ(stat_1, stat_2);
+  EXPECT_NE(stat_1, stat_3);
+  EXPECT_NE(stat_2, stat_3);
+  alloc.free(*stat_1);
+  alloc.free(*stat_2);
+  alloc.free(*stat_3);
 }
 
 } // namespace Stats

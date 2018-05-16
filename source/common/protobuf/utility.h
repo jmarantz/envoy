@@ -4,13 +4,12 @@
 
 #include "envoy/common/exception.h"
 #include "envoy/json/json_object.h"
+#include "envoy/type/percent.pb.h"
 
 #include "common/common/hash.h"
 #include "common/common/utility.h"
 #include "common/json/json_loader.h"
 #include "common/protobuf/protobuf.h"
-
-#include "fmt/format.h"
 
 // Obtain the value of a wrapped field (e.g. google.protobuf.UInt32Value) if set. Otherwise, return
 // the default value.
@@ -26,23 +25,49 @@
 // Obtain the milliseconds value of a google.protobuf.Duration field if set. Otherwise, return the
 // default value.
 #define PROTOBUF_GET_MS_OR_DEFAULT(message, field_name, default_value)                             \
-  ((message).has_##field_name()                                                                    \
-       ? Protobuf::util::TimeUtil::DurationToMilliseconds((message).field_name())                  \
-       : (default_value))
+  ((message).has_##field_name() ? DurationUtil::durationToMilliseconds((message).field_name())     \
+                                : (default_value))
 
 // Obtain the milliseconds value of a google.protobuf.Duration field if set. Otherwise, throw a
 // MissingFieldException.
 #define PROTOBUF_GET_MS_REQUIRED(message, field_name)                                              \
-  ((message).has_##field_name()                                                                    \
-       ? Protobuf::util::TimeUtil::DurationToMilliseconds((message).field_name())                  \
-       : throw MissingFieldException(#field_name, (message)))
+  ((message).has_##field_name() ? DurationUtil::durationToMilliseconds((message).field_name())     \
+                                : throw MissingFieldException(#field_name, (message)))
 
 // Obtain the seconds value of a google.protobuf.Duration field if set. Otherwise, throw a
 // MissingFieldException.
 #define PROTOBUF_GET_SECONDS_REQUIRED(message, field_name)                                         \
+  ((message).has_##field_name() ? DurationUtil::durationToSeconds((message).field_name())          \
+                                : throw MissingFieldException(#field_name, (message)))
+
+namespace Envoy {
+namespace ProtobufPercentHelper {
+
+// The following are helpers used in the PROTOBUF_PERCENT_TO_ROUNDED_INTEGER_OR_DEFAULT macro.
+// This avoids a giant macro mess when trying to do asserts, casts, etc.
+uint64_t checkAndReturnDefault(uint64_t default_value, uint64_t max_value);
+uint64_t convertPercent(double percent, uint64_t max_value);
+
+/**
+ * Convert a fractional percent denominator enum into an integer.
+ * @param percent supplies percent to convert.
+ * @return the converted denominator.
+ */
+uint64_t fractionalPercentDenominatorToInt(const envoy::type::FractionalPercent& percent);
+
+} // namespace ProtobufPercentHelper
+} // namespace Envoy
+
+// Convert an envoy::api::v2::core::Percent to a rounded integer or a default.
+// @param message supplies the proto message containing the field.
+// @param field_name supplies the field name in the message.
+// @param max_value supplies the maximum allowed integral value (e.g., 100, 10000, etc.).
+// @param default_value supplies the default if the field is not present.
+#define PROTOBUF_PERCENT_TO_ROUNDED_INTEGER_OR_DEFAULT(message, field_name, max_value,             \
+                                                       default_value)                              \
   ((message).has_##field_name()                                                                    \
-       ? Protobuf::util::TimeUtil::DurationToSeconds((message).field_name())                       \
-       : throw MissingFieldException(#field_name, (message)))
+       ? ProtobufPercentHelper::convertPercent((message).field_name().value(), max_value)          \
+       : ProtobufPercentHelper::checkAndReturnDefault(default_value, max_value))
 
 namespace Envoy {
 
@@ -136,6 +161,12 @@ public:
     validate(message);
   }
 
+  template <class MessageType>
+  static void loadFromYamlAndValidate(const std::string& yaml, MessageType& message) {
+    loadFromYaml(yaml, message);
+    validate(message);
+  }
+
   /**
    * Downcast and validate protoc-gen-validate constraints on a given protobuf.
    * Note the corresponding `.pb.validate.h` for the message has to be included in the source file
@@ -178,9 +209,11 @@ public:
   /**
    * Extract JSON as string from a google.protobuf.Message.
    * @param message message of type type.googleapis.com/google.protobuf.Message.
-   * @return std::string of JSON object.
+   * @param pretty_print whether the returned JSON should be formatted.
+   * @return std::string of formatted JSON object.
    */
-  static std::string getJsonStringFromMessage(const Protobuf::Message& message);
+  static std::string getJsonStringFromMessage(const Protobuf::Message& message,
+                                              bool pretty_print = false);
 
   /**
    * Extract JSON object from a google.protobuf.Message.
@@ -190,6 +223,14 @@ public:
   static Json::ObjectSharedPtr getJsonObjectFromMessage(const Protobuf::Message& message) {
     return Json::Factory::loadFromString(MessageUtil::getJsonStringFromMessage(message));
   }
+
+  /**
+   * Utility method to create a Struct containing the passed in key/value strings.
+   *
+   * @param key the key to use to set the value
+   * @param value the string value to associate with the key
+   */
+  static ProtobufWkt::Struct keyValueStruct(const std::string& key, const std::string& value);
 };
 
 class ValueUtil {
@@ -226,6 +267,33 @@ public:
 private:
   const ProtobufWkt::Value value_;
   const std::size_t hash_;
+};
+
+class DurationUtil {
+public:
+  class OutOfRangeException : public EnvoyException {
+  public:
+    OutOfRangeException(const std::string& error) : EnvoyException(error) {}
+  };
+
+  /**
+   * Same as DurationUtil::durationToMilliseconds but with extra validation logic.
+   * Same as Protobuf::util::TimeUtil::DurationToSeconds but with extra validation logic.
+   * Specifically, we ensure that the duration is positive.
+   * @param duration protobuf.
+   * @return duration in milliseconds.
+   * @throw OutOfRangeException when duration is out-of-range.
+   */
+  static uint64_t durationToMilliseconds(const ProtobufWkt::Duration& duration);
+
+  /**
+   * Same as Protobuf::util::TimeUtil::DurationToSeconds but with extra validation logic.
+   * Specifically, we ensure that the duration is positive.
+   * @param duration protobuf.
+   * @return duration in seconds.
+   * @throw OutOfRangeException when duration is out-of-range.
+   */
+  static uint64_t durationToSeconds(const ProtobufWkt::Duration& duration);
 };
 
 } // namespace Envoy

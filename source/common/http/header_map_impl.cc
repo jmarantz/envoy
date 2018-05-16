@@ -9,6 +9,8 @@
 #include "common/common/utility.h"
 #include "common/singleton/const_singleton.h"
 
+#include "absl/strings/match.h"
+
 namespace Envoy {
 namespace Http {
 
@@ -399,6 +401,16 @@ const HeaderEntry* HeaderMapImpl::get(const LowerCaseString& key) const {
   return nullptr;
 }
 
+HeaderEntry* HeaderMapImpl::get(const LowerCaseString& key) {
+  for (HeaderEntryImpl& header : headers_) {
+    if (header.key() == key.get().c_str()) {
+      return &header;
+    }
+  }
+
+  return nullptr;
+}
+
 void HeaderMapImpl::iterate(ConstIterateCb cb, void* context) const {
   for (const HeaderEntryImpl& header : headers_) {
     if (cb(header, context) == HeaderMap::Iterate::Break) {
@@ -452,6 +464,25 @@ void HeaderMapImpl::remove(const LowerCaseString& key) {
       }
     }
   }
+}
+
+void HeaderMapImpl::removePrefix(const LowerCaseString& prefix) {
+  headers_.remove_if([&](const HeaderEntryImpl& entry) {
+    bool to_remove = absl::StartsWith(entry.key().getStringView(), prefix.get());
+    if (to_remove) {
+      // If this header should be removed, make sure any references in the
+      // static lookup table are cleared as well.
+      StaticLookupEntry::EntryCb cb =
+          ConstSingleton<StaticLookupTable>::get().find(entry.key().c_str());
+      if (cb) {
+        StaticLookupResponse ref_lookup_response = cb(*this);
+        if (ref_lookup_response.entry_) {
+          *ref_lookup_response.entry_ = nullptr;
+        }
+      }
+    }
+    return to_remove;
+  });
 }
 
 HeaderMapImpl::HeaderEntryImpl& HeaderMapImpl::maybeCreateInline(HeaderEntryImpl** entry,

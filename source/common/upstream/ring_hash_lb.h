@@ -1,16 +1,11 @@
 #pragma once
 
-#include <cstdint>
-#include <shared_mutex>
 #include <vector>
 
 #include "envoy/runtime/runtime.h"
-#include "envoy/upstream/load_balancer.h"
 
 #include "common/common/logger.h"
-#include "common/upstream/load_balancer_impl.h"
-
-#include "absl/base/thread_annotations.h"
+#include "common/upstream/thread_aware_lb_impl.h"
 
 namespace Envoy {
 namespace Upstream {
@@ -24,17 +19,13 @@ namespace Upstream {
  * 2) Per-zone rings and optional zone aware routing (not all applications will want this).
  * 3) Max request fallback to support hot shards (not all applications will want this).
  */
-class RingHashLoadBalancer : public LoadBalancerBase,
-                             public ThreadAwareLoadBalancer,
+class RingHashLoadBalancer : public ThreadAwareLoadBalancerBase,
                              Logger::Loggable<Logger::Id::upstream> {
 public:
   RingHashLoadBalancer(PrioritySet& priority_set, ClusterStats& stats, Runtime::Loader& runtime,
                        Runtime::RandomGenerator& random,
-                       const Optional<envoy::api::v2::Cluster::RingHashLbConfig>& config);
-
-  // Upstream::ThreadAwareLoadBalancer
-  LoadBalancerFactorySharedPtr factory() override { return factory_; }
-  void initialize() override;
+                       const absl::optional<envoy::api::v2::Cluster::RingHashLbConfig>& config,
+                       const envoy::api::v2::Cluster::CommonLbConfig& common_config);
 
 private:
   struct RingEntry {
@@ -42,52 +33,30 @@ private:
     HostConstSharedPtr host_;
   };
 
-  struct Ring {
-    Ring(const Optional<envoy::api::v2::Cluster::RingHashLbConfig>& config,
-         const std::vector<HostSharedPtr>& hosts);
-    HostConstSharedPtr chooseHost(LoadBalancerContext* context,
-                                  Runtime::RandomGenerator& random) const;
+  struct Ring : public HashingLoadBalancer {
+    Ring(const absl::optional<envoy::api::v2::Cluster::RingHashLbConfig>& config,
+         const HostVector& hosts);
+
+    // ThreadAwareLoadBalancerBase::HashingLoadBalancer
+    HostConstSharedPtr chooseHost(uint64_t hash) const override;
 
     std::vector<RingEntry> ring_;
   };
-
   typedef std::shared_ptr<const Ring> RingConstSharedPtr;
 
-  struct LoadBalancerImpl : public LoadBalancer {
-    LoadBalancerImpl(ClusterStats& stats, Runtime::RandomGenerator& random,
-                     const RingConstSharedPtr& ring, bool global_panic)
-        : stats_(stats), random_(random), ring_(ring), global_panic_(global_panic) {}
+  // ThreadAwareLoadBalancerBase
+  HashingLoadBalancerSharedPtr createLoadBalancer(const HostSet& host_set) override {
+    // Note that we only compute global panic on host set refresh. Given that the runtime setting
+    // will rarely change, this is a reasonable compromise to avoid creating extra LBs when we only
+    // need to create one per priority level.
+    if (isGlobalPanic(host_set)) {
+      return std::make_shared<Ring>(config_, host_set.hosts());
+    } else {
+      return std::make_shared<Ring>(config_, host_set.healthyHosts());
+    }
+  }
 
-    // Upstream::LoadBalancer
-    HostConstSharedPtr chooseHost(LoadBalancerContext* context) override;
-
-    ClusterStats& stats_;
-    Runtime::RandomGenerator& random_;
-    const RingConstSharedPtr ring_;
-    const bool global_panic_;
-  };
-
-  struct LoadBalancerFactoryImpl : public LoadBalancerFactory {
-    LoadBalancerFactoryImpl(ClusterStats& stats, Runtime::RandomGenerator& random)
-        : stats_(stats), random_(random) {}
-
-    // Upstream::LoadBalancerFactory
-    LoadBalancerPtr create() override;
-
-    ClusterStats& stats_;
-    Runtime::RandomGenerator& random_;
-    std::shared_timed_mutex mutex_;
-    // TOOD(mattklein123): Added GUARDED_BY(mutex_) to to the following variables. OSX clang
-    // seems to not like them with shared mutexes so we need to ifdef them out on OSX. I don't
-    // have time to do this right now.
-    RingConstSharedPtr current_ring_;
-    bool global_panic_{};
-  };
-
-  void refresh();
-
-  const Optional<envoy::api::v2::Cluster::RingHashLbConfig>& config_;
-  std::shared_ptr<LoadBalancerFactoryImpl> factory_;
+  const absl::optional<envoy::api::v2::Cluster::RingHashLbConfig>& config_;
 };
 
 } // namespace Upstream

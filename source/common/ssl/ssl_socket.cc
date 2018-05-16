@@ -3,7 +3,9 @@
 #include "common/common/assert.h"
 #include "common/common/empty_string.h"
 #include "common/common/hex.h"
+#include "common/http/headers.h"
 
+#include "absl/strings/str_replace.h"
 #include "openssl/err.h"
 #include "openssl/x509v3.h"
 
@@ -14,7 +16,6 @@ namespace Ssl {
 
 SslSocket::SslSocket(Context& ctx, InitialState state)
     : ctx_(dynamic_cast<Ssl::ContextImpl&>(ctx)), ssl_(ctx_.newSsl()) {
-  SSL_set_mode(ssl_.get(), SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
   if (state == InitialState::Client) {
     SSL_set_connect_state(ssl_.get());
   } else {
@@ -35,11 +36,14 @@ Network::IoResult SslSocket::doRead(Buffer::Instance& read_buffer) {
   if (!handshake_complete_) {
     PostIoAction action = doHandshake();
     if (action == PostIoAction::Close || !handshake_complete_) {
-      return {action, 0};
+      // end_stream is false because either a hard error occurred (action == Close) or
+      // the handhshake isn't complete, so a half-close cannot occur yet.
+      return {action, 0, false};
     }
   }
 
   bool keep_reading = true;
+  bool end_stream = false;
   PostIoAction action = PostIoAction::KeepOpen;
   uint64_t bytes_read = 0;
   while (keep_reading) {
@@ -61,8 +65,11 @@ Network::IoResult SslSocket::doRead(Buffer::Instance& read_buffer) {
         switch (err) {
         case SSL_ERROR_WANT_READ:
           break;
+        case SSL_ERROR_ZERO_RETURN:
+          end_stream = true;
+          break;
         case SSL_ERROR_WANT_WRITE:
-          // Renegotiation has started. We don't handle renegotiation so just fall through.
+        // Renegotiation has started. We don't handle renegotiation so just fall through.
         default:
           drainErrorQueue();
           action = PostIoAction::Close;
@@ -82,7 +89,7 @@ Network::IoResult SslSocket::doRead(Buffer::Instance& read_buffer) {
     }
   }
 
-  return {action, bytes_read};
+  return {action, bytes_read, end_stream};
 }
 
 PostIoAction SslSocket::doHandshake() {
@@ -129,75 +136,80 @@ void SslSocket::drainErrorQueue() {
     ENVOY_CONN_LOG(debug, "SSL error: {}:{}:{}:{}", callbacks_->connection(), err,
                    ERR_lib_error_string(err), ERR_func_error_string(err),
                    ERR_reason_error_string(err));
-    UNREFERENCED_PARAMETER(err);
   }
   if (saw_error && !saw_counted_error) {
     ctx_.stats().connection_error_.inc();
   }
 }
 
-Network::IoResult SslSocket::doWrite(Buffer::Instance& write_buffer) {
+Network::IoResult SslSocket::doWrite(Buffer::Instance& write_buffer, bool end_stream) {
+  ASSERT(!shutdown_sent_ || write_buffer.length() == 0);
   if (!handshake_complete_) {
     PostIoAction action = doHandshake();
     if (action == PostIoAction::Close || !handshake_complete_) {
-      return {action, 0};
+      return {action, 0, false};
     }
   }
 
-  uint64_t original_buffer_length = write_buffer.length();
+  uint64_t bytes_to_write;
+  if (bytes_to_retry_) {
+    bytes_to_write = bytes_to_retry_;
+    bytes_to_retry_ = 0;
+  } else {
+    bytes_to_write = std::min(write_buffer.length(), static_cast<uint64_t>(16384));
+  }
+
   uint64_t total_bytes_written = 0;
-  bool keep_writing = true;
-  while ((original_buffer_length != total_bytes_written) && keep_writing) {
-    // Protect against stack overflow if the buffer has a very large buffer chain.
-    // TODO(mattklein123): See the comment on getRawSlices() for why we have to also check
-    // original_buffer_length != total_bytes_written during loop iteration.
+  while (bytes_to_write > 0) {
     // TODO(mattklein123): As it relates to our fairness efforts, we might want to limit the number
     // of iterations of this loop, either by pure iterations, bytes written, etc.
-    const uint64_t MAX_SLICES = 32;
-    Buffer::RawSlice slices[MAX_SLICES];
-    uint64_t num_slices = write_buffer.getRawSlices(slices, MAX_SLICES);
 
-    uint64_t inner_bytes_written = 0;
-    for (uint64_t i = 0; (i < num_slices) && (original_buffer_length != total_bytes_written); i++) {
-      // SSL_write() requires that if a previous call returns SSL_ERROR_WANT_WRITE, we need to call
-      // it again with the same parameters. Most implementations keep track of the last write size.
-      // In our case we don't need to do that because: a) SSL_write() will not write partial
-      // buffers. b) We only move() into the write buffer, which means that it's impossible for a
-      // particular chain to increase in size. So as long as we start writing where we left off we
-      // are guaranteed to call SSL_write() with the same parameters.
-      int rc = SSL_write(ssl_.get(), slices[i].mem_, slices[i].len_);
-      ENVOY_CONN_LOG(trace, "ssl write returns: {}", callbacks_->connection(), rc);
-      if (rc > 0) {
-        inner_bytes_written += rc;
-        total_bytes_written += rc;
-      } else {
-        int err = SSL_get_error(ssl_.get(), rc);
-        switch (err) {
-        case SSL_ERROR_WANT_WRITE:
-          keep_writing = false;
-          break;
-        case SSL_ERROR_WANT_READ:
-          // Renegotiation has started. We don't handle renegotiation so just fall through.
-        default:
-          drainErrorQueue();
-          return {PostIoAction::Close, total_bytes_written};
-        }
-
+    // SSL_write() requires that if a previous call returns SSL_ERROR_WANT_WRITE, we need to call
+    // it again with the same parameters. This is done by tracking last write size, but not write
+    // data, since linearize() will return the same undrained data anyway.
+    ASSERT(bytes_to_write <= write_buffer.length());
+    int rc = SSL_write(ssl_.get(), write_buffer.linearize(bytes_to_write), bytes_to_write);
+    ENVOY_CONN_LOG(trace, "ssl write returns: {}", callbacks_->connection(), rc);
+    if (rc > 0) {
+      ASSERT(rc == static_cast<int>(bytes_to_write));
+      total_bytes_written += rc;
+      write_buffer.drain(rc);
+      bytes_to_write = std::min(write_buffer.length(), static_cast<uint64_t>(16384));
+    } else {
+      int err = SSL_get_error(ssl_.get(), rc);
+      switch (err) {
+      case SSL_ERROR_WANT_WRITE:
+        bytes_to_retry_ = bytes_to_write;
         break;
+      case SSL_ERROR_WANT_READ:
+      // Renegotiation has started. We don't handle renegotiation so just fall through.
+      default:
+        drainErrorQueue();
+        return {PostIoAction::Close, total_bytes_written, false};
       }
-    }
 
-    // Draining must be done within the inner loop, otherwise we will keep getting the same slices
-    // at the beginning of the buffer.
-    if (inner_bytes_written > 0) {
-      write_buffer.drain(inner_bytes_written);
+      break;
     }
   }
 
-  return {PostIoAction::KeepOpen, total_bytes_written};
+  if (write_buffer.length() == 0 && end_stream) {
+    shutdownSsl();
+  }
+
+  return {PostIoAction::KeepOpen, total_bytes_written, false};
 }
 
 void SslSocket::onConnected() { ASSERT(!handshake_complete_); }
+
+void SslSocket::shutdownSsl() {
+  ASSERT(handshake_complete_);
+  if (!shutdown_sent_ && callbacks_->connection().state() != Network::Connection::State::Closed) {
+    int rc = SSL_shutdown(ssl_.get());
+    ENVOY_CONN_LOG(debug, "SSL shutdown: rc={}", callbacks_->connection(), rc);
+    drainErrorQueue();
+    shutdown_sent_ = true;
+  }
+}
 
 bool SslSocket::peerCertificatePresented() const {
   bssl::UniquePtr<X509> cert(SSL_get_peer_certificate(ssl_.get()));
@@ -213,37 +225,52 @@ std::string SslSocket::uriSanLocalCertificate() {
   return getUriSanFromCertificate(cert);
 }
 
-std::string SslSocket::sha256PeerCertificateDigest() {
+std::vector<std::string> SslSocket::dnsSansLocalCertificate() {
+  X509* cert = SSL_get_certificate(ssl_.get());
+  if (!cert) {
+    return {};
+  }
+  return getDnsSansFromCertificate(cert);
+}
+
+const std::string& SslSocket::sha256PeerCertificateDigest() const {
+  if (!cached_sha_256_peer_certificate_digest_.empty()) {
+    return cached_sha_256_peer_certificate_digest_;
+  }
   bssl::UniquePtr<X509> cert(SSL_get_peer_certificate(ssl_.get()));
   if (!cert) {
-    return "";
+    ASSERT(cached_sha_256_peer_certificate_digest_.empty());
+    return cached_sha_256_peer_certificate_digest_;
   }
 
   std::vector<uint8_t> computed_hash(SHA256_DIGEST_LENGTH);
   unsigned int n;
   X509_digest(cert.get(), EVP_sha256(), computed_hash.data(), &n);
   RELEASE_ASSERT(n == computed_hash.size());
-  return Hex::encode(computed_hash);
+  cached_sha_256_peer_certificate_digest_ = Hex::encode(computed_hash);
+  return cached_sha_256_peer_certificate_digest_;
 }
 
-std::string SslSocket::subjectPeerCertificate() const {
+const std::string& SslSocket::urlEncodedPemEncodedPeerCertificate() const {
+  if (!cached_url_encoded_pem_encoded_peer_certificate_.empty()) {
+    return cached_url_encoded_pem_encoded_peer_certificate_;
+  }
   bssl::UniquePtr<X509> cert(SSL_get_peer_certificate(ssl_.get()));
   if (!cert) {
-    return "";
+    ASSERT(cached_url_encoded_pem_encoded_peer_certificate_.empty());
+    return cached_url_encoded_pem_encoded_peer_certificate_;
   }
 
   bssl::UniquePtr<BIO> buf(BIO_new(BIO_s_mem()));
   RELEASE_ASSERT(buf != nullptr);
-
-  // flags=XN_FLAG_RFC2253 is the documented parameter for single-line output in RFC 2253 format.
-  X509_NAME_print_ex(buf.get(), X509_get_subject_name(cert.get()), 0 /* indent */, XN_FLAG_RFC2253);
-
-  const uint8_t* data;
-  size_t data_len;
-  int rc = BIO_mem_contents(buf.get(), &data, &data_len);
-  ASSERT(rc == 1);
-  UNREFERENCED_PARAMETER(rc);
-  return std::string(reinterpret_cast<const char*>(data), data_len);
+  RELEASE_ASSERT(PEM_write_bio_X509(buf.get(), cert.get()) == 1);
+  const uint8_t* output;
+  size_t length;
+  RELEASE_ASSERT(BIO_mem_contents(buf.get(), &output, &length) == 1);
+  absl::string_view pem(reinterpret_cast<const char*>(output), length);
+  cached_url_encoded_pem_encoded_peer_certificate_ = absl::StrReplaceAll(
+      pem, {{"\n", "%0A"}, {" ", "%20"}, {"+", "%2B"}, {"/", "%2F"}, {"=", "%3D"}});
+  return cached_url_encoded_pem_encoded_peer_certificate_;
 }
 
 std::string SslSocket::uriSanPeerCertificate() {
@@ -254,44 +281,54 @@ std::string SslSocket::uriSanPeerCertificate() {
   return getUriSanFromCertificate(cert.get());
 }
 
-std::string SslSocket::getUriSanFromCertificate(X509* cert) {
-  STACK_OF(GENERAL_NAME)* altnames = static_cast<STACK_OF(GENERAL_NAME)*>(
-      X509_get_ext_d2i(cert, NID_subject_alt_name, nullptr, nullptr));
+std::vector<std::string> SslSocket::dnsSansPeerCertificate() {
+  bssl::UniquePtr<X509> cert(SSL_get_peer_certificate(ssl_.get()));
+  if (!cert) {
+    return {};
+  }
+  return getDnsSansFromCertificate(cert.get());
+}
 
-  if (altnames == nullptr) {
+std::string SslSocket::getUriSanFromCertificate(X509* cert) {
+  bssl::UniquePtr<GENERAL_NAMES> san_names(
+      static_cast<GENERAL_NAMES*>(X509_get_ext_d2i(cert, NID_subject_alt_name, nullptr, nullptr)));
+  if (san_names == nullptr) {
     return "";
   }
-
-  std::string result;
-  int n = sk_GENERAL_NAME_num(altnames);
-  if (n > 0) {
-    // Only take the first item in altnames since we only set one uri in cert.
-    GENERAL_NAME* altname = sk_GENERAL_NAME_value(altnames, 0);
-    switch (altname->type) {
-    case GEN_URI:
-      result.append(
-          reinterpret_cast<const char*>(ASN1_STRING_data(altname->d.uniformResourceIdentifier)));
-      break;
-    default:
-      // Default to empty;
-      break;
+  // TODO(PiotrSikora): Figure out if returning only one URI is valid limitation.
+  for (const GENERAL_NAME* san : san_names.get()) {
+    if (san->type == GEN_URI) {
+      ASN1_STRING* str = san->d.uniformResourceIdentifier;
+      return std::string(reinterpret_cast<const char*>(ASN1_STRING_data(str)),
+                         ASN1_STRING_length(str));
     }
   }
+  return "";
+}
 
-  sk_GENERAL_NAME_pop_free(altnames, GENERAL_NAME_free);
-  return result;
+std::vector<std::string> SslSocket::getDnsSansFromCertificate(X509* cert) {
+  bssl::UniquePtr<GENERAL_NAMES> san_names(
+      static_cast<GENERAL_NAMES*>(X509_get_ext_d2i(cert, NID_subject_alt_name, nullptr, nullptr)));
+  if (san_names == nullptr) {
+    return {};
+  }
+  std::vector<std::string> dns_sans = {};
+  for (const GENERAL_NAME* san : san_names.get()) {
+    if (san->type == GEN_DNS) {
+      ASN1_STRING* dns = san->d.dNSName;
+      dns_sans.emplace_back(reinterpret_cast<const char*>(ASN1_STRING_data(dns)),
+                            ASN1_STRING_length(dns));
+    }
+  }
+  return dns_sans;
 }
 
 void SslSocket::closeSocket(Network::ConnectionEvent) {
-  if (handshake_complete_ &&
-      callbacks_->connection().state() != Network::Connection::State::Closed) {
-    // Attempt to send a shutdown before closing the socket. It's possible this won't go out if
-    // there is no room on the socket. We can extend the state machine to handle this at some point
-    // if needed.
-    int rc = SSL_shutdown(ssl_.get());
-    ENVOY_CONN_LOG(debug, "SSL shutdown: rc={}", callbacks_->connection(), rc);
-    UNREFERENCED_PARAMETER(rc);
-    drainErrorQueue();
+  // Attempt to send a shutdown before closing the socket. It's possible this won't go out if
+  // there is no room on the socket. We can extend the state machine to handle this at some point
+  // if needed.
+  if (handshake_complete_) {
+    shutdownSsl();
   }
 }
 
@@ -301,6 +338,66 @@ std::string SslSocket::protocol() const {
   SSL_get0_alpn_selected(ssl_.get(), &proto, &proto_len);
   return std::string(reinterpret_cast<const char*>(proto), proto_len);
 }
+
+std::string SslSocket::getSubjectFromCertificate(X509* cert) const {
+  bssl::UniquePtr<BIO> buf(BIO_new(BIO_s_mem()));
+  RELEASE_ASSERT(buf != nullptr);
+
+  // flags=XN_FLAG_RFC2253 is the documented parameter for single-line output in RFC 2253 format.
+  // Example from the RFC:
+  //   * Single value per Relative Distinguished Name (RDN): CN=Steve Kille,O=Isode Limited,C=GB
+  //   * Multivalue output in first RDN: OU=Sales+CN=J. Smith,O=Widget Inc.,C=US
+  //   * Quoted comma in Organization: CN=L. Eagle,O=Sue\, Grabbit and Runn,C=GB
+  X509_NAME_print_ex(buf.get(), X509_get_subject_name(cert), 0 /* indent */, XN_FLAG_RFC2253);
+
+  const uint8_t* data;
+  size_t data_len;
+  int rc = BIO_mem_contents(buf.get(), &data, &data_len);
+  ASSERT(rc == 1);
+  return std::string(reinterpret_cast<const char*>(data), data_len);
+}
+
+std::string SslSocket::subjectPeerCertificate() const {
+  bssl::UniquePtr<X509> cert(SSL_get_peer_certificate(ssl_.get()));
+  if (!cert) {
+    return "";
+  }
+  return getSubjectFromCertificate(cert.get());
+}
+
+std::string SslSocket::subjectLocalCertificate() const {
+  X509* cert = SSL_get_certificate(ssl_.get());
+  if (!cert) {
+    return "";
+  }
+  return getSubjectFromCertificate(cert);
+}
+
+ClientSslSocketFactory::ClientSslSocketFactory(const ClientContextConfig& config,
+                                               Ssl::ContextManager& manager,
+                                               Stats::Scope& stats_scope)
+    : ssl_ctx_(manager.createSslClientContext(stats_scope, config)) {}
+
+Network::TransportSocketPtr ClientSslSocketFactory::createTransportSocket() const {
+  return std::make_unique<Ssl::SslSocket>(*ssl_ctx_, Ssl::InitialState::Client);
+}
+
+bool ClientSslSocketFactory::implementsSecureTransport() const { return true; }
+
+ServerSslSocketFactory::ServerSslSocketFactory(const ServerContextConfig& config,
+                                               const std::string& listener_name,
+                                               const std::vector<std::string>& server_names,
+                                               bool skip_context_update,
+                                               Ssl::ContextManager& manager,
+                                               Stats::Scope& stats_scope)
+    : ssl_ctx_(manager.createSslServerContext(listener_name, server_names, stats_scope, config,
+                                              skip_context_update)) {}
+
+Network::TransportSocketPtr ServerSslSocketFactory::createTransportSocket() const {
+  return std::make_unique<Ssl::SslSocket>(*ssl_ctx_, Ssl::InitialState::Server);
+}
+
+bool ServerSslSocketFactory::implementsSecureTransport() const { return true; }
 
 } // namespace Ssl
 } // namespace Envoy

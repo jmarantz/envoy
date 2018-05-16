@@ -15,7 +15,7 @@
 #include "envoy/network/dns.h"
 #include "envoy/network/listen_socket.h"
 #include "envoy/network/listener.h"
-#include "envoy/ssl/context.h"
+#include "envoy/network/transport_socket.h"
 #include "envoy/stats/stats.h"
 
 namespace Envoy {
@@ -39,26 +39,30 @@ public:
   virtual void clearDeferredDeleteList() PURE;
 
   /**
+   * Create a server connection.
+   * @param socket supplies an open file descriptor and connection metadata to use for the
+   *        connection. Takes ownership of the socket.
+   * @param transport_socket supplies a transport socket to be used by the connection.
+   * @return Network::ConnectionPtr a server connection that is owned by the caller.
+   */
+  virtual Network::ConnectionPtr
+  createServerConnection(Network::ConnectionSocketPtr&& socket,
+                         Network::TransportSocketPtr&& transport_socket) PURE;
+
+  /**
    * Create a client connection.
    * @param address supplies the address to connect to.
    * @param source_address supplies an address to bind to or nullptr if no bind is necessary.
+   * @param transport_socket supplies a transport socket to be used by the connection.
+   * @param options the socket options to be set on the underlying socket before anything is sent
+   *        on the socket.
    * @return Network::ClientConnectionPtr a client connection that is owned by the caller.
    */
   virtual Network::ClientConnectionPtr
   createClientConnection(Network::Address::InstanceConstSharedPtr address,
-                         Network::Address::InstanceConstSharedPtr source_address) PURE;
-
-  /**
-   * Create an SSL client connection.
-   * @param ssl_ctx supplies the SSL context to use.
-   * @param address supplies the address to connect to.
-   * @param source_address supplies an address to bind to or nullptr if no bind is necessary.
-   * @return Network::ClientConnectionPtr a client connection that is owned by the caller.
-   */
-  virtual Network::ClientConnectionPtr
-  createSslClientConnection(Ssl::ClientContext& ssl_ctx,
-                            Network::Address::InstanceConstSharedPtr address,
-                            Network::Address::InstanceConstSharedPtr source_address) PURE;
+                         Network::Address::InstanceConstSharedPtr source_address,
+                         Network::TransportSocketPtr&& transport_socket,
+                         const Network::ConnectionSocket::OptionsSharedPtr& options) PURE;
 
   /**
    * Create an async DNS resolver. The resolver should only be used on the thread that runs this
@@ -89,32 +93,16 @@ public:
 
   /**
    * Create a listener on a specific port.
-   * @param conn_handler supplies the handler for connections received by the listener
    * @param socket supplies the socket to listen on.
    * @param cb supplies the callbacks to invoke for listener events.
-   * @param scope supplies the Stats::Scope to use.
-   * @param listener_options listener configuration options.
+   * @param bind_to_port controls whether the listener binds to a transport port or not.
+   * @param hand_off_restored_destination_connections controls whether the listener searches for
+   *        another listener after restoring the destination address of a new connection.
    * @return Network::ListenerPtr a new listener that is owned by the caller.
    */
-  virtual Network::ListenerPtr
-  createListener(Network::ConnectionHandler& conn_handler, Network::ListenSocket& socket,
-                 Network::ListenerCallbacks& cb, Stats::Scope& scope,
-                 const Network::ListenerOptions& listener_options) PURE;
-
-  /**
-   * Create a listener on a specific port.
-   * @param conn_handler supplies the handler for connections received by the listener
-   * @param ssl_ctx supplies the SSL context to use.
-   * @param socket supplies the socket to listen on.
-   * @param cb supplies the callbacks to invoke for listener events.
-   * @param scope supplies the Stats::Scope to use.
-   * @param listener_options listener configuration options.
-   * @return Network::ListenerPtr a new listener that is owned by the caller.
-   */
-  virtual Network::ListenerPtr
-  createSslListener(Network::ConnectionHandler& conn_handler, Ssl::ServerContext& ssl_ctx,
-                    Network::ListenSocket& socket, Network::ListenerCallbacks& cb,
-                    Stats::Scope& scope, const Network::ListenerOptions& listener_options) PURE;
+  virtual Network::ListenerPtr createListener(Network::Socket& socket,
+                                              Network::ListenerCallbacks& cb, bool bind_to_port,
+                                              bool hand_off_restored_destination_connections) PURE;
 
   /**
    * Allocate a timer. @see Event::Timer for docs on how to use the timer.

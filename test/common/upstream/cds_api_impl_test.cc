@@ -40,10 +40,11 @@ public:
     )EOF";
 
     Json::ObjectSharedPtr config = Json::Factory::loadFromString(config_json);
-    envoy::api::v2::ConfigSource cds_config;
+    envoy::api::v2::core::ConfigSource cds_config;
     Config::Utility::translateCdsConfig(*config, cds_config);
     if (v2_rest) {
-      cds_config.mutable_api_config_source()->set_api_type(envoy::api::v2::ApiConfigSource::REST);
+      cds_config.mutable_api_config_source()->set_api_type(
+          envoy::api::v2::core::ApiConfigSource::REST);
     }
     Upstream::ClusterManager::ClusterInfoMap cluster_map;
     Upstream::MockCluster cluster;
@@ -61,20 +62,21 @@ public:
     cds_->initialize();
   }
 
-  void expectAdd(const std::string& cluster_name) {
-    EXPECT_CALL(cm_, addOrUpdatePrimaryCluster(_))
-        .WillOnce(Invoke([cluster_name](const envoy::api::v2::Cluster& cluster) -> bool {
-          EXPECT_EQ(cluster_name, cluster.name());
-          return true;
-        }));
+  void expectAdd(const std::string& cluster_name, const std::string& version) {
+    EXPECT_CALL(cm_, addOrUpdateCluster(_, version))
+        .WillOnce(Invoke(
+            [cluster_name](const envoy::api::v2::Cluster& cluster, const std::string&) -> bool {
+              EXPECT_EQ(cluster_name, cluster.name());
+              return true;
+            }));
   }
 
   void expectRequest() {
     EXPECT_CALL(cm_, httpAsyncClientForCluster("foo_cluster"));
     EXPECT_CALL(cm_.async_client_, send_(_, _, _))
-        .WillOnce(
-            Invoke([&](Http::MessagePtr& request, Http::AsyncClient::Callbacks& callbacks,
-                       const Optional<std::chrono::milliseconds>&) -> Http::AsyncClient::Request* {
+        .WillOnce(Invoke(
+            [&](Http::MessagePtr& request, Http::AsyncClient::Callbacks& callbacks,
+                const absl::optional<std::chrono::milliseconds>&) -> Http::AsyncClient::Request* {
               EXPECT_EQ((Http::TestHeaderMapImpl{
                             {":method", v2_rest_ ? "POST" : "GET"},
                             {":path", v2_rest_ ? "/v2/discovery:clusters"
@@ -105,7 +107,7 @@ public:
   Event::MockTimer* interval_timer_;
   Http::AsyncClient::Callbacks* callbacks_{};
   ReadyWatcher initialized_;
-  Optional<envoy::api::v2::ConfigSource> eds_config_;
+  absl::optional<envoy::api::v2::core::ConfigSource> eds_config_;
 };
 
 // Negative test for protoc-gen-validate constraints.
@@ -117,7 +119,7 @@ TEST_F(CdsApiImplTest, ValidateFail) {
   Protobuf::RepeatedPtrField<envoy::api::v2::Cluster> clusters;
   clusters.Add();
 
-  EXPECT_THROW(dynamic_cast<CdsApiImpl*>(cds_.get())->onConfigUpdate(clusters),
+  EXPECT_THROW(dynamic_cast<CdsApiImpl*>(cds_.get())->onConfigUpdate(clusters, ""),
                ProtoValidationException);
   EXPECT_CALL(request_, cancel());
 }
@@ -134,7 +136,7 @@ TEST_F(CdsApiImplTest, InvalidOptions) {
   Json::ObjectSharedPtr config = Json::Factory::loadFromString(config_json);
   local_info_.node_.set_cluster("");
   local_info_.node_.set_id("");
-  envoy::api::v2::ConfigSource cds_config;
+  envoy::api::v2::core::ConfigSource cds_config;
   Config::Utility::translateCdsConfig(*config, cds_config);
   EXPECT_THROW(
       CdsApiImpl::create(cds_config, eds_config_, cm_, dispatcher_, random_, local_info_, store_),
@@ -156,8 +158,8 @@ TEST_F(CdsApiImplTest, Basic) {
   message->body().reset(new Buffer::OwnedImpl(response1_json));
 
   EXPECT_CALL(cm_, clusters()).WillOnce(Return(ClusterManager::ClusterInfoMap{}));
-  expectAdd("cluster1");
-  expectAdd("cluster2");
+  expectAdd("cluster1", "hash_3845eb3523492899");
+  expectAdd("cluster2", "hash_3845eb3523492899");
   EXPECT_CALL(initialized_, ready());
   EXPECT_CALL(*interval_timer_, enableTimer(_));
   EXPECT_EQ("", cds_->versionInfo());
@@ -178,9 +180,9 @@ TEST_F(CdsApiImplTest, Basic) {
   message->body().reset(new Buffer::OwnedImpl(response2_json));
 
   EXPECT_CALL(cm_, clusters()).WillOnce(Return(makeClusterMap({"cluster1", "cluster2"})));
-  expectAdd("cluster1");
-  expectAdd("cluster3");
-  EXPECT_CALL(cm_, removePrimaryCluster("cluster2"));
+  expectAdd("cluster1", "hash_19fd657104a2cd34");
+  expectAdd("cluster3", "hash_19fd657104a2cd34");
+  EXPECT_CALL(cm_, removeCluster("cluster2"));
   EXPECT_CALL(*interval_timer_, enableTimer(_));
   callbacks_->onSuccess(std::move(message));
 

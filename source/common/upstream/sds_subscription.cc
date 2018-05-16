@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 
+#include "envoy/api/v2/endpoint/endpoint.pb.h"
 #include "envoy/common/exception.h"
 
 #include "common/config/metadata.h"
@@ -14,23 +15,22 @@
 #include "common/json/json_loader.h"
 #include "common/protobuf/protobuf.h"
 
-#include "api/eds.pb.h"
-
 namespace Envoy {
 namespace Upstream {
 
 SdsSubscription::SdsSubscription(ClusterStats& stats,
-                                 const envoy::api::v2::ConfigSource& eds_config, ClusterManager& cm,
-                                 Event::Dispatcher& dispatcher, Runtime::RandomGenerator& random)
-    : RestApiFetcher(cm, eds_config.api_config_source().cluster_name()[0], dispatcher, random,
+                                 const envoy::api::v2::core::ConfigSource& eds_config,
+                                 ClusterManager& cm, Event::Dispatcher& dispatcher,
+                                 Runtime::RandomGenerator& random)
+    : RestApiFetcher(cm, eds_config.api_config_source().cluster_names()[0], dispatcher, random,
                      Config::Utility::apiConfigSourceRefreshDelay(eds_config.api_config_source())),
       stats_(stats) {
   const auto& api_config_source = eds_config.api_config_source();
   UNREFERENCED_PARAMETER(api_config_source);
   // If we are building an SdsSubscription, the ConfigSource should be REST_LEGACY.
-  ASSERT(api_config_source.api_type() == envoy::api::v2::ApiConfigSource::REST_LEGACY);
+  ASSERT(api_config_source.api_type() == envoy::api::v2::core::ApiConfigSource::REST_LEGACY);
   // TODO(htuch): Add support for multiple clusters, #1170.
-  ASSERT(api_config_source.cluster_name().size() == 1);
+  ASSERT(api_config_source.cluster_names().size() == 1);
   ASSERT(api_config_source.has_refresh_delay());
 }
 
@@ -42,7 +42,8 @@ void SdsSubscription::parseResponse(const Http::Message& response) {
   // Since in the v2 EDS API we place all the endpoints for a given zone in the same proto, we first
   // need to bin the returned hosts list so that we group them by zone. We use an ordered map here
   // to provide better determinism for debug/test behavior.
-  std::map<std::string, Protobuf::RepeatedPtrField<envoy::api::v2::LbEndpoint>> zone_lb_endpoints;
+  std::map<std::string, Protobuf::RepeatedPtrField<envoy::api::v2::endpoint::LbEndpoint>>
+      zone_lb_endpoints;
   for (const Json::ObjectSharedPtr& host : json->getObjectArray("hosts")) {
     bool canary = false;
     uint32_t weight = 1;
@@ -72,10 +73,9 @@ void SdsSubscription::parseResponse(const Http::Message& response) {
     locality_lb_endpoints->mutable_lb_endpoints()->Swap(&it.second);
   }
 
-  callbacks_->onConfigUpdate(resources);
   std::pair<std::string, uint64_t> hash =
       Envoy::Config::Utility::computeHashedVersion(response_body);
-  version_info_ = hash.first;
+  callbacks_->onConfigUpdate(resources, hash.first);
   stats_.version_.set(hash.second);
   stats_.update_success_.inc();
 }

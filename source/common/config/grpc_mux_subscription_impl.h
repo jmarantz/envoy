@@ -1,5 +1,6 @@
 #pragma once
 
+#include "envoy/api/v2/discovery.pb.h"
 #include "envoy/config/grpc_mux.h"
 #include "envoy/config/subscription.h"
 
@@ -8,8 +9,6 @@
 #include "common/grpc/common.h"
 #include "common/protobuf/protobuf.h"
 #include "common/protobuf/utility.h"
-
-#include "api/discovery.pb.h"
 
 namespace Envoy {
 namespace Config {
@@ -42,8 +41,6 @@ public:
     stats_.update_attempt_.inc();
   }
 
-  const std::string versionInfo() const override { return version_info_; }
-
   // Config::GrpcMuxCallbacks
   void onConfigUpdate(const Protobuf::RepeatedPtrField<ProtobufWkt::Any>& resources,
                       const std::string& version_info) override {
@@ -51,11 +48,14 @@ public:
     std::transform(resources.cbegin(), resources.cend(),
                    Protobuf::RepeatedPtrFieldBackInserter(&typed_resources),
                    MessageUtil::anyConvert<ResourceType>);
-    callbacks_->onConfigUpdate(typed_resources);
+    // TODO(mattklein123): In the future if we start tracking per-resource versions, we need to
+    // supply those versions to onConfigUpdate() along with the xDS response ("system")
+    // version_info. This way, both types of versions can be tracked and exposed for debugging by
+    // the configuration update targets.
+    callbacks_->onConfigUpdate(typed_resources, version_info);
     stats_.update_success_.inc();
     stats_.update_attempt_.inc();
-    version_info_ = version_info;
-    stats_.version_.set(HashUtil::xxHash64(version_info_));
+    stats_.version_.set(HashUtil::xxHash64(version_info));
     ENVOY_LOG(debug, "gRPC config for {} accepted with {} resources: {}", type_url_,
               resources.size(), RepeatedPtrUtil::debugString(typed_resources));
   }
@@ -73,13 +73,16 @@ public:
     callbacks_->onConfigUpdateFailed(e);
   }
 
+  std::string resourceName(const ProtobufWkt::Any& resource) override {
+    return callbacks_->resourceName(resource);
+  }
+
 private:
   GrpcMux& grpc_mux_;
   SubscriptionStats stats_;
   const std::string type_url_;
   SubscriptionCallbacks<ResourceType>* callbacks_{};
   GrpcMuxWatchPtr watch_{};
-  std::string version_info_;
 };
 
 } // namespace Config
