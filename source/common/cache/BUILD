@@ -11,23 +11,23 @@ load(
 envoy_package()
 
 envoy_cc_library(
-    name = "ecache_lib",
-    hdrs = ["ecache.h"],
+    name = "cache_lib",
+    srcs = ["cache.cc"],
+    hdrs = ["cache.h"],
     deps = [
-      "//include/envoy/common:time_interface",
-      "//source/common/common:assert_lib",
-      "//source/common/common:utility_lib",
+        "//include/envoy/common:time_interface",
+        "//source/common/common:assert_lib",
+        "//source/common/common:utility_lib",
     ],
 )
 
 envoy_cc_library(
     name = "simple_cache_lib",
-    hdrs = ["simple_cache.h"],
     srcs = ["simple_cache.cc"],
+    hdrs = ["simple_cache.h"],
     deps = [
-      "ecache_lib",
-      "//source/common/common:lock_guard_lib",
-      "//source/common/common:thread_lib",
+        "cache_lib",
+        "//source/common/common:lock_guard_lib",
+        "//source/common/common:thread_lib",
     ],
 )
-

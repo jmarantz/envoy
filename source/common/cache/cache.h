@@ -9,41 +9,59 @@
 #include "common/common/utility.h"
 
 namespace Envoy {
-
-namespace ecache {
+namespace Cache {
 
 struct ValueStruct {
-  MonotonicTime timestamp;
-  std::string value;
+  std::string value_;
+  MonotonicTime timestamp_;
 };
 using Value = std::shared_ptr<ValueStruct>;
 
 using AttributeMap = std::map<std::string, std::string>;
-using Key = std::pair<std::string, AttributeMap>;
+struct Key {
+  bool operator<(const Key& that) const { return key_ < that.key_; }
+  std::string key_;
+  AttributeMap attributes_;
+};
 
 // Status returned from a receiver function, which is used for both lookups and insertions.
 enum class ReceiverStatus {
-  kOk,       // The data was received and we are ready for the next chunk.
-  kAbort,    // The receiver is no longer interested in the data.
-  kInvalid,  // The data is no longer valid and should be deleted. The caller will need to
-             // request this response from another cache or from a backend.
+  kOk,      // The data was received and we are ready for the next chunk.
+  kAbort,   // The receiver is no longer interested in the data.
+  kInvalid, // The data is no longer valid and should be removed. The caller will need to
+            // request this response from another cache or from a backend.
 };
 
 // Status passed to a receiver function.
 enum class DataStatus {
-  kNotFound,        // The value was not found, or has become invalid during streaming.
-  kChunksImminent,  // Another chunk of data will immediately follow.
-  kChunksPending,   // Another chunk of data will eventually follow, perhaps after a delay.
-  kLastChunk,       // The current chunk is the last one.
-  kError,           // An error has occurred during streaming; detailed in the data.
+  kNotFound,       // The value was not found, or has become invalid during streaming.
+  kChunksImminent, // Another chunk of data will immediately follow.
+  kChunksPending,  // Another chunk of data will eventually follow, perhaps after a delay.
+  kLastChunk,      // The current chunk is the last one.
+  kError,          // An error has occurred during streaming; detailed in the data.
 };
 
-bool ValidStatus(DataStatus status) {
-  return status == DataStatus::kChunksImminent || status == DataStatus::kChunksPending || 
-    status == DataStatus::kLastChunk;
-}
+bool ValidStatus(DataStatus status);
 
-enum class DeleteStatus { kDeleted, kError };
+// Returns the ideal chunk-size of data stored in the cache. Items larger than
+// this should be stored in chunks, facilitating pausable downloads and video
+// streaming. It may be possible to store larger items in one chunk, but
+// sufficiently large chunks may be dropped on insert. Note that the chunking
+// is purely under control of the application, including encoding the range into
+// the key, and this size is offered only as a hint for optimal performance.
+// Example usages: memcached (in some versions) had a maximum size of 1M and
+// so chunked storage strategies were required. Shared-memory caches may, for
+// simplicity, allocate fixed size buffers for cache values, thus requiring
+// chunking larger values.
+//
+// Chunking is not managed by the caching backends themselves because
+// they don’t have a way to induce a fill for any missing chunks.
+struct CacheInfo {
+  size_t chunk_size_bytes_; // Optimum size for range-requests.
+  size_t max_size_bytes_;   // Maximum permissible size for single chunks.
+};
+
+enum class RemoveStatus { kRemoved, kError };
 using DataReceiverFn = std::function<ReceiverStatus(DataStatus, const Value&)>;
 using KeyReceiverFn = std::pair<Key, DataReceiverFn>;
 using MultiLookupRequest = std::vector<KeyReceiverFn>;
@@ -51,7 +69,7 @@ using NotifyFn = std::function<void(bool)>;
 
 class Backend {
 public:
-  virtual ~Backend() { ASSERT(self_.get() == nullptr); }
+  virtual ~Backend();
 
   // Streams the cached payload stored at key into data_receiver. If data_receiver
   // wants to cancel the lookup mid-stream, it can return ReceiverStatus::Abort.
@@ -66,22 +84,22 @@ public:
   // encoded by appropriate wrappers.
   //
   // Usage:
-  //   cache->Lookup(key, [key](ecache::DataStatus status, const Value& data)
-  //     -> ecache::ReceiverStatus {
+  //   cache->Lookup(key, [key](Cache::DataStatus status, const Value& data)
+  //     -> Cache::ReceiverStatus {
   //       // Here we can stream data out from the cache to a socket, and return
-  //       // ecache::ReceiverStatus::kAbort if there was a problem, so the cache
+  //       // Cache::ReceiverStatus::kAbort if there was a problem, so the cache
   //       // can terminate the stream.
   //       std::cout << “Lookup(“ << key << “ << “): “ << status << “; “ << data;
-  //       return ecache::ReceiverStatus::Ok;
+  //       return Cache::ReceiverStatus::Ok;
   //     });
-  virtual void Lookup(const Key& key, DataReceiverFn data_receiver) = 0;
+  virtual void lookup(const Key& key, DataReceiverFn data_receiver) = 0;
 
   // Performs multiple lookups in parallel. This is equivalent to calling lookup
   // for each item in the request vector, but provides an opportunity for networked
   // caches to batch multiple requests into a single RPC. Note that each key gets
-  // its own data-receiver function, and there is no single notification for 
+  // its own data-receiver function, and there is no single notification for
   // completing all the lookups.
-  virtual void multiLookup(const MultiLookupRequest& req) = 0;
+  virtual void multiLookup(const MultiLookupRequest& req);
 
   // Initiates an insertion at key. Any previous value is discarded upon
   // calling this function. The insertion is streamed into the cache, and
@@ -95,21 +113,21 @@ public:
   // receiver.
   //
   // Usage:
-  //   cache->Insert(key, [](ecache::DataReceiverFn inserter) {
+  //   cache->insert(key, [](Cache::DataReceiverFn inserter) {
   //     // Write two chunks to into the cache. Only write the second chunk if the
   //     // cache was able to injest the first chunk. Note that no status is returned
-  //     // by Insert() because even if Insert() succeeds, there is no guarantee a
+  //     // by insert() because even if insert() succeeds, there is no guarantee a
   //     // subsequent lookup would succeed.
-  //     if (inserter(ecache::DataStatus::kChunksImminent, “chunk1”) == 
-  //                  ecache::ReceiverStatus::kOk) {
-  //       inserter(ecache::DataStatus::LastChunk, “chunk2”)’;
+  //     if (inserter(Cache::DataStatus::kChunksImminent, “chunk1”) ==
+  //                  Cache::ReceiverStatus::kOk) {
+  //       inserter(Cache::DataStatus::LastChunk, “chunk2”)’;
   //     }
   //   });
-  virtual DataReceiverFn Insert(const Key& key) = 0;
+  virtual DataReceiverFn insert(const Key& key) = 0;
 
   // Removes a cache key. If a confirmation callback is provided, it will
   // be called once the deletion is complete.
-  virtual void Delete(const Key& key, NotifyFn confirm_fn) = 0;
+  virtual void remove(const Key& key, NotifyFn confirm_fn) = 0;
 
   // Initiates a cache shutdown.
   //   1. Puts the cache into a lameduck mode, where every request immediately fails.
@@ -127,38 +145,25 @@ public:
 
   // Returns whether the cache is in a healthy state. A unhealthy cache can
   // respond immediately to lookups by indicating DataStatus::Error, and
-  // to inserts with DeleteStatus::Error. However, some operations may benefit
+  // to inserts with RemoveStatus::Error. However, some operations may benefit
   // from knowing that caching is impossible before they even begin. For example,
   // a costly Brotli compression filter may disable itself when the result can’t
-  // be cached due to transient issues, such as a costly Brotli-compression run 
+  // be cached due to transient issues, such as a costly Brotli-compression run
   // per-request.
-  virtual bool isHealthy() const = 0;
+  virtual bool IsHealthy() const { return self_.get() != nullptr; }
 
-  // Returns the ideal chunk-size of data stored in the cache. Items larger than
-  // this should be stored in chunks, facilitating pausable downloads and video 
-  // streaming. It may be possible to store larger items in one chunk, but
-  // sufficiently large chunks may be dropped on insert. Note that the chunking
-  // is purely under control of the application, including encoding the range into
-  // the key, and this size is offered only as a hint for optimal performance.
-  // Example usages: memcached (in some versions) had a maximum size of 1M and
-  // so chunked storage strategies were required. Shared-memory caches may, for
-  // simplicity, allocate fixed size buffers for cache values, thus requiring
-  // chunking larger values.
-  //
-  // Chunking is not managed by the caching backends themselves because
-  // they don’t have a way to induce a fill for any missing chunks.
-  virtual size_t ChunkSizeBytes() const = 0;
+  virtual CacheInfo cacheInfo() const = 0;
 
   std::shared_ptr<Backend> self() { return self_; }
 
- protected:
-  Backend() : self_(this) {}
+protected:
+  Backend();
 
- private:
+private:
   std::shared_ptr<Backend> self_; // Cleared on shutdown.
 };
 
-using BackedPtr = std::shared_ptr<Backend>;
+using BackendSharedPtr = std::shared_ptr<Backend>;
 
-}  // namespace ecache
-}  // namespace Envoy
+} // namespace Cache
+} // namespace Envoy
