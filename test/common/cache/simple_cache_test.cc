@@ -24,7 +24,7 @@ protected:
   void CheckPut(const std::string& key, const std::string& value) { CheckPut(Cache(), key, value); }
 
   void CheckPut(BackendSharedPtr cache, const std::string& key, const std::string& value) {
-    DataReceiverFn inserter = cache->insert({.key_ = key});
+    DataReceiverFn inserter = cache->insert(makeKey(key));
     Value val = std::make_shared<ValueStruct>();
     val->timestamp_ = current_time_;
     val->value_ = value;
@@ -33,7 +33,7 @@ protected:
   }
 
   void CheckRemove(const std::string& key) {
-    Cache()->remove({.key_ = key}, nullptr);
+    Cache()->remove(makeKey(key), nullptr);
     PostOpCleanup();
   }
 
@@ -56,7 +56,8 @@ protected:
       ++outstanding_fetches_;
     }
     */
-    cache->lookup({.key_ = std::string(key)}, [this](DataStatus status, const Value& value) {
+    LookupContextPtr lookup = cache->lookup(makeKey(key));
+    lookup->read([this](DataStatus status, const Value& value) {
       value_ = value;
       status_ = status;
       return ReceiverStatus::Ok;
@@ -101,7 +102,7 @@ TEST_F(SimpleCacheTest, PutGetRemove) {
   //          cache_->size_bytes());  // "Name" + "NewValue"
   // EXPECT_EQ(static_cast<size_t>(1), cache_->num_elements());
 
-  cache_->remove({.key_ = "Name"}, nullptr);
+  cache_->remove(makeKey("Name"), nullptr);
   // cache_->SanityCheck();
   Value value_buffer;
   CheckNotFound("Name");

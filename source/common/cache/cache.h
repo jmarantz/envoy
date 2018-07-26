@@ -24,6 +24,10 @@ struct Key {
   AttributeMap attributes_;
 };
 
+inline Key makeKey(absl::string_view key_str) {
+  return {.key_ = std::string(key_str), .attributes_ = AttributeMap()};
+};
+
 // Status returned from a receiver function, which is used for both lookups and insertions.
 enum class ReceiverStatus {
   Ok,      // The data was received and we are ready for the next chunk.
@@ -68,6 +72,35 @@ struct CacheInfo {
   size_t max_size_bytes_;   // Maximum permissible size for single chunks.
 };
 
+// Insertion context manages the lifetime of an insertion. Client code wishing
+// to insert something into a cache can use this to stream data into a cache.
+// An insertion context is returned by Backend::insert(). Clients should only
+// present data to the cache when the ready() function passed into the context
+// is called. The data presented should be bounded in size.
+class InsertionContext {
+public:
+  // If ready() is called with 'true', it's time for the client to write a new chunk
+  // to the cache, abort it, or finalize. If ready() is called with 'false', the
+  // operation is aborted by the cache, and the client can free any contextual information
+  // and stop streaming.
+  InsertionContext(NotifyFn ready);
+  virtual ~InsertionContext();
+
+  virtual bool write(Value chunk) = 0;
+  virtual void finalize() = 0;
+};
+
+// Lookup context manages the lifetime of a lookup.
+class LookupContext {
+public:
+  virtual ~LookupContext();
+
+  // Reads the next chunk from the cache, calling receiver when the chunk is ready.
+  virtual void read(DataReceiverFn receiver) = 0;
+};
+
+using LookupContextPtr = std::unique_ptr<LookupContext>;
+
 class Backend {
 public:
   virtual ~Backend();
@@ -93,7 +126,7 @@ public:
   //       std::cout << “Lookup(“ << key << “ << “): “ << status << “; “ << data;
   //       return Cache::ReceiverStatus::Ok;
   //     });
-  virtual void lookup(const Key& key, DataReceiverFn data_receiver) = 0;
+  virtual LookupContextPtr lookup(const Key& key) = 0;
 
   // Performs multiple lookups in parallel. This is equivalent to calling lookup
   // for each item in the request vector, but provides an opportunity for networked
@@ -166,40 +199,6 @@ private:
 };
 
 using BackendSharedPtr = std::shared_ptr<Backend>;
-
-// Insertion context manages the lifetime of an insertion. Client code wishing
-// to insert something into a cache can use this to stream data into a cache.
-// An insertion context is returned by Backend::insert(). Clients should only
-// present data to the cache when the ready() function passed into the context
-// is called. The data presented should be bounded in size.
-class InsertionContext {
-public:
-  // If ready() is called with 'true', it's time for the client to write a new chunk
-  // to the cache, abort it, or finalize. If ready() is called with 'false', the
-  // operation is aborted by the cache, and the client can free any contextual information
-  // and stop streaming.
-  InsertionContext(NotifyFn ready);
-  virtual ~InsertionContext();
-
-  bool write(Value chunk);
-  void finalize();
-  void abort();
-
-private:
-  BackendSharedPtr backend_;
-};
-
-// Lookup context manages the lifetime of a lookup.
-class LookupContext {
-public:
-  LookupContext(NotifyFn ready);
-  virtual ~LookupContext();
-
-  DataStatus read(Value& value);
-
-private:
-  BackendSharedPtr backend_;
-};
 
 } // namespace Cache
 } // namespace Envoy

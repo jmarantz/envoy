@@ -14,5 +14,7 @@ bool ValidStatus(DataStatus status) {
          status == DataStatus::LastChunk;
 }
 
+LookupContext::~LookupContext() {}
+
 } // namespace Cache
 } // namespace Envoy

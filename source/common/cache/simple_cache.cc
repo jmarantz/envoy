@@ -9,11 +9,35 @@
 namespace Envoy {
 namespace Cache {
 
-void SimpleCache::lookup(const Key& key, DataReceiverFn receiver) {
-  BackendSharedPtr cache = self();
+class SimpleLookupContext : public LookupContext {
+public:
+  SimpleLookupContext(const Key& key, BackendSharedPtr cache) : key_(key), cache_(cache) {}
+
+  void read(DataReceiverFn receiver) override {
+    BackendSharedPtr cache = cache_;
+    if (cache.get() != nullptr) {
+      cache = cache->self();
+      if (cache.get() != nullptr) {
+        static_cast<SimpleCache*>(cache.get())->lookupHelper(key_, receiver);
+        return;
+      }
+    }
+    receiver(DataStatus::NotFound, Value());
+  }
+
+private:
+  Key key_;
+  BackendSharedPtr cache_;
+};
+
+LookupContextPtr SimpleCache::lookup(const Key& key) {
+  return std::make_unique<SimpleLookupContext>(key, self());
+}
+
+void SimpleCache::lookupHelper(const Key& key, DataReceiverFn receiver) {
   Value value;
   auto status = DataStatus::NotFound;
-  if (cache.get() != nullptr) {
+  {
     Thread::LockGuard lock(mutex_);
     auto iter = map_.find(key);
     if (iter != map_.end()) {
@@ -25,10 +49,10 @@ void SimpleCache::lookup(const Key& key, DataReceiverFn receiver) {
         status = DataStatus::InsertInProgress;
       }
     }
-    // Release the lock before calling the receiver, retaining
-    // access the ref-counted value, even if it’s evicted by another
-    // thread immediately after releasing the lock.
   }
+  // Release the lock before calling the receiver, retaining
+  // access the ref-counted value, even if it’s evicted by another
+  // thread immediately after releasing the lock.
   receiver(status, value);
 }
 
@@ -40,7 +64,7 @@ DataReceiverFn SimpleCache::insert(const Key& key) {
   }
   remove(key, nullptr); // Avoid reading stale values during the insertion.
   return [this, key, value](DataStatus status, const Value& chunk) -> ReceiverStatus {
-    return InsertHelper(status, key, value, chunk);
+    return insertHelper(status, key, value, chunk);
   };
 }
 
@@ -55,7 +79,7 @@ void SimpleCache::remove(const Key& key, NotifyFn confirm_fn) {
 }
 
 // Called by cache user for each chunk to insert into a key.
-ReceiverStatus SimpleCache::InsertHelper(DataStatus status, Key key, Value value,
+ReceiverStatus SimpleCache::insertHelper(DataStatus status, Key key, Value value,
                                          const Value& chunk) {
   switch (status) {
   case DataStatus::NotFound:
