@@ -1,5 +1,6 @@
-#include "common/cache/simple_cache.h"
 #include "common/common/utility.h"
+
+#include "common/cache/simple_cache.h"
 
 #include "gtest/gtest.h"
 
@@ -7,10 +8,12 @@ namespace Envoy {
 namespace Cache {
 
 class SimpleCacheTest : public testing::Test /*CacheTestBase*/ {
-protected:
+ protected:
   SimpleCacheTest()
-      : cache_((new SimpleCache)->self()), status_(DataStatus::kError),
-        current_time_(time_source_.currentTime()) {}
+      : cache_((new SimpleCache)->self()),
+        status_(DataStatus::kError),
+        current_time_(time_source_.currentTime()) {
+  }
 
   ~SimpleCacheTest() {
     BackendSharedPtr cache = cache_;
@@ -21,10 +24,13 @@ protected:
   }
 
   // Writes a value into the cache.
-  void CheckPut(const std::string& key, const std::string& value) { CheckPut(Cache(), key, value); }
+  void CheckPut(const std::string& key, const std::string& value) {
+    CheckPut(Cache(), key, value);
+  }
 
-  void CheckPut(BackendSharedPtr cache, const std::string& key, const std::string& value) {
-    DataReceiverFn inserter = cache->insert({.key_ = key});
+  void CheckPut(BackendSharedPtr cache, const std::string& key,
+                const std::string& value) {
+    DataReceiverFn inserter = cache->insert({.key_=key});
     Value val = std::make_shared<ValueStruct>();
     val->timestamp_ = current_time_;
     val->value_ = value;
@@ -33,12 +39,14 @@ protected:
   }
 
   void CheckRemove(const std::string& key) {
-    Cache()->remove({.key_ = key}, nullptr);
+    Cache()->remove({.key_=key}, nullptr);
     PostOpCleanup();
   }
 
   // Performs a Get and verifies that the key is not found.
-  void CheckNotFound(const char* key) { CheckNotFound(Cache(), key); }
+  void CheckNotFound(const char* key) {
+    CheckNotFound(Cache(), key);
+  }
 
   void CheckNotFound(BackendSharedPtr cache, absl::string_view key) {
     InitiateGet(cache, key);
@@ -47,7 +55,9 @@ protected:
 
   // Initiate a cache Get, and return the Callback* which can be
   // passed to WaitAndCheck or WaitAndCheckNotFound.
-  void InitiateGet(absl::string_view key) { return InitiateGet(Cache(), key); }
+  void InitiateGet(absl::string_view key) {
+    return InitiateGet(Cache(), key);
+  }
 
   void InitiateGet(BackendSharedPtr cache, absl::string_view key) {
     /*
@@ -56,12 +66,13 @@ protected:
       ++outstanding_fetches_;
     }
     */
-    cache->lookup({.key_ = std::string(key)}, [this](DataStatus status, const Value& value) {
-      value_ = value;
-      status_ = status;
-      return ReceiverStatus::kOk;
-    });
+    cache->lookup({.key_=std::string(key)}, [this](DataStatus status, const Value& value) {
+                                              value_ = value;
+                                              status_ = status;
+                                              return ReceiverStatus::kOk;
+                                            });
   }
+
 
   // Performs a cache Get, waits for callback completion, and checks the
   // result is as expected.
@@ -75,8 +86,7 @@ protected:
   }
 
   BackendSharedPtr Cache() { return cache_; }
-  void PostOpCleanup() { /*cache_->SanityCheck();*/
-  }
+  void PostOpCleanup() { /*cache_->SanityCheck();*/ }
 
   BackendSharedPtr cache_;
   Value value_;
@@ -87,26 +97,26 @@ protected:
 
 // Simple flow of putting in an item, getting it, deleting it.
 TEST_F(SimpleCacheTest, PutGetRemove) {
-  // EXPECT_EQ(static_cast<size_t>(0), cache_->size_bytes());
-  // EXPECT_EQ(static_cast<size_t>(0), cache_->num_elements());
+  //EXPECT_EQ(static_cast<size_t>(0), cache_->size_bytes());
+  //EXPECT_EQ(static_cast<size_t>(0), cache_->num_elements());
   CheckPut("Name", "Value");
   CheckGet("Name", "Value");
-  // EXPECT_EQ(static_cast<size_t>(9), cache_->size_bytes());  // "Name" + "Value"
-  // EXPECT_EQ(static_cast<size_t>(1), cache_->num_elements());
+  //EXPECT_EQ(static_cast<size_t>(9), cache_->size_bytes());  // "Name" + "Value"
+  //EXPECT_EQ(static_cast<size_t>(1), cache_->num_elements());
   CheckNotFound("Another Name");
 
   CheckPut("Name", "NewValue");
   CheckGet("Name", "NewValue");
-  // EXPECT_EQ(static_cast<size_t>(12),
+  //EXPECT_EQ(static_cast<size_t>(12),
   //          cache_->size_bytes());  // "Name" + "NewValue"
-  // EXPECT_EQ(static_cast<size_t>(1), cache_->num_elements());
+  //EXPECT_EQ(static_cast<size_t>(1), cache_->num_elements());
 
-  cache_->remove({.key_ = "Name"}, nullptr);
-  // cache_->SanityCheck();
+  cache_->remove({.key_="Name"}, nullptr);
+  //cache_->SanityCheck();
   Value value_buffer;
   CheckNotFound("Name");
-  // EXPECT_EQ(static_cast<size_t>(0), cache_->size_bytes());
-  // EXPECT_EQ(static_cast<size_t>(0), cache_->num_elements());
+  //EXPECT_EQ(static_cast<size_t>(0), cache_->size_bytes());
+  //EXPECT_EQ(static_cast<size_t>(0), cache_->num_elements());
 }
 
 /*TEST_F(SimpleCacheTest, RemoveWithPrefix) {
@@ -136,8 +146,8 @@ TEST_F(SimpleCacheTest, PutGetRemove) {
   CheckNotFound("M4");
   }*/
 
-// Test eviction. We happen to know that the cache does not account for
-// STL overhead -- it's just counting key/value size. Exploit that to
+// Test eviction.  We happen to know that the cache does not account for
+// STL overhead -- it's just counting key/value size.  Exploit that to
 // understand when objects fall off the end.
 /*TEST_F(SimpleCacheTest, LeastRecentlyUsed) {
   // Fill the cache.
@@ -160,7 +170,7 @@ TEST_F(SimpleCacheTest, PutGetRemove) {
   }
 
   // Now if we insert a new entry totaling 10 bytes, that should work,
-  // but we will lose name0 due to LRU semantics. We should still have name1,
+  // but we will lose name0 due to LRU semantics.  We should still have name1,
   // and by Get-ing name1 it we will make it the MRU.
   CheckPut("nameA", "valuA");
   CheckGet("nameA", "valuA");
@@ -175,7 +185,7 @@ TEST_F(SimpleCacheTest, PutGetRemove) {
   CheckNotFound("name2");
 
   // Now insert something 1 byte too big, spelling out "value" this time.
-  // We will now lose name3 and name4. We should still have name5-name9,
+  // We will now lose name3 and name4.  We should still have name5-name9,
   // plus name1, nameA, and nameB.
   CheckPut("nameC", "valueC");
   CheckNotFound("name3");
@@ -188,7 +198,7 @@ TEST_F(SimpleCacheTest, PutGetRemove) {
     CheckGet(keys[i], values[i]);
   }
 
-  // Now the oldest item is "nameA". Freshen it by re-inserting it, tickling
+  // Now the oldest item is "nameA".  Freshen it by re-inserting it, tickling
   // the code-path in lru_cache.cc that special-cases handling of re-inserting
   // the same value.
   CheckPut("nameA", "valuA");
@@ -254,5 +264,5 @@ TEST_F(SimpleCacheTest, DoesNotDeleteWithPrefixWhenUnhealthy) {
   CheckGet("nameA", "valueA");
   }*/
 
-} // namespace Cache
-} // namespace Envoy
+}  // namespace Cache
+}  // namespace Envoy

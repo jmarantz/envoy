@@ -10,13 +10,13 @@ namespace Cache {
 // during operations, but this can be wrapped with a multi-thread
 // dispatcher to avoid contention.
 class SimpleCache : public Backend {
-public:
+ public:
   void lookup(const Key& key, DataReceiverFn receiver) override;
   DataReceiverFn insert(const Key& key) override;
   void remove(const Key& key, NotifyFn confirm_fn) override;
   CacheInfo cacheInfo() const override;
 
-private:
+ private:
   // Called by cache user for each chunk to insert into a key.
   ReceiverStatus InsertHelper(DataStatus status, Key key, Value value, const Value& chunk);
 
