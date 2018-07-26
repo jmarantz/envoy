@@ -26,22 +26,29 @@ struct Key {
 
 // Status returned from a receiver function, which is used for both lookups and insertions.
 enum class ReceiverStatus {
-  kOk,      // The data was received and we are ready for the next chunk.
-  kAbort,   // The receiver is no longer interested in the data.
-  kInvalid, // The data is no longer valid and should be removed. The caller will need to
-            // request this response from another cache or from a backend.
+  Ok,      // The data was received and we are ready for the next chunk.
+  Abort,   // The receiver is no longer interested in the data.
+  Invalid, // The data is no longer valid and should be removed. The caller will need to
+           // request this response from another cache or from a backend.
 };
 
 // Status passed to a receiver function.
 enum class DataStatus {
-  kNotFound,       // The value was not found, or has become invalid during streaming.
-  kChunksImminent, // Another chunk of data will immediately follow.
-  kChunksPending,  // Another chunk of data will eventually follow, perhaps after a delay.
-  kLastChunk,      // The current chunk is the last one.
-  kError,          // An error has occurred during streaming; detailed in the data.
+  NotFound,         // The value was not found, or has become invalid during streaming.
+  ChunksImminent,   // Another chunk of data will immediately follow.
+  ChunksPending,    // Another chunk of data will eventually follow, perhaps after a delay.
+  LastChunk,        // The current chunk is the last one.
+  InsertInProgress, // An insertion is currently in progress, so the value cannot be read.
+  Error,            // An error has occurred during streaming; detailed in the data.
 };
 
 bool ValidStatus(DataStatus status);
+
+enum class RemoveStatus { kRemoved, kError };
+using DataReceiverFn = std::function<ReceiverStatus(DataStatus, const Value&)>;
+using KeyReceiverFn = std::pair<Key, DataReceiverFn>;
+using MultiLookupRequest = std::vector<KeyReceiverFn>;
+using NotifyFn = std::function<void(bool)>;
 
 // Returns the ideal chunk-size of data stored in the cache. Items larger than
 // this should be stored in chunks, facilitating pausable downloads and video
@@ -60,12 +67,6 @@ struct CacheInfo {
   size_t chunk_size_bytes_; // Optimum size for range-requests.
   size_t max_size_bytes_;   // Maximum permissible size for single chunks.
 };
-
-enum class RemoveStatus { kRemoved, kError };
-using DataReceiverFn = std::function<ReceiverStatus(DataStatus, const Value&)>;
-using KeyReceiverFn = std::pair<Key, DataReceiverFn>;
-using MultiLookupRequest = std::vector<KeyReceiverFn>;
-using NotifyFn = std::function<void(bool)>;
 
 class Backend {
 public:
@@ -101,16 +102,17 @@ public:
   // completing all the lookups.
   virtual void multiLookup(const MultiLookupRequest& req);
 
-  // Initiates an insertion at key. Any previous value is discarded upon
-  // calling this function. The insertion is streamed into the cache, and
-  // during insertion, any lookups on that key will return DataStatus::NotFound.
-  // The cache backend provides a DataReceiverFn to insert_fn so the
-  // data can be streamed in. The insertion logic can cancel the insertion
-  // at any time during the process by calling the receiver function with
-  // DataStatus::Error, in which case the key will be left unset in the cache.
-  // The cache backend can also signal to the inserter that it’s no
-  // longer accepting the insertion by returning ReceiverStatus::Abort from the
-  // receiver.
+  // Initiates an insertion at key. Any previous value is discarded
+  // upon calling this function. The insertion is streamed into the
+  // cache, and during insertion, any lookups on that key will return
+  // DataStatus::InsertInProgress. The cache backend provides a
+  // DataReceiverFn to insert_fn so the data can be streamed in. The
+  // insertion logic can cancel the insertion at any time during the
+  // process by calling the receiver function with DataStatus::Error,
+  // in which case the key will be left unset in the cache. The cache
+  // backend can also signal to the inserter that it’s no longer
+  // accepting the insertion by returning ReceiverStatus::Abort from
+  // the receiver.
   //
   // Usage:
   //   cache->insert(key, [](Cache::DataReceiverFn inserter) {
@@ -164,6 +166,40 @@ private:
 };
 
 using BackendSharedPtr = std::shared_ptr<Backend>;
+
+// Insertion context manages the lifetime of an insertion. Client code wishing
+// to insert something into a cache can use this to stream data into a cache.
+// An insertion context is returned by Backend::insert(). Clients should only
+// present data to the cache when the ready() function passed into the context
+// is called. The data presented should be bounded in size.
+class InsertionContext {
+public:
+  // If ready() is called with 'true', it's time for the client to write a new chunk
+  // to the cache, abort it, or finalize. If ready() is called with 'false', the
+  // operation is aborted by the cache, and the client can free any contextual information
+  // and stop streaming.
+  InsertionContext(NotifyFn ready);
+  virtual ~InsertionContext();
+
+  bool write(Value chunk);
+  void finalize();
+  void abort();
+
+private:
+  BackendSharedPtr backend_;
+};
+
+// Lookup context manages the lifetime of a lookup.
+class LookupContext {
+public:
+  LookupContext(NotifyFn ready);
+  virtual ~LookupContext();
+
+  DataStatus read(Value& value);
+
+private:
+  BackendSharedPtr backend_;
+};
 
 } // namespace Cache
 } // namespace Envoy

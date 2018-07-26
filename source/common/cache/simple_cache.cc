@@ -12,13 +12,18 @@ namespace Cache {
 void SimpleCache::lookup(const Key& key, DataReceiverFn receiver) {
   BackendSharedPtr cache = self();
   Value value;
-  auto status = DataStatus::kNotFound;
+  auto status = DataStatus::NotFound;
   if (cache.get() != nullptr) {
     Thread::LockGuard lock(mutex_);
     auto iter = map_.find(key);
     if (iter != map_.end()) {
-      status = DataStatus::kLastChunk;
+      status = DataStatus::LastChunk;
       value = iter->second;
+      if (value.get() == nullptr) {
+        // The map entry was present, but the Value pointer contained null.
+        // This indicates an insert is in progress.
+        status = DataStatus::InsertInProgress;
+      }
     }
     // Release the lock before calling the receiver, retaining
     // access the ref-counted value, even if it’s evicted by another
@@ -28,8 +33,12 @@ void SimpleCache::lookup(const Key& key, DataReceiverFn receiver) {
 }
 
 DataReceiverFn SimpleCache::insert(const Key& key) {
-  remove(key, nullptr); // Avoid reading stale values during the insertion.
   Value value;
+  {
+    Thread::LockGuard lock(mutex_);
+    map_[key] = value; // Empty value indicates InsertInProgress.
+  }
+  remove(key, nullptr); // Avoid reading stale values during the insertion.
   return [this, key, value](DataStatus status, const Value& chunk) -> ReceiverStatus {
     return InsertHelper(status, key, value, chunk);
   };
@@ -49,14 +58,15 @@ void SimpleCache::remove(const Key& key, NotifyFn confirm_fn) {
 ReceiverStatus SimpleCache::InsertHelper(DataStatus status, Key key, Value value,
                                          const Value& chunk) {
   switch (status) {
-  case DataStatus::kNotFound:
-  case DataStatus::kError:
-    return ReceiverStatus::kAbort;
-  case DataStatus::kChunksImminent:
-  case DataStatus::kChunksPending:
+  case DataStatus::NotFound:
+  case DataStatus::Error:
+  case DataStatus::InsertInProgress:
+    return ReceiverStatus::Abort;
+  case DataStatus::ChunksImminent:
+  case DataStatus::ChunksPending:
     absl::StrAppend(&value->value_, chunk->value_);
     break;
-  case DataStatus::kLastChunk:
+  case DataStatus::LastChunk:
     if (value.get() == nullptr) {
       // If the insertion occurred in one chunk, we don't need to copy any bytes.
       value = chunk;
@@ -71,7 +81,7 @@ ReceiverStatus SimpleCache::InsertHelper(DataStatus status, Key key, Value value
       map_[key] = value;
     }
   }
-  return ReceiverStatus::kOk;
+  return ReceiverStatus::Ok;
 }
 
 CacheInfo SimpleCache::cacheInfo() const {
