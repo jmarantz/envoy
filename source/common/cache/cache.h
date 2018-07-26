@@ -44,6 +44,12 @@ enum class DataStatus {
 
 bool ValidStatus(DataStatus status);
 
+enum class RemoveStatus { kRemoved, kError };
+using DataReceiverFn = std::function<ReceiverStatus(DataStatus, const Value&)>;
+using KeyReceiverFn = std::pair<Key, DataReceiverFn>;
+using MultiLookupRequest = std::vector<KeyReceiverFn>;
+using NotifyFn = std::function<void(bool)>;
+
 // Returns the ideal chunk-size of data stored in the cache. Items larger than
 // this should be stored in chunks, facilitating pausable downloads and video
 // streaming. It may be possible to store larger items in one chunk, but
@@ -61,12 +67,6 @@ struct CacheInfo {
   size_t chunk_size_bytes_; // Optimum size for range-requests.
   size_t max_size_bytes_;   // Maximum permissible size for single chunks.
 };
-
-enum class RemoveStatus { kRemoved, kError };
-using DataReceiverFn = std::function<ReceiverStatus(DataStatus, const Value&)>;
-using KeyReceiverFn = std::pair<Key, DataReceiverFn>;
-using MultiLookupRequest = std::vector<KeyReceiverFn>;
-using NotifyFn = std::function<void(bool)>;
 
 class Backend {
 public:
@@ -166,6 +166,40 @@ private:
 };
 
 using BackendSharedPtr = std::shared_ptr<Backend>;
+
+// Insertion context manages the lifetime of an insertion. Client code wishing
+// to insert something into a cache can use this to stream data into a cache.
+// An insertion context is returned by Backend::insert(). Clients should only
+// present data to the cache when the ready() function passed into the context
+// is called. The data presented should be bounded in size.
+class InsertionContext {
+ public:
+  // If ready() is called with 'true', it's time for the client to write a new chunk
+  // to the cache, abort it, or finalize.  If ready() is called with 'false', the
+  // operation is aborted by the cache, and the client can free any contextual information
+  // and stop streaming.
+  InsertionContext(NotifyFn ready);
+  virtual ~InsertionContext();
+
+  bool write(Value chunk);
+  void finalize();
+  void abort();
+
+ private:
+  BackendSharedPtr backend_;
+};
+
+// Lookup context manages the lifetime of a lookup.
+class LookupContext {
+ public:
+  LookupContext(NotifyFn ready);
+  virtual ~LookupContext();
+
+  DataStatus read(Value& value);
+
+ private:
+  BackendSharedPtr backend_;
+};
 
 } // namespace Cache
 } // namespace Envoy
