@@ -11,7 +11,10 @@
 namespace Envoy {
 namespace Cache {
 
-struct ValueStruct { std::string value_; MonotonicTime timestamp_; };
+struct ValueStruct {
+  std::string value_;
+  MonotonicTime timestamp_;
+};
 using Value = std::shared_ptr<ValueStruct>;
 
 using AttributeMap = std::map<std::string, std::string>;
@@ -23,25 +26,25 @@ struct Key {
 
 // Status returned from a receiver function, which is used for both lookups and insertions.
 enum class ReceiverStatus {
-  kOk,       // The data was received and we are ready for the next chunk.
-  kAbort,    // The receiver is no longer interested in the data.
-  kInvalid,  // The data is no longer valid and should be removed. The caller will need to
-             // request this response from another cache or from a backend.
+  kOk,      // The data was received and we are ready for the next chunk.
+  kAbort,   // The receiver is no longer interested in the data.
+  kInvalid, // The data is no longer valid and should be removed. The caller will need to
+            // request this response from another cache or from a backend.
 };
 
 // Status passed to a receiver function.
 enum class DataStatus {
-  kNotFound,        // The value was not found, or has become invalid during streaming.
-  kChunksImminent,  // Another chunk of data will immediately follow.
-  kChunksPending,   // Another chunk of data will eventually follow, perhaps after a delay.
-  kLastChunk,       // The current chunk is the last one.
-  kError,           // An error has occurred during streaming; detailed in the data.
+  kNotFound,       // The value was not found, or has become invalid during streaming.
+  kChunksImminent, // Another chunk of data will immediately follow.
+  kChunksPending,  // Another chunk of data will eventually follow, perhaps after a delay.
+  kLastChunk,      // The current chunk is the last one.
+  kError,          // An error has occurred during streaming; detailed in the data.
 };
 
 bool ValidStatus(DataStatus status);
 
 // Returns the ideal chunk-size of data stored in the cache. Items larger than
-// this should be stored in chunks, facilitating pausable downloads and video 
+// this should be stored in chunks, facilitating pausable downloads and video
 // streaming. It may be possible to store larger items in one chunk, but
 // sufficiently large chunks may be dropped on insert. Note that the chunking
 // is purely under control of the application, including encoding the range into
@@ -54,8 +57,8 @@ bool ValidStatus(DataStatus status);
 // Chunking is not managed by the caching backends themselves because
 // they don’t have a way to induce a fill for any missing chunks.
 struct CacheInfo {
-  size_t chunk_size_bytes_;  // Optimum size for range-requests.
-  size_t max_size_bytes_;    // Maximum permissible size for single chunks.
+  size_t chunk_size_bytes_; // Optimum size for range-requests.
+  size_t max_size_bytes_;   // Maximum permissible size for single chunks.
 };
 
 enum class RemoveStatus { kRemoved, kError };
@@ -94,7 +97,7 @@ public:
   // Performs multiple lookups in parallel. This is equivalent to calling lookup
   // for each item in the request vector, but provides an opportunity for networked
   // caches to batch multiple requests into a single RPC. Note that each key gets
-  // its own data-receiver function, and there is no single notification for 
+  // its own data-receiver function, and there is no single notification for
   // completing all the lookups.
   virtual void multiLookup(const MultiLookupRequest& req);
 
@@ -145,7 +148,7 @@ public:
   // to inserts with RemoveStatus::Error. However, some operations may benefit
   // from knowing that caching is impossible before they even begin. For example,
   // a costly Brotli compression filter may disable itself when the result can’t
-  // be cached due to transient issues, such as a costly Brotli-compression run 
+  // be cached due to transient issues, such as a costly Brotli-compression run
   // per-request.
   virtual bool IsHealthy() const { return self_.get() != nullptr; }
 
@@ -153,14 +156,14 @@ public:
 
   std::shared_ptr<Backend> self() { return self_; }
 
- protected:
+protected:
   Backend();
 
- private:
+private:
   std::shared_ptr<Backend> self_; // Cleared on shutdown.
 };
 
 using BackendSharedPtr = std::shared_ptr<Backend>;
 
-}  // namespace Cache
-}  // namespace Envoy
+} // namespace Cache
+} // namespace Envoy

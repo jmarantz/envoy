@@ -3,21 +3,16 @@
 namespace Envoy {
 namespace Cache {
 
-Backend::Backend() : self_(this) {
-}
+Backend::Backend() : self_(this) {}
 
-Backend::~Backend() {
-  ASSERT(self_.get() == nullptr);
-}
+Backend::~Backend() { ASSERT(self_.get() == nullptr); }
 
-void Backend::multiLookup(const MultiLookupRequest&) {
-  ASSERT(false);
-}
+void Backend::multiLookup(const MultiLookupRequest&) { ASSERT(false); }
 
 bool ValidStatus(DataStatus status) {
   return status == DataStatus::kChunksImminent || status == DataStatus::kChunksPending ||
-    status == DataStatus::kLastChunk;
+         status == DataStatus::kLastChunk;
 }
 
-}  // namespace Cache
-}  // namespace Envoy
+} // namespace Cache
+} // namespace Envoy

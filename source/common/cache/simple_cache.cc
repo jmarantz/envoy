@@ -28,7 +28,7 @@ void SimpleCache::lookup(const Key& key, DataReceiverFn receiver) {
 }
 
 DataReceiverFn SimpleCache::insert(const Key& key) {
-  remove(key, nullptr);  // Avoid reading stale values during the insertion.
+  remove(key, nullptr); // Avoid reading stale values during the insertion.
   Value value;
   return [this, key, value](DataStatus status, const Value& chunk) -> ReceiverStatus {
     return InsertHelper(status, key, value, chunk);
@@ -46,8 +46,8 @@ void SimpleCache::remove(const Key& key, NotifyFn confirm_fn) {
 }
 
 // Called by cache user for each chunk to insert into a key.
-  ReceiverStatus SimpleCache::InsertHelper(
-      DataStatus status, Key key, Value value, const Value& chunk) {
+ReceiverStatus SimpleCache::InsertHelper(DataStatus status, Key key, Value value,
+                                         const Value& chunk) {
   switch (status) {
   case DataStatus::kNotFound:
   case DataStatus::kError:
@@ -81,6 +81,5 @@ CacheInfo SimpleCache::cacheInfo() const {
   return cache_info;
 }
 
-
-}  // namespace Cache
-}  // namespace Envoy
+} // namespace Cache
+} // namespace Envoy
