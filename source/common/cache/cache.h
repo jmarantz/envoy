@@ -26,19 +26,20 @@ struct Key {
 
 // Status returned from a receiver function, which is used for both lookups and insertions.
 enum class ReceiverStatus {
-  kOk,      // The data was received and we are ready for the next chunk.
-  kAbort,   // The receiver is no longer interested in the data.
-  kInvalid, // The data is no longer valid and should be removed. The caller will need to
+  Ok,      // The data was received and we are ready for the next chunk.
+  Abort,   // The receiver is no longer interested in the data.
+  Invalid, // The data is no longer valid and should be removed. The caller will need to
             // request this response from another cache or from a backend.
 };
 
 // Status passed to a receiver function.
 enum class DataStatus {
-  kNotFound,       // The value was not found, or has become invalid during streaming.
-  kChunksImminent, // Another chunk of data will immediately follow.
-  kChunksPending,  // Another chunk of data will eventually follow, perhaps after a delay.
-  kLastChunk,      // The current chunk is the last one.
-  kError,          // An error has occurred during streaming; detailed in the data.
+  NotFound,         // The value was not found, or has become invalid during streaming.
+  ChunksImminent,   // Another chunk of data will immediately follow.
+  ChunksPending,    // Another chunk of data will eventually follow, perhaps after a delay.
+  LastChunk,        // The current chunk is the last one.
+  InsertInProgress, // An insertion is currently in progress, so the value cannot be read.
+  Error,            // An error has occurred during streaming; detailed in the data.
 };
 
 bool ValidStatus(DataStatus status);
@@ -101,16 +102,17 @@ public:
   // completing all the lookups.
   virtual void multiLookup(const MultiLookupRequest& req);
 
-  // Initiates an insertion at key. Any previous value is discarded upon
-  // calling this function. The insertion is streamed into the cache, and
-  // during insertion, any lookups on that key will return DataStatus::NotFound.
-  // The cache backend provides a DataReceiverFn to insert_fn so the
-  // data can be streamed in. The insertion logic can cancel the insertion
-  // at any time during the process by calling the receiver function with
-  // DataStatus::Error, in which case the key will be left unset in the cache.
-  // The cache backend can also signal to the inserter that it’s no
-  // longer accepting the insertion by returning ReceiverStatus::Abort from the
-  // receiver.
+  // Initiates an insertion at key. Any previous value is discarded
+  // upon calling this function. The insertion is streamed into the
+  // cache, and during insertion, any lookups on that key will return
+  // DataStatus::InsertInProgress.  The cache backend provides a
+  // DataReceiverFn to insert_fn so the data can be streamed in. The
+  // insertion logic can cancel the insertion at any time during the
+  // process by calling the receiver function with DataStatus::Error,
+  // in which case the key will be left unset in the cache.  The cache
+  // backend can also signal to the inserter that it’s no longer
+  // accepting the insertion by returning ReceiverStatus::Abort from
+  // the receiver.
   //
   // Usage:
   //   cache->insert(key, [](Cache::DataReceiverFn inserter) {

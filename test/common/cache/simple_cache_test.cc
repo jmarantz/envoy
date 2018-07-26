@@ -9,7 +9,7 @@ namespace Cache {
 class SimpleCacheTest : public testing::Test /*CacheTestBase*/ {
 protected:
   SimpleCacheTest()
-      : cache_((new SimpleCache)->self()), status_(DataStatus::kError),
+      : cache_((new SimpleCache)->self()), status_(DataStatus::Error),
         current_time_(time_source_.currentTime()) {}
 
   ~SimpleCacheTest() {
@@ -28,7 +28,7 @@ protected:
     Value val = std::make_shared<ValueStruct>();
     val->timestamp_ = current_time_;
     val->value_ = value;
-    inserter(DataStatus::kLastChunk, val);
+    inserter(DataStatus::LastChunk, val);
     PostOpCleanup();
   }
 
@@ -42,7 +42,7 @@ protected:
 
   void CheckNotFound(BackendSharedPtr cache, absl::string_view key) {
     InitiateGet(cache, key);
-    EXPECT_EQ(DataStatus::kNotFound, status_);
+    EXPECT_EQ(DataStatus::NotFound, status_);
   }
 
   // Initiate a cache Get, and return the Callback* which can be
@@ -59,7 +59,7 @@ protected:
     cache->lookup({.key_ = std::string(key)}, [this](DataStatus status, const Value& value) {
       value_ = value;
       status_ = status;
-      return ReceiverStatus::kOk;
+      return ReceiverStatus::Ok;
     });
   }
 

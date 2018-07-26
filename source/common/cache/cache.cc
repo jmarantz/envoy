@@ -10,8 +10,8 @@ Backend::~Backend() { ASSERT(self_.get() == nullptr); }
 void Backend::multiLookup(const MultiLookupRequest&) { ASSERT(false); }
 
 bool ValidStatus(DataStatus status) {
-  return status == DataStatus::kChunksImminent || status == DataStatus::kChunksPending ||
-         status == DataStatus::kLastChunk;
+  return status == DataStatus::ChunksImminent || status == DataStatus::ChunksPending ||
+         status == DataStatus::LastChunk;
 }
 
 } // namespace Cache
