@@ -24,12 +24,9 @@ protected:
   // Writes a value into the cache.
   void checkPut(const std::string& key, const std::string& value) { checkPut(Cache(), key, value); }
 
-  void checkPut(BackendSharedPtr cache, const std::string& key, const std::string& value) {
+  void checkPut(BackendSharedPtr cache, const std::string& key, absl::string_view value) {
     InsertContextPtr inserter = cache->insert(makeKey(key));
-    Value val = std::make_shared<ValueStruct>();
-    val->timestamp_ = current_time_;
-    val->value_ = value;
-    inserter->write(val, nullptr);
+    inserter->write(makeValue(value), nullptr);
     PostOpCleanup();
   }
 
@@ -68,6 +65,9 @@ protected:
         if ((status == DataStatus::LastChunk) && (value_.get() == nullptr)) {
           value_ = value; // Zero-copy share value if it came in one chunk.
         } else {
+          if (value_.get() == nullptr) {
+            value_ = std::make_shared<ValueStruct>();
+          }
           absl::StrAppend(&value_->value_, value->value_);
         }
       }
@@ -95,8 +95,20 @@ protected:
   void PostOpCleanup() { /*cache_->SanityCheck();*/
   }
 
+  Key makeKey(absl::string_view key_str) {
+    return {.key_ = std::string(key_str), .attributes_ = attributes_};
+  };
+
+  Value makeValue(absl::string_view val) {
+    Value value = std::make_shared<ValueStruct>();
+    value->value_ = std::string(val);
+    value->timestamp_ = current_time_;
+    return value;
+  }
+
   BackendSharedPtr cache_;
   Value value_;
+  AttributeMap attributes_;
   DataStatus status_;
   ProdMonotonicTimeSource time_source_;
   MonotonicTime current_time_;
@@ -124,6 +136,28 @@ TEST_F(SimpleCacheTest, PutGetRemove) {
   checkNotFound("Name");
   // EXPECT_EQ(static_cast<size_t>(0), cache_->size_bytes());
   // EXPECT_EQ(static_cast<size_t>(0), cache_->num_elements());
+}
+
+TEST_F(SimpleCacheTest, StreamingPut) {
+  Key key = makeKey("key");
+  InsertContextPtr inserter = cache_->insert(key);
+  inserter->write(makeValue("Hello, "), [this, &key, &inserter](bool) {
+    // While we are string in the value, the cache reponds with InsertInProgress
+    LookupContextPtr lookup = cache_->lookup(key);
+    lookup->read([](DataStatus status, const Value&) -> ReceiverStatus {
+      EXPECT_EQ(DataStatus::InsertInProgress, status);
+      return ReceiverStatus::Ok;
+    });
+    inserter->write(makeValue("World!"), nullptr);
+  });
+  checkGet("key", "Hello, World!");
+  PostOpCleanup();
+}
+
+TEST_F(SimpleCacheTest, StreamingGet) {
+  checkPut("Name", "Value");
+  attributes_["split"] = "true";
+  checkGet("Name", "Value");
 }
 
 /*TEST_F(SimpleCacheTest, RemoveWithPrefix) {

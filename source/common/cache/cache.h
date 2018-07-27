@@ -24,10 +24,6 @@ struct Key {
   AttributeMap attributes_;
 };
 
-inline Key makeKey(absl::string_view key_str) {
-  return {.key_ = std::string(key_str), .attributes_ = AttributeMap()};
-};
-
 // Status returned from a receiver function, which is used for both lookups and insertions.
 enum class ReceiverStatus {
   Ok,      // The data was received and we are ready for the next chunk.

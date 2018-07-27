@@ -18,7 +18,27 @@ public:
     if (cache.get() != nullptr) {
       cache = cache->self();
       if (cache.get() != nullptr) {
-        static_cast<SimpleCache*>(cache.get())->lookupHelper(key_, receiver);
+        if (key_.attributes_.find("split") == key_.attributes_.end()) {
+          static_cast<SimpleCache*>(cache.get())->lookupHelper(key_, receiver);
+          return;
+        } else if (residual_value_.get() == nullptr) {
+          Value value;
+          static_cast<SimpleCache*>(cache.get())
+              ->lookupHelper(key_, [&value, this](DataStatus s, const Value& v) {
+                value = v;
+                residual_status_ = s;
+                return ReceiverStatus::Ok;
+              });
+          Value v1 = std::make_shared<ValueStruct>();
+          size_t size1 = value->value_.size() / 2;
+          v1->value_ = value->value_.substr(0, size1); // timestamp not touched.
+          residual_value_ = std::make_shared<ValueStruct>();
+          residual_value_->value_ = value->value_.substr(size1);
+          residual_value_->timestamp_ = value->timestamp_;
+          receiver(DataStatus::ChunksImminent, v1);
+        } else {
+          receiver(residual_status_, residual_value_);
+        }
         return;
       }
     }
@@ -28,6 +48,8 @@ public:
 private:
   Key key_;
   BackendSharedPtr cache_;
+  Value residual_value_;
+  DataStatus residual_status_;
 };
 
 class SimpleInsertContext : public InsertContext {
@@ -91,12 +113,13 @@ void SimpleCache::lookupHelper(const Key& key, DataReceiverFn receiver) {
     Thread::LockGuard lock(mutex_);
     auto iter = map_.find(key);
     if (iter != map_.end()) {
-      status = DataStatus::LastChunk;
       value = iter->second;
       if (value.get() == nullptr) {
         // The map entry was present, but the Value pointer contained null.
         // This indicates an insert is in progress.
         status = DataStatus::InsertInProgress;
+      } else {
+        status = DataStatus::LastChunk;
       }
     }
   }
