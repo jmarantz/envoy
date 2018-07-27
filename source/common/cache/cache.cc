@@ -18,6 +18,7 @@ bool TerminalStatus(DataStatus status) {
   return !ValidStatus(status) || status == DataStatus::LastChunk;
 }
 
+InsertContext::~InsertContext() {}
 LookupContext::~LookupContext() {}
 
 } // namespace Cache

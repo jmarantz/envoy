@@ -25,11 +25,11 @@ protected:
   void checkPut(const std::string& key, const std::string& value) { checkPut(Cache(), key, value); }
 
   void checkPut(BackendSharedPtr cache, const std::string& key, const std::string& value) {
-    DataReceiverFn inserter = cache->insert(makeKey(key));
+    InsertContextPtr inserter = cache->insert(makeKey(key));
     Value val = std::make_shared<ValueStruct>();
     val->timestamp_ = current_time_;
     val->value_ = value;
-    inserter(DataStatus::LastChunk, val);
+    inserter->write(val, nullptr);
     PostOpCleanup();
   }
 
@@ -57,7 +57,7 @@ protected:
       ++outstanding_fetches_;
     }
     */
-    value_ = std::make_shared<ValueStruct>();
+    value_.reset();
     LookupContextPtr lookup = cache->lookup(makeKey(key));
     nextChunk(std::move(lookup));
   }
@@ -65,7 +65,11 @@ protected:
   void nextChunk(LookupContextPtr lookup) {
     lookup->read([this, &lookup](DataStatus status, const Value& value) {
       if (ValidStatus(status)) {
-        absl::StrAppend(&value_->value_, value->value_);
+        if ((status == DataStatus::LastChunk) && (value_.get() == nullptr)) {
+          value_ = value; // Zero-copy share value if it came in one chunk.
+        } else {
+          absl::StrAppend(&value_->value_, value->value_);
+        }
       }
       if (TerminalStatus(status)) {
         status_ = status;

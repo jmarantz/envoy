@@ -30,6 +30,56 @@ private:
   BackendSharedPtr cache_;
 };
 
+class SimpleInsertContext : public InsertContext {
+public:
+  SimpleInsertContext(const Key& key, BackendSharedPtr cache) : key_(key), cache_(cache) {}
+
+  virtual ~SimpleInsertContext() {
+    // If a live cache has an uncommitted write, remove the 'in-progress' entry.
+    if (!committed_) {
+      BackendSharedPtr cache = cache_;
+      if (cache.get() != nullptr) {
+        cache = cache->self();
+        if (cache.get() != nullptr) {
+          cache->remove(key_, nullptr);
+        }
+      }
+    }
+  }
+
+  void write(Value value, NotifyFn ready_for_next_chunk) override {
+    ASSERT(!committed_);
+    BackendSharedPtr cache = cache_;
+    if (cache.get() != nullptr) {
+      cache = cache->self();
+      if (cache.get() != nullptr) {
+        if (ready_for_next_chunk == nullptr) { // Final chunk
+          if (value_.get() == nullptr) {
+            value_ = value;
+          } else {
+            absl::StrAppend(&value_->value_, value->value_);
+            value_->timestamp_ = value->timestamp_;
+          }
+          committed_ = true;
+          static_cast<SimpleCache*>(cache.get())->insertHelper(key_, value_);
+        } else {
+          if (value_.get() == nullptr) {
+            value_ = std::make_shared<ValueStruct>();
+          }
+          absl::StrAppend(&value_->value_, value->value_);
+          ready_for_next_chunk(true);
+        }
+      }
+    }
+  }
+
+private:
+  Value value_;
+  Key key_;
+  BackendSharedPtr cache_;
+  bool committed_ = false;
+};
+
 LookupContextPtr SimpleCache::lookup(const Key& key) {
   return std::make_unique<SimpleLookupContext>(key, self());
 }
@@ -56,16 +106,13 @@ void SimpleCache::lookupHelper(const Key& key, DataReceiverFn receiver) {
   receiver(status, value);
 }
 
-DataReceiverFn SimpleCache::insert(const Key& key) {
+InsertContextPtr SimpleCache::insert(const Key& key) {
   Value value;
   {
     Thread::LockGuard lock(mutex_);
     map_[key] = value; // Empty value indicates InsertInProgress.
   }
-  remove(key, nullptr); // Avoid reading stale values during the insertion.
-  return [this, key, value](DataStatus status, const Value& chunk) -> ReceiverStatus {
-    return insertHelper(status, key, value, chunk);
-  };
+  return std::make_unique<SimpleInsertContext>(key, self());
 }
 
 void SimpleCache::remove(const Key& key, NotifyFn confirm_fn) {
@@ -79,33 +126,10 @@ void SimpleCache::remove(const Key& key, NotifyFn confirm_fn) {
 }
 
 // Called by cache user for each chunk to insert into a key.
-ReceiverStatus SimpleCache::insertHelper(DataStatus status, Key key, Value value,
-                                         const Value& chunk) {
-  switch (status) {
-  case DataStatus::NotFound:
-  case DataStatus::Error:
-  case DataStatus::InsertInProgress:
-    return ReceiverStatus::Abort;
-  case DataStatus::ChunksImminent:
-  case DataStatus::ChunksPending:
-    absl::StrAppend(&value->value_, chunk->value_);
-    break;
-  case DataStatus::LastChunk:
-    if (value.get() == nullptr) {
-      // If the insertion occurred in one chunk, we don't need to copy any bytes.
-      value = chunk;
-    } else {
-      // If the insertion was streamed in, we must accumulate the bytes.
-      absl::StrAppend(&value->value_, chunk->value_);
-      value->timestamp_ = chunk->timestamp_;
-    }
-    {
-      // Only lock the cache and write the map when we have the complete value.
-      Thread::LockGuard lock(mutex_);
-      map_[key] = value;
-    }
-  }
-  return ReceiverStatus::Ok;
+void SimpleCache::insertHelper(const Key& key, Value value) {
+  // Only lock the cache and write the map when we have the complete value.
+  Thread::LockGuard lock(mutex_);
+  map_[key] = value;
 }
 
 CacheInfo SimpleCache::cacheInfo() const {

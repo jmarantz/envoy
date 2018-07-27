@@ -78,17 +78,11 @@ struct CacheInfo {
 // An insertion context is returned by Backend::insert(). Clients should only
 // present data to the cache when the ready() function passed into the context
 // is called. The data presented should be bounded in size.
-class InsertionContext {
+class InsertContext {
 public:
-  // If ready() is called with 'true', it's time for the client to write a new chunk
-  // to the cache, abort it, or finalize. If ready() is called with 'false', the
-  // operation is aborted by the cache, and the client can free any contextual information
-  // and stop streaming.
-  InsertionContext(NotifyFn ready);
-  virtual ~InsertionContext();
+  virtual ~InsertContext();
 
-  virtual bool write(Value chunk) = 0;
-  virtual void finalize() = 0;
+  virtual void write(Value chunk, NotifyFn ready_for_next_chunk) = 0;
 };
 
 // Lookup context manages the lifetime of a lookup, helping clients to pull
@@ -104,6 +98,7 @@ public:
   virtual void read(DataReceiverFn receiver) = 0;
 };
 
+using InsertContextPtr = std::unique_ptr<InsertContext>;
 using LookupContextPtr = std::unique_ptr<LookupContext>;
 
 class Backend {
@@ -163,7 +158,13 @@ public:
   //       inserter(Cache::DataStatus::LastChunk, “chunk2”)’;
   //     }
   //   });
-  virtual DataReceiverFn insert(const Key& key) = 0;
+  //
+  // If ready() is called with 'true', it's time for the client to write a new chunk
+  // to the cache, abort it, or finalize. If ready() is called with 'false', the
+  // operation is aborted by the cache, and the client can free any contextual information
+  // and stop streaming. The client can abort the insert anytime by releasing its
+  // reference to the InsertContext.
+  virtual InsertContextPtr insert(const Key& key) = 0;
 
   // Removes a cache key. If a confirmation callback is provided, it will
   // be called once the deletion is complete.

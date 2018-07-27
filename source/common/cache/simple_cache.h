@@ -12,17 +12,19 @@ namespace Cache {
 class SimpleCache : public Backend {
 public:
   LookupContextPtr lookup(const Key& key) override;
-  DataReceiverFn insert(const Key& key) override;
+  InsertContextPtr insert(const Key& key) override;
   void remove(const Key& key, NotifyFn confirm_fn) override;
   CacheInfo cacheInfo() const override;
 
 private:
+  friend class SimpleInsertContext;
   friend class SimpleLookupContext;
 
+  // Called by SimpleLookupContext on each chunk.
   void lookupHelper(const Key& key, DataReceiverFn receiver);
 
-  // Called by cache user for each chunk to insert into a key.
-  ReceiverStatus insertHelper(DataStatus status, Key key, Value value, const Value& chunk);
+  // Called by SimpleInsertContext when insertion is finalized.
+  void insertHelper(const Key& key, Value value);
 
   std::map<Key, Value> map_ GUARDED_BY(mutex_);
   Thread::MutexBasicLockable mutex_;
