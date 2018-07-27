@@ -42,7 +42,7 @@ protected:
   void checkNotFound(const char* key) { checkNotFound(Cache(), key); }
 
   void checkNotFound(BackendSharedPtr cache, absl::string_view key) {
-    InitiateGet(cache, key);
+    initiateGet(cache, key);
     EXPECT_EQ(DataStatus::NotFound, status_);
   }
 
