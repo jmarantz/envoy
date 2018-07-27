@@ -1,9 +1,8 @@
 #include "common/cache/simple_cache.h"
 #include "common/common/utility.h"
 
-#include "gtest/gtest.h"
-
 #include "absl/strings/str_join.h"
+#include "gtest/gtest.h"
 
 namespace Envoy {
 namespace Cache {
@@ -23,9 +22,9 @@ protected:
   }
 
   // Writes a value into the cache.
-  void CheckPut(const std::string& key, const std::string& value) { CheckPut(Cache(), key, value); }
+  void checkPut(const std::string& key, const std::string& value) { checkPut(Cache(), key, value); }
 
-  void CheckPut(BackendSharedPtr cache, const std::string& key, const std::string& value) {
+  void checkPut(BackendSharedPtr cache, const std::string& key, const std::string& value) {
     DataReceiverFn inserter = cache->insert(makeKey(key));
     Value val = std::make_shared<ValueStruct>();
     val->timestamp_ = current_time_;
@@ -34,24 +33,24 @@ protected:
     PostOpCleanup();
   }
 
-  void CheckRemove(const std::string& key) {
+  void checkRemove(const std::string& key) {
     Cache()->remove(makeKey(key), nullptr);
     PostOpCleanup();
   }
 
   // Performs a Get and verifies that the key is not found.
-  void CheckNotFound(const char* key) { CheckNotFound(Cache(), key); }
+  void checkNotFound(const char* key) { checkNotFound(Cache(), key); }
 
-  void CheckNotFound(BackendSharedPtr cache, absl::string_view key) {
+  void checkNotFound(BackendSharedPtr cache, absl::string_view key) {
     InitiateGet(cache, key);
     EXPECT_EQ(DataStatus::NotFound, status_);
   }
 
   // Initiate a cache Get, and return the Callback* which can be
-  // passed to WaitAndCheck or WaitAndCheckNotFound.
-  void InitiateGet(absl::string_view key) { return InitiateGet(Cache(), key); }
+  // passed to WaitAndCheck or WaitAndcheckNotFound.
+  void initiateGet(absl::string_view key) { return initiateGet(Cache(), key); }
 
-  void InitiateGet(BackendSharedPtr cache, absl::string_view key) {
+  void initiateGet(BackendSharedPtr cache, absl::string_view key) {
     /*
     {
       ScopedMutex lock(mutex_.get());
@@ -65,26 +64,26 @@ protected:
 
   void nextChunk(LookupContextPtr lookup) {
     lookup->read([this, &lookup](DataStatus status, const Value& value) {
-                   if (ValidStatus(status)) {
-                     absl::StrAppend(&value_->value_, value->value_);
-                   }
-                   if (TerminalStatus(status)) {
-                     status_ = status;
-                   } else {
-                     nextChunk(std::move(lookup));
-                   }
-                   return ReceiverStatus::Ok;
-                 });
+      if (ValidStatus(status)) {
+        absl::StrAppend(&value_->value_, value->value_);
+      }
+      if (TerminalStatus(status)) {
+        status_ = status;
+      } else {
+        nextChunk(std::move(lookup));
+      }
+      return ReceiverStatus::Ok;
+    });
   }
 
   // Performs a cache Get, waits for callback completion, and checks the
   // result is as expected.
-  void CheckGet(absl::string_view key, absl::string_view expected_value) {
-    CheckGet(Cache(), key, expected_value);
+  void checkGet(absl::string_view key, absl::string_view expected_value) {
+    checkGet(Cache(), key, expected_value);
   }
 
-  void CheckGet(BackendSharedPtr cache, absl::string_view key, absl::string_view expected_value) {
-    InitiateGet(cache, key);
+  void checkGet(BackendSharedPtr cache, absl::string_view key, absl::string_view expected_value) {
+    initiateGet(cache, key);
     EXPECT_EQ(expected_value, value_->value_);
   }
 
@@ -103,14 +102,14 @@ protected:
 TEST_F(SimpleCacheTest, PutGetRemove) {
   // EXPECT_EQ(static_cast<size_t>(0), cache_->size_bytes());
   // EXPECT_EQ(static_cast<size_t>(0), cache_->num_elements());
-  CheckPut("Name", "Value");
-  CheckGet("Name", "Value");
+  checkPut("Name", "Value");
+  checkGet("Name", "Value");
   // EXPECT_EQ(static_cast<size_t>(9), cache_->size_bytes());  // "Name" + "Value"
   // EXPECT_EQ(static_cast<size_t>(1), cache_->num_elements());
-  CheckNotFound("Another Name");
+  checkNotFound("Another Name");
 
-  CheckPut("Name", "NewValue");
-  CheckGet("Name", "NewValue");
+  checkPut("Name", "NewValue");
+  checkGet("Name", "NewValue");
   // EXPECT_EQ(static_cast<size_t>(12),
   //          cache_->size_bytes());  // "Name" + "NewValue"
   // EXPECT_EQ(static_cast<size_t>(1), cache_->num_elements());
@@ -118,16 +117,16 @@ TEST_F(SimpleCacheTest, PutGetRemove) {
   cache_->remove(makeKey("Name"), nullptr);
   // cache_->SanityCheck();
   Value value_buffer;
-  CheckNotFound("Name");
+  checkNotFound("Name");
   // EXPECT_EQ(static_cast<size_t>(0), cache_->size_bytes());
   // EXPECT_EQ(static_cast<size_t>(0), cache_->num_elements());
 }
 
 /*TEST_F(SimpleCacheTest, RemoveWithPrefix) {
-  CheckPut("N1", "Value1");
-  CheckPut("N2", "Value2");
-  CheckPut("M3", "Value3");
-  CheckPut("M4", "Value4");
+  checkPut("N1", "Value1");
+  checkPut("N2", "Value2");
+  checkPut("M3", "Value3");
+  checkPut("M4", "Value4");
 
   // 4*(strlen("N1") + strlen("Value1")) = 4*(2 + 6) = 32
   //EXPECT_EQ(static_cast<size_t>(32), cache_->size_bytes());
@@ -136,18 +135,18 @@ TEST_F(SimpleCacheTest, PutGetRemove) {
   cache_->removeWithPrefixForTesting("N");
   EXPECT_EQ(static_cast<size_t>(16), cache_->size_bytes());
   EXPECT_EQ(static_cast<size_t>(2), cache_->num_elements());
-  CheckNotFound("N1");
-  CheckNotFound("N2");
-  CheckGet("M3", "Value3");
-  CheckGet("M4", "Value4");
+  checkNotFound("N1");
+  checkNotFound("N2");
+  checkGet("M3", "Value3");
+  checkGet("M4", "Value4");
 
   cache_->removeWithPrefixForTesting("M");
   EXPECT_EQ(static_cast<size_t>(0), cache_->size_bytes());
   EXPECT_EQ(static_cast<size_t>(0), cache_->num_elements());
-  CheckNotFound("N1");
-  CheckNotFound("N2");
-  CheckNotFound("M3");
-  CheckNotFound("M4");
+  checkNotFound("N1");
+  checkNotFound("N2");
+  checkNotFound("M3");
+  checkNotFound("M4");
   }*/
 
 // Test eviction. We happen to know that the cache does not account for
@@ -163,70 +162,70 @@ TEST_F(SimpleCacheTest, PutGetRemove) {
   for (int i = 0; i < 10; ++i) {
     SStringPrintf(&keys[i], key_pattern, i);
     SStringPrintf(&values[i], value_pattern, i);
-    CheckPut(keys[i], values[i]);
+    checkPut(keys[i], values[i]);
   }
   EXPECT_EQ(kMaxSize, cache_->size_bytes());
   EXPECT_EQ(num_elements, cache_->num_elements());
 
   // Ensure we can see those.
   for (int i = 0; i < 10; ++i) {
-    CheckGet(keys[i], values[i]);
+    checkGet(keys[i], values[i]);
   }
 
   // Now if we insert a new entry totaling 10 bytes, that should work,
   // but we will lose name0 due to LRU semantics. We should still have name1,
   // and by Get-ing name1 it we will make it the MRU.
-  CheckPut("nameA", "valuA");
-  CheckGet("nameA", "valuA");
-  CheckNotFound("name0");
-  CheckGet("name1", "valu1");
+  checkPut("nameA", "valuA");
+  checkGet("nameA", "valuA");
+  checkNotFound("name0");
+  checkGet("name1", "valu1");
 
   // So now when we put in nameB,valuB we will lose name2 but keep name1,
   // which got bumped up to the MRU when we checked it above.
-  CheckPut("nameB", "valuB");
-  CheckGet("nameB", "valuB");
-  CheckGet("name1", "valu1");
-  CheckNotFound("name2");
+  checkPut("nameB", "valuB");
+  checkGet("nameB", "valuB");
+  checkGet("name1", "valu1");
+  checkNotFound("name2");
 
   // Now insert something 1 byte too big, spelling out "value" this time.
   // We will now lose name3 and name4. We should still have name5-name9,
   // plus name1, nameA, and nameB.
-  CheckPut("nameC", "valueC");
-  CheckNotFound("name3");
-  CheckNotFound("name4");
-  CheckGet("nameA", "valuA");
-  CheckGet("nameB", "valuB");
-  CheckGet("nameC", "valueC");
-  CheckGet("name1", "valu1");
+  checkPut("nameC", "valueC");
+  checkNotFound("name3");
+  checkNotFound("name4");
+  checkGet("nameA", "valuA");
+  checkGet("nameB", "valuB");
+  checkGet("nameC", "valueC");
+  checkGet("name1", "valu1");
   for (int i = 5; i < 10; ++i) {
-    CheckGet(keys[i], values[i]);
+    checkGet(keys[i], values[i]);
   }
 
   // Now the oldest item is "nameA". Freshen it by re-inserting it, tickling
   // the code-path in lru_cache.cc that special-cases handling of re-inserting
   // the same value.
-  CheckPut("nameA", "valuA");
-  CheckPut("nameD", "valuD");
+  checkPut("nameA", "valuA");
+  checkPut("nameD", "valuD");
   // nameB should be evicted, the others should be retained.
-  CheckNotFound("nameB");
-  CheckGet("nameA", "valuA");
-  CheckGet("nameC", "valueC");
-  CheckGet("name1", "valu1");
+  checkNotFound("nameB");
+  checkGet("nameA", "valuA");
+  checkGet("nameC", "valueC");
+  checkGet("name1", "valu1");
   for (int i = 5; i < 10; ++i) {
-    CheckGet(keys[i], values[i]);
+    checkGet(keys[i], values[i]);
   }
   }*/
 
 /*
 TEST_F(SimpleCacheTest, BasicInvalid) {
   // Check that we honor callback veto on validity.
-  CheckPut("nameA", "valueA");
-  CheckPut("nameB", "valueB");
-  CheckGet("nameA", "valueA");
-  CheckGet("nameB", "valueB");
+  checkPut("nameA", "valueA");
+  checkPut("nameB", "valueB");
+  checkGet("nameA", "valueA");
+  checkGet("nameB", "valueB");
   set_invalid_value("valueA");
-  CheckNotFound("nameA");
-  CheckGet("nameB", "valueB");
+  checkNotFound("nameA");
+  checkGet("nameB", "valueB");
   }*/
 
 /*TEST_F(SimpleCacheTest, MultiGet) {
@@ -235,37 +234,37 @@ TEST_F(SimpleCacheTest, BasicInvalid) {
   }*/
 
 TEST_F(SimpleCacheTest, KeyNotFoundWhenUnhealthy) {
-  CheckPut("nameA", "valueA");
+  checkPut("nameA", "valueA");
   cache_->Shutdown(nullptr);
-  CheckNotFound("nameA");
+  checkNotFound("nameA");
 }
 
 /*
 // Cache starts in 'healthy' state and it should be healthy before
 // performing any checks, otherwise Get will return 'not found'
 TEST_F(SimpleCacheTest, DoesNotPutWhenUnhealthy) {
-  CheckPut("nameA", "valueA");
+  checkPut("nameA", "valueA");
 
   cache_->Shutdown(nullptr);
-  CheckNotFound("nameA");
+  checkNotFound("nameA");
 }
 
 TEST_F(SimpleCacheTest, DoesNotDeleteWhenUnhealthy) {
-  CheckPut("nameA", "valueA");
+  checkPut("nameA", "valueA");
   cache_->set_is_healthy(false);
   CheckDelete("nameA");
 
   cache_->set_is_healthy(true);
-  CheckGet("nameA", "valueA");
+  checkGet("nameA", "valueA");
   }
 
 TEST_F(SimpleCacheTest, DoesNotDeleteWithPrefixWhenUnhealthy) {
-  CheckPut("nameA", "valueA");
+  checkPut("nameA", "valueA");
   cache_->set_is_healthy(false);
   cache_->removeWithPrefixForTesting("name");
 
   cache_->set_is_healthy(true);
-  CheckGet("nameA", "valueA");
+  checkGet("nameA", "valueA");
   }*/
 
 } // namespace Cache
