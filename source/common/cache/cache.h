@@ -47,6 +47,7 @@ enum class DataStatus {
 };
 
 bool ValidStatus(DataStatus status);
+bool TerminalStatus(DataStatus status);
 
 enum class RemoveStatus { kRemoved, kError };
 using DataReceiverFn = std::function<ReceiverStatus(DataStatus, const Value&)>;
@@ -90,7 +91,11 @@ public:
   virtual void finalize() = 0;
 };
 
-// Lookup context manages the lifetime of a lookup.
+// Lookup context manages the lifetime of a lookup, helping clients to pull
+// data from the cache at pace that works for them. Call read() until the
+// receiver receives a DataStatus where TerminalStatus(status) is true (error
+// or last chunk). At any time a client can abort in-progress lookup by simply
+// dropping the LookupContextPtr.
 class LookupContext {
 public:
   virtual ~LookupContext();

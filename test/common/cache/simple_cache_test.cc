@@ -3,6 +3,8 @@
 
 #include "gtest/gtest.h"
 
+#include "absl/strings/str_join.h"
+
 namespace Envoy {
 namespace Cache {
 
@@ -56,12 +58,23 @@ protected:
       ++outstanding_fetches_;
     }
     */
+    value_ = std::make_shared<ValueStruct>();
     LookupContextPtr lookup = cache->lookup(makeKey(key));
-    lookup->read([this](DataStatus status, const Value& value) {
-      value_ = value;
-      status_ = status;
-      return ReceiverStatus::Ok;
-    });
+    nextChunk(std::move(lookup));
+  }
+
+  void nextChunk(LookupContextPtr lookup) {
+    lookup->read([this, &lookup](DataStatus status, const Value& value) {
+                   if (ValidStatus(status)) {
+                     absl::StrAppend(&value_->value_, value->value_);
+                   }
+                   if (TerminalStatus(status)) {
+                     status_ = status;
+                   } else {
+                     nextChunk(std::move(lookup));
+                   }
+                   return ReceiverStatus::Ok;
+                 });
   }
 
   // Performs a cache Get, waits for callback completion, and checks the

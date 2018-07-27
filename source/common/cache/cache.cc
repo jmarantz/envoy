@@ -14,6 +14,10 @@ bool ValidStatus(DataStatus status) {
          status == DataStatus::LastChunk;
 }
 
+bool TerminalStatus(DataStatus status) {
+  return !ValidStatus(status) || status == DataStatus::LastChunk;
+}
+
 LookupContext::~LookupContext() {}
 
 } // namespace Cache
