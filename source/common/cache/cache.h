@@ -17,10 +17,12 @@ struct ValueStruct {
 };
 using Value = std::shared_ptr<ValueStruct>;
 
-using AttributeMap = std::map<std::string, std::string>;
+// All required strings in the attribute-map and key are copied into the cache
+// on API calls, so the caller need only maintain the storage when initiating an
+// API.
+using AttributeMap = std::unordered_map<absl::string_view, absl::string_view, StringViewHash>;
 struct Key {
-  bool operator<(const Key& that) const { return key_ < that.key_; }
-  std::string key_;
+  absl::string_view key_;
   AttributeMap attributes_;
 };
 

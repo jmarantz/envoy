@@ -95,9 +95,7 @@ protected:
   void PostOpCleanup() { /*cache_->SanityCheck();*/
   }
 
-  Key makeKey(absl::string_view key_str) {
-    return {.key_ = std::string(key_str), .attributes_ = attributes_};
-  };
+  Key makeKey(absl::string_view key_str) { return {.key_ = key_str, .attributes_ = attributes_}; };
 
   Value makeValue(absl::string_view val) {
     Value value = std::make_shared<ValueStruct>();

@@ -21,12 +21,14 @@ private:
   friend class SimpleLookupContext;
 
   // Called by SimpleLookupContext on each chunk.
-  void lookupHelper(const Key& key, DataReceiverFn receiver);
+  void lookupHelper(const std::string& key, DataReceiverFn receiver);
 
   // Called by SimpleInsertContext when insertion is finalized.
-  void insertHelper(const Key& key, Value value);
+  void insertHelper(const std::string& key, Value value);
 
-  std::map<Key, Value> map_ GUARDED_BY(mutex_);
+  void removeHelper(const std::string& key);
+
+  std::map<std::string, Value> map_ GUARDED_BY(mutex_);
   Thread::MutexBasicLockable mutex_;
 };
 
