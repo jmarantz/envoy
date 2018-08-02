@@ -142,6 +142,11 @@ using LookupContextVec = std::vector<LookupContextPtr>; // for multiGet
 
 class CacheInterface {
 public:
+  template <class Derived, typename... Args> static std::shared_ptr<Derived> make(Args&&... args) {
+    Derived* d = new Derived(std::forward<Args>(args)...);
+    return d->template self<Derived>();
+  }
+
   virtual ~CacheInterface();
 
   // Initiates streaming of cached payload stored at key. The client calls
@@ -200,8 +205,7 @@ protected:
   // Helper function for implementations to get access to a shared_ptr referencing
   // their derived type. This is useful for setting up LookupContext and InsertContext
   // that can then access implementation-specific functionality.
-  template<class Derived>
-  std::shared_ptr<Derived> self() {
+  template <class Derived> std::shared_ptr<Derived> self() {
     return std::dynamic_pointer_cast<Derived>(self_);
   }
 

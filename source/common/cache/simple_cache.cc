@@ -26,10 +26,10 @@ public:
       } else if (residual_value_.get() == nullptr) {
         Value value;
         cache->lookupHelper(key_, [&value, this](DataStatus s, const Value& v) {
-                                    value = v;
-                                    residual_status_ = s;
-                                    return ReceiverStatus::Ok;
-                                  });
+          value = v;
+          residual_status_ = s;
+          return ReceiverStatus::Ok;
+        });
         Value v1 = std::make_shared<ValueStruct>();
         size_t size1 = value->value_.size() / 2;
         v1->value_ = value->value_.substr(0, size1); // timestamp not touched.
