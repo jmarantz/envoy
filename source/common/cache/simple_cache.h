@@ -9,7 +9,7 @@ namespace Cache {
 // Example cache backend that never evicts. It blocks on a mutex
 // during operations, but this can be wrapped with a multi-thread
 // dispatcher to avoid contention.
-class SimpleCache : public CacheInterfaceSharedPtr {
+class SimpleCache : public CacheInterface {
 public:
   LookupContextPtr lookup(const Descriptor& descriptor) override;
   InsertContextPtr insert(const Descriptor& descriptor) override;

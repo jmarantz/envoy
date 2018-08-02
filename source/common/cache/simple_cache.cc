@@ -11,13 +11,13 @@ namespace Cache {
 
 class SimpleLookupContext : public LookupContext {
 public:
-  SimpleLookupContext(const Descriptor& descriptor, CacheInterfaceSharedPtrSharedPtr cache)
+  SimpleLookupContext(const Descriptor& descriptor, CacheSharedPtr cache)
       : key_(std::string(descriptor.key_)),
         split_(descriptor.attributes_.find("split") != descriptor.attributes_.end()),
         cache_(cache) {}
 
   void read(DataReceiverFn receiver) override {
-    CacheInterfaceSharedPtrSharedPtr cache = cache_;
+    CacheSharedPtr cache = cache_;
     if (cache.get() != nullptr) {
       cache = cache->self();
       if (cache.get() != nullptr) {
@@ -51,20 +51,20 @@ public:
 private:
   std::string key_;
   bool split_;
-  CacheInterfaceSharedPtrSharedPtr cache_;
+  CacheSharedPtr cache_;
   Value residual_value_;
   DataStatus residual_status_;
 };
 
 class SimpleInsertContext : public InsertContext {
 public:
-  SimpleInsertContext(const Descriptor& descriptor, CacheInterfaceSharedPtrSharedPtr cache)
+  SimpleInsertContext(const Descriptor& descriptor, CacheSharedPtr cache)
       : key_(std::string(descriptor.key_)), cache_(cache) {}
 
   virtual ~SimpleInsertContext() {
     // If a live cache has an uncommitted write, remove the 'in-progress' entry.
     if (!committed_) {
-      CacheInterfaceSharedPtrSharedPtr cache = cache_;
+      CacheSharedPtr cache = cache_;
       if (cache.get() != nullptr) {
         cache = cache->self();
         if (cache.get() != nullptr) {
@@ -76,7 +76,7 @@ public:
 
   void write(Value value, NotifyFn ready_for_next_chunk) override {
     ASSERT(!committed_);
-    CacheInterfaceSharedPtrSharedPtr cache = cache_;
+    CacheSharedPtr cache = cache_;
     if (cache.get() != nullptr) {
       cache = cache->self();
       if (cache.get() != nullptr) {
@@ -105,7 +105,7 @@ public:
 private:
   Value value_;
   std::string key_;
-  CacheInterfaceSharedPtrSharedPtr cache_;
+  CacheSharedPtr cache_;
   bool committed_ = false;
 };
 

@@ -61,7 +61,7 @@ using NotifyFn = std::function<void(bool)>;
 
 // Insertion context manages the lifetime of an insertion. Client code wishing
 // to insert something into a cache can use this to stream data into a cache.
-// An insertion context is returned by CacheInterfaceSharedPtr::insert(). Clients should only
+// An insertion context is returned by CacheInterface::insert(). Clients should only
 // present data to the cache when the ready() function passed into the context
 // is called. The data presented should be bounded in size.
 class InsertContext {
@@ -119,9 +119,9 @@ using InsertContextPtr = std::unique_ptr<InsertContext>;
 using LookupContextPtr = std::unique_ptr<LookupContext>;
 using LookupContextVec = std::vector<LookupContextPtr>;
 
-class CacheInterfaceSharedPtr {
+class CacheInterface {
 public:
-  virtual ~CacheInterfaceSharedPtr();
+  virtual ~CacheInterface();
 
   // Initiates streaming of cached cached payload stored at key. The client
   // calls LookupContext::read(). Note that the descriptor includes an
@@ -174,16 +174,16 @@ public:
   // be computed from the caches it is constructed with.
   virtual std::string name() const = 0;
 
-  std::shared_ptr<CacheInterfaceSharedPtr> self() { return self_; }
+  std::shared_ptr<CacheInterface> self() { return self_; }
 
 protected:
-  CacheInterfaceSharedPtr();
+  CacheInterface();
 
 private:
-  std::shared_ptr<CacheInterfaceSharedPtr> self_; // Cleared on shutdown.
+  std::shared_ptr<CacheInterface> self_; // Cleared on shutdown.
 };
 
-using CacheInterfaceSharedPtrSharedPtr = std::shared_ptr<CacheInterfaceSharedPtr>;
+using CacheSharedPtr = std::shared_ptr<CacheInterface>;
 
 } // namespace Cache
 } // namespace Envoy

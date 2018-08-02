@@ -3,11 +3,11 @@
 namespace Envoy {
 namespace Cache {
 
-CacheInterfaceSharedPtr::CacheInterfaceSharedPtr() : self_(this) {}
+CacheInterface::CacheInterface() : self_(this) {}
 
-CacheInterfaceSharedPtr::~CacheInterfaceSharedPtr() { ASSERT(self_.get() == nullptr); }
+CacheInterface::~CacheInterface() { ASSERT(self_.get() == nullptr); }
 
-LookupContextVec CacheInterfaceSharedPtr::multiLookup(const DescriptorVec& descriptors) {
+LookupContextVec CacheInterface::multiLookup(const DescriptorVec& descriptors) {
   LookupContextVec lookups;
   lookups.reserve(descriptors.size());
   for (const auto& desc : descriptors) {
@@ -16,7 +16,7 @@ LookupContextVec CacheInterfaceSharedPtr::multiLookup(const DescriptorVec& descr
   return lookups;
 }
 
-void CacheInterfaceSharedPtr::shutdown(NotifyFn done) {
+void CacheInterface::shutdown(NotifyFn done) {
   ASSERT(self_.get() != nullptr);
   self_ = nullptr;
   if (done) {

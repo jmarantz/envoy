@@ -15,7 +15,7 @@ protected:
         current_time_(time_source_.currentTime()) {}
 
   ~SimpleCacheTest() {
-    CacheInterfaceSharedPtrSharedPtr cache = cache_;
+    CacheSharedPtr cache = cache_;
     cache_ = nullptr;
     if (cache->isHealthy()) {
       cache->shutdown(nullptr);
@@ -25,8 +25,7 @@ protected:
   // Writes a value into the cache.
   void checkPut(const std::string& key, const std::string& value) { checkPut(cache(), key, value); }
 
-  void checkPut(CacheInterfaceSharedPtrSharedPtr cache, const std::string& key,
-                absl::string_view value) {
+  void checkPut(CacheSharedPtr cache, const std::string& key, absl::string_view value) {
     InsertContextPtr inserter = cache->insert(makeDescriptor(key));
     inserter->write(makeValue(value), nullptr);
     PostOpCleanup();
@@ -40,7 +39,7 @@ protected:
   // Performs a Get and verifies that the key is not found.
   void checkNotFound(const char* key) { checkNotFound(cache(), key); }
 
-  void checkNotFound(CacheInterfaceSharedPtrSharedPtr cache, absl::string_view key) {
+  void checkNotFound(CacheSharedPtr cache, absl::string_view key) {
     initiateGet(cache, key);
     EXPECT_EQ(DataStatus::NotFound, status_);
   }
@@ -49,7 +48,7 @@ protected:
   // passed to WaitAndCheck or WaitAndcheckNotFound.
   void initiateGet(absl::string_view key) { return initiateGet(cache(), key); }
 
-  void initiateGet(CacheInterfaceSharedPtrSharedPtr cache, absl::string_view key) {
+  void initiateGet(CacheSharedPtr cache, absl::string_view key) {
     /*
     {
       ScopedMutex lock(mutex_.get());
@@ -88,13 +87,12 @@ protected:
     checkGet(cache(), key, expected_value);
   }
 
-  void checkGet(CacheInterfaceSharedPtrSharedPtr cache, absl::string_view key,
-                absl::string_view expected_value) {
+  void checkGet(CacheSharedPtr cache, absl::string_view key, absl::string_view expected_value) {
     initiateGet(cache, key);
     EXPECT_EQ(expected_value, value_->value_);
   }
 
-  CacheInterfaceSharedPtrSharedPtr cache() { return cache_; }
+  CacheSharedPtr cache() { return cache_; }
   void PostOpCleanup() { /*cache_->SanityCheck();*/
   }
 
@@ -135,7 +133,7 @@ protected:
     }
   }
 
-  CacheInterfaceSharedPtrSharedPtr cache_;
+  CacheSharedPtr cache_;
   Value value_;
   AttributeMap attributes_;
   DataStatus status_;
