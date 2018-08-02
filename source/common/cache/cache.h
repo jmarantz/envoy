@@ -1,7 +1,7 @@
 #pragma once
 
-#include <map>
 #include <string>
+#include <vector>
 
 #include "envoy/common/time.h"
 
@@ -11,29 +11,7 @@
 namespace Envoy {
 namespace Cache {
 
-struct ValueStruct {
-  std::string value_;
-  MonotonicTime timestamp_;
-};
-using Value = std::shared_ptr<ValueStruct>;
-Value makeValue();
-
-// All required strings in the attribute-map and key are copied into the cache
-// on API calls, so the caller need only maintain the storage when initiating an
-// API.
-using AttributeMap = std::unordered_map<absl::string_view, absl::string_view, StringViewHash>;
-
-// A descriptor identifies an item in a cache. The intent is that key_ is used
-// for lookup (e.g. in a hash-map). timestamp_ is used for qualification against
-// an invalidation set -- the invalidation can be performed by an adapter.
-// attributes_ are transformed by adapters to add detail to the key, e.g. for
-// range requests or Vary-handling. By the time the physical cache is reached,
-// the key_ is all that's required to perform a lookup or insertion.
-struct Descriptor {
-  absl::string_view key_;
-  MonotonicTime timestamp_;
-  AttributeMap attributes_;
-};
+// Enumerations used for interacting with the cache
 
 // Status returned from a receiver function, which is used for both lookups and insertions.
 enum class ReceiverStatus {
@@ -53,11 +31,63 @@ enum class DataStatus {
   Error,            // An error has occurred during streaming; detailed in the data.
 };
 
-bool ValidStatus(DataStatus status);
-bool TerminalStatus(DataStatus status);
+// Structures used for interacting with the cache.
+struct ValueStruct {
+  std::string value_;
+  MonotonicTime timestamp_;
+};
+using Value = std::shared_ptr<ValueStruct>;
 
+// All required strings in an attribute and key are copied into the cache
+// on API calls, so the caller need only maintain the storage when initiating an
+// API. The cache is responsible for holding onto any storage it during
+// asynchronous completions.
+struct Attribute {
+  absl::string_view name_;
+  absl::string_view value_;
+};
+using AttributeVec = std::vector<Attribute>;
+
+// A descriptor identifies an item in a cache. The intent is that key_ is used
+// for lookup (e.g. in a hash-map). timestamp_ is used for qualification against
+// an invalidation set -- the invalidation can be performed by an adapter.
+// attributes_ are transformed by adapters to add detail to the key, e.g. for
+// range requests or Vary-handling. By the time the physical cache is reached,
+// the key_ is all that's required to perform a lookup or insertion.
+class Descriptor {
+public:
+  Descriptor(absl::string_view key, MonotonicTime timestamp) : key_(key), timestamp_(timestamp) {}
+
+  absl::string_view key() const { return key_; };
+  MonotonicTime timestamp() const { return timestamp_; }
+  void addAttribute(absl::string_view name, absl::string_view value) {
+    attributes_.push_back({.name_ = name, .value_ = value});
+  }
+
+  bool hasAttribute(absl::string_view name) const;
+  bool findAttribute(absl::string_view name, absl::string_view& value) const;
+
+private:
+  absl::string_view key_;
+  MonotonicTime timestamp_;
+  AttributeVec attributes_;
+};
+using DescriptorVec = std::vector<Descriptor>;
+
+// Statically known information about a cache.
+struct CacheInfo {
+  size_t chunk_size_bytes_; // Optimum size for range-requests.
+  size_t max_size_bytes_;   // Maximum permissible size for single chunks.
+};
+
+// Callback definitions.
 using DataReceiverFn = std::function<ReceiverStatus(DataStatus, const Value&)>;
 using NotifyFn = std::function<void(bool)>;
+
+// Helper functions.
+Value makeValue();
+bool ValidStatus(DataStatus status);
+bool TerminalStatus(DataStatus status);
 
 // Insertion context manages the lifetime of an insertion. Client code wishing
 // to insert something into a cache can use this to stream data into a cache.
@@ -80,12 +110,7 @@ public:
   // into ready_for_next_chunk.
   virtual void write(Value chunk, NotifyFn ready_for_next_chunk) = 0;
 };
-
-// Statically known information about a cache.
-struct CacheInfo {
-  size_t chunk_size_bytes_; // Optimum size for range-requests.
-  size_t max_size_bytes_;   // Maximum permissible size for single chunks.
-};
+using InsertContextPtr = std::unique_ptr<InsertContext>;
 
 // Lookup context manages the lifetime of a lookup, helping clients to pull
 // data from the cache at pace that works for them. Call read() until the
@@ -112,21 +137,16 @@ public:
   // to check the L2.
   virtual void read(DataReceiverFn receiver) = 0;
 };
-
-enum class RemoveStatus { kRemoved, kError };
-using DescriptorVec = std::vector<Descriptor>;
-using InsertContextPtr = std::unique_ptr<InsertContext>;
 using LookupContextPtr = std::unique_ptr<LookupContext>;
-using LookupContextVec = std::vector<LookupContextPtr>;
+using LookupContextVec = std::vector<LookupContextPtr>; // for multiGet
 
 class CacheInterface {
 public:
   virtual ~CacheInterface();
 
-  // Initiates streaming of cached cached payload stored at key. The client
-  // calls LookupContext::read(). Note that the descriptor includes an
-  // AttributeMap, where range requests and variants can be encoded by
-  // appropriate wrappers.
+  // Initiates streaming of cached payload stored at key. The client calls
+  // LookupContext::read(). Note that the descriptor includes an AttributeVec,
+  // where range requests and variants can be encoded by appropriate wrappers.
   virtual LookupContextPtr lookup(const Descriptor& descriptor) = 0;
 
   // Performs multiple lookups in parallel. This is equivalent to calling lookup
@@ -182,7 +202,6 @@ protected:
 private:
   std::shared_ptr<CacheInterface> self_; // Cleared on shutdown.
 };
-
 using CacheSharedPtr = std::shared_ptr<CacheInterface>;
 
 } // namespace Cache

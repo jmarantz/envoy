@@ -12,8 +12,7 @@ namespace Cache {
 class SimpleLookupContext : public LookupContext {
 public:
   SimpleLookupContext(const Descriptor& descriptor, CacheSharedPtr cache)
-      : key_(std::string(descriptor.key_)),
-        split_(descriptor.attributes_.find("split") != descriptor.attributes_.end()),
+      : key_(std::string(descriptor.key())), split_(descriptor.hasAttribute("split")),
         cache_(cache) {}
 
   void read(DataReceiverFn receiver) override {
@@ -59,7 +58,7 @@ private:
 class SimpleInsertContext : public InsertContext {
 public:
   SimpleInsertContext(const Descriptor& descriptor, CacheSharedPtr cache)
-      : key_(std::string(descriptor.key_)), cache_(cache) {}
+      : key_(std::string(descriptor.key())), cache_(cache) {}
 
   virtual ~SimpleInsertContext() {
     // If a live cache has an uncommitted write, remove the 'in-progress' entry.
@@ -147,7 +146,7 @@ InsertContextPtr SimpleCache::insert(const Descriptor& descriptor) {
 }
 
 void SimpleCache::remove(const Descriptor& descriptor, NotifyFn confirm_fn) {
-  removeHelper(std::string(descriptor.key_));
+  removeHelper(std::string(descriptor.key()));
   if (confirm_fn != nullptr) {
     confirm_fn(true);
   }

@@ -97,7 +97,10 @@ protected:
   }
 
   Descriptor makeDescriptor(absl::string_view key) {
-    Descriptor desc{key, current_time_, attributes_};
+    Descriptor desc(key, current_time_);
+    for (const auto& attr : attributes_) {
+      desc.addAttribute(attr.name_, attr.value_);
+    }
     return desc;
   };
 
@@ -135,7 +138,7 @@ protected:
 
   CacheSharedPtr cache_;
   Value value_;
-  AttributeMap attributes_;
+  AttributeVec attributes_;
   DataStatus status_;
   ProdMonotonicTimeSource time_source_;
   MonotonicTime current_time_;
@@ -183,7 +186,8 @@ TEST_F(SimpleCacheTest, StreamingPut) {
 
 TEST_F(SimpleCacheTest, StreamingGet) {
   checkPut("Name", "Value");
-  attributes_["split"] = "true";
+  Attribute attr({.name_ = "split", .value_ = "true"});
+  attributes_.push_back(attr);
   checkGet("Name", "Value");
 }
 

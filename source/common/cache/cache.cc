@@ -38,5 +38,21 @@ LookupContext::~LookupContext() {}
 
 Value makeValue() { return std::make_shared<ValueStruct>(); }
 
+bool Descriptor::findAttribute(absl::string_view name, absl::string_view& value) const {
+  for (const Attribute& attr : attributes_) {
+    if (attr.name_ == name) {
+      value = attr.value_;
+      return true;
+    }
+  }
+  return false;
+}
+
+bool Descriptor::hasAttribute(absl::string_view name) const {
+  return std::find_if(attributes_.begin(), attributes_.end(), [name](const Attribute& attr) {
+           return (attr.name_ == name);
+         }) != attributes_.end();
+}
+
 } // namespace Cache
 } // namespace Envoy
