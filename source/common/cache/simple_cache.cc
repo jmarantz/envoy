@@ -100,6 +100,10 @@ private:
   bool committed_ = false;
 };
 
+SimpleCache::SimpleCache() {}
+
+SimpleCache::~SimpleCache() {}
+
 LookupContextPtr SimpleCache::lookup(const Descriptor& descriptor) {
   return std::make_unique<SimpleLookupContext>(descriptor, self<SimpleCache>());
 }

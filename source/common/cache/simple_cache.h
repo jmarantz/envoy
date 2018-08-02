@@ -11,7 +11,8 @@ namespace Cache {
 // dispatcher to avoid contention.
 class SimpleCache : public CacheInterface {
 public:
-  static CacheSharedPtr make() { return (new SimpleCache)->self<SimpleCache>(); }
+  SimpleCache();
+  ~SimpleCache() override;
 
   LookupContextPtr lookup(const Descriptor& descriptor) override;
   InsertContextPtr insert(const Descriptor& descriptor) override;
