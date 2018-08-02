@@ -11,22 +11,23 @@ namespace Cache {
 
 class SimpleLookupContext : public LookupContext {
 public:
-  SimpleLookupContext(const Key& key, BackendSharedPtr cache)
-      : key_str_(std::string(key.key_)),
-        split_(key.attributes_.find("split") != key.attributes_.end()), cache_(cache) {}
+  SimpleLookupContext(const Descriptor& descriptor, CacheInterfaceSharedPtrSharedPtr cache)
+      : key_(std::string(descriptor.key_)),
+        split_(descriptor.attributes_.find("split") != descriptor.attributes_.end()),
+        cache_(cache) {}
 
   void read(DataReceiverFn receiver) override {
-    BackendSharedPtr cache = cache_;
+    CacheInterfaceSharedPtrSharedPtr cache = cache_;
     if (cache.get() != nullptr) {
       cache = cache->self();
       if (cache.get() != nullptr) {
         if (!split_) {
-          static_cast<SimpleCache*>(cache.get())->lookupHelper(key_str_, receiver);
+          static_cast<SimpleCache*>(cache.get())->lookupHelper(key_, receiver);
           return;
         } else if (residual_value_.get() == nullptr) {
           Value value;
           static_cast<SimpleCache*>(cache.get())
-              ->lookupHelper(key_str_, [&value, this](DataStatus s, const Value& v) {
+              ->lookupHelper(key_, [&value, this](DataStatus s, const Value& v) {
                 value = v;
                 residual_status_ = s;
                 return ReceiverStatus::Ok;
@@ -48,26 +49,26 @@ public:
   }
 
 private:
-  std::string key_str_;
+  std::string key_;
   bool split_;
-  BackendSharedPtr cache_;
+  CacheInterfaceSharedPtrSharedPtr cache_;
   Value residual_value_;
   DataStatus residual_status_;
 };
 
 class SimpleInsertContext : public InsertContext {
 public:
-  SimpleInsertContext(const Key& key, BackendSharedPtr cache)
-      : key_str_(std::string(key.key_)), cache_(cache) {}
+  SimpleInsertContext(const Descriptor& descriptor, CacheInterfaceSharedPtrSharedPtr cache)
+      : key_(std::string(descriptor.key_)), cache_(cache) {}
 
   virtual ~SimpleInsertContext() {
     // If a live cache has an uncommitted write, remove the 'in-progress' entry.
     if (!committed_) {
-      BackendSharedPtr cache = cache_;
+      CacheInterfaceSharedPtrSharedPtr cache = cache_;
       if (cache.get() != nullptr) {
         cache = cache->self();
         if (cache.get() != nullptr) {
-          static_cast<SimpleCache*>(cache.get())->removeHelper(key_str_);
+          static_cast<SimpleCache*>(cache.get())->removeHelper(key_);
         }
       }
     }
@@ -75,7 +76,7 @@ public:
 
   void write(Value value, NotifyFn ready_for_next_chunk) override {
     ASSERT(!committed_);
-    BackendSharedPtr cache = cache_;
+    CacheInterfaceSharedPtrSharedPtr cache = cache_;
     if (cache.get() != nullptr) {
       cache = cache->self();
       if (cache.get() != nullptr) {
@@ -87,7 +88,7 @@ public:
             value_->timestamp_ = value->timestamp_;
           }
           committed_ = true;
-          static_cast<SimpleCache*>(cache.get())->insertHelper(key_str_, value_);
+          static_cast<SimpleCache*>(cache.get())->insertHelper(key_, value_);
         } else {
           if (value_.get() == nullptr) {
             value_ = std::make_shared<ValueStruct>();
@@ -99,25 +100,25 @@ public:
     }
   }
 
-  const std::string& key_str() const { return key_str_; }
+  const std::string& key() const { return key_; }
 
 private:
   Value value_;
-  std::string key_str_;
-  BackendSharedPtr cache_;
+  std::string key_;
+  CacheInterfaceSharedPtrSharedPtr cache_;
   bool committed_ = false;
 };
 
-LookupContextPtr SimpleCache::lookup(const Key& key) {
-  return std::make_unique<SimpleLookupContext>(key, self());
+LookupContextPtr SimpleCache::lookup(const Descriptor& descriptor) {
+  return std::make_unique<SimpleLookupContext>(descriptor, self());
 }
 
-void SimpleCache::lookupHelper(const std::string& key_str, DataReceiverFn receiver) {
+void SimpleCache::lookupHelper(const std::string& key, DataReceiverFn receiver) {
   Value value;
   auto status = DataStatus::NotFound;
   {
     Thread::LockGuard lock(mutex_);
-    auto iter = map_.find(key_str);
+    auto iter = map_.find(key);
     if (iter != map_.end()) {
       value = iter->second;
       if (value.get() == nullptr) {
@@ -135,33 +136,33 @@ void SimpleCache::lookupHelper(const std::string& key_str, DataReceiverFn receiv
   receiver(status, value);
 }
 
-InsertContextPtr SimpleCache::insert(const Key& key) {
-  auto context = std::make_unique<SimpleInsertContext>(key, self());
+InsertContextPtr SimpleCache::insert(const Descriptor& descriptor) {
+  auto context = std::make_unique<SimpleInsertContext>(descriptor, self());
   Value value;
   {
     Thread::LockGuard lock(mutex_);
-    map_[context->key_str()] = value; // Empty value indicates InsertInProgress.
+    map_[context->key()] = value; // Empty value indicates InsertInProgress.
   }
   return context;
 }
 
-void SimpleCache::remove(const Key& key, NotifyFn confirm_fn) {
-  removeHelper(std::string(key.key_));
+void SimpleCache::remove(const Descriptor& descriptor, NotifyFn confirm_fn) {
+  removeHelper(std::string(descriptor.key_));
   if (confirm_fn != nullptr) {
     confirm_fn(true);
   }
 }
 
-void SimpleCache::removeHelper(const std::string& key_str) {
+void SimpleCache::removeHelper(const std::string& key) {
   Thread::LockGuard lock(mutex_);
-  map_.erase(key_str);
+  map_.erase(key);
 }
 
 // Called by cache user for each chunk to insert into a key.
-void SimpleCache::insertHelper(const std::string& key_str, Value value) {
+void SimpleCache::insertHelper(const std::string& key, Value value) {
   // Only lock the cache and write the map when we have the complete value.
   Thread::LockGuard lock(mutex_);
-  map_[key_str] = value;
+  map_[key] = value;
 }
 
 CacheInfo SimpleCache::cacheInfo() const {

@@ -14,31 +14,32 @@ protected:
         current_time_(time_source_.currentTime()) {}
 
   ~SimpleCacheTest() {
-    BackendSharedPtr cache = cache_;
+    CacheInterfaceSharedPtrSharedPtr cache = cache_;
     cache_ = nullptr;
-    if (cache->IsHealthy()) {
-      cache->Shutdown(nullptr);
+    if (cache->isHealthy()) {
+      cache->shutdown(nullptr);
     }
   }
 
   // Writes a value into the cache.
   void checkPut(const std::string& key, const std::string& value) { checkPut(Cache(), key, value); }
 
-  void checkPut(BackendSharedPtr cache, const std::string& key, absl::string_view value) {
-    InsertContextPtr inserter = cache->insert(makeKey(key));
+  void checkPut(CacheInterfaceSharedPtrSharedPtr cache, const std::string& key,
+                absl::string_view value) {
+    InsertContextPtr inserter = cache->insert(makeDescriptor(key));
     inserter->write(makeValue(value), nullptr);
     PostOpCleanup();
   }
 
   void checkRemove(const std::string& key) {
-    Cache()->remove(makeKey(key), nullptr);
+    Cache()->remove(makeDescriptor(key), nullptr);
     PostOpCleanup();
   }
 
   // Performs a Get and verifies that the key is not found.
   void checkNotFound(const char* key) { checkNotFound(Cache(), key); }
 
-  void checkNotFound(BackendSharedPtr cache, absl::string_view key) {
+  void checkNotFound(CacheInterfaceSharedPtrSharedPtr cache, absl::string_view key) {
     initiateGet(cache, key);
     EXPECT_EQ(DataStatus::NotFound, status_);
   }
@@ -47,7 +48,7 @@ protected:
   // passed to WaitAndCheck or WaitAndcheckNotFound.
   void initiateGet(absl::string_view key) { return initiateGet(Cache(), key); }
 
-  void initiateGet(BackendSharedPtr cache, absl::string_view key) {
+  void initiateGet(CacheInterfaceSharedPtrSharedPtr cache, absl::string_view key) {
     /*
     {
       ScopedMutex lock(mutex_.get());
@@ -55,7 +56,7 @@ protected:
     }
     */
     value_.reset();
-    LookupContextPtr lookup = cache->lookup(makeKey(key));
+    LookupContextPtr lookup = cache->lookup(makeDescriptor(key));
     nextChunk(std::move(lookup));
   }
 
@@ -86,16 +87,19 @@ protected:
     checkGet(Cache(), key, expected_value);
   }
 
-  void checkGet(BackendSharedPtr cache, absl::string_view key, absl::string_view expected_value) {
+  void checkGet(CacheInterfaceSharedPtrSharedPtr cache, absl::string_view key,
+                absl::string_view expected_value) {
     initiateGet(cache, key);
     EXPECT_EQ(expected_value, value_->value_);
   }
 
-  BackendSharedPtr Cache() { return cache_; }
+  CacheInterfaceSharedPtrSharedPtr Cache() { return cache_; }
   void PostOpCleanup() { /*cache_->SanityCheck();*/
   }
 
-  Key makeKey(absl::string_view key_str) { return {.key_ = key_str, .attributes_ = attributes_}; };
+  Descriptor makeDescriptor(absl::string_view key_str) {
+    return {.key_ = key_str, .attributes_ = attributes_};
+  };
 
   Value makeValue(absl::string_view val) {
     Value value = std::make_shared<ValueStruct>();
@@ -104,7 +108,7 @@ protected:
     return value;
   }
 
-  BackendSharedPtr cache_;
+  CacheInterfaceSharedPtrSharedPtr cache_;
   Value value_;
   AttributeMap attributes_;
   DataStatus status_;
@@ -128,7 +132,7 @@ TEST_F(SimpleCacheTest, PutGetRemove) {
   //          cache_->size_bytes());  // "Name" + "NewValue"
   // EXPECT_EQ(static_cast<size_t>(1), cache_->num_elements());
 
-  cache_->remove(makeKey("Name"), nullptr);
+  cache_->remove(makeDescriptor("Name"), nullptr);
   // cache_->SanityCheck();
   Value value_buffer;
   checkNotFound("Name");
@@ -137,7 +141,7 @@ TEST_F(SimpleCacheTest, PutGetRemove) {
 }
 
 TEST_F(SimpleCacheTest, StreamingPut) {
-  Key key = makeKey("key");
+  Descriptor key = makeDescriptor("key");
   InsertContextPtr inserter = cache_->insert(key);
   inserter->write(makeValue("Hello, "), [this, &key, &inserter](bool) {
     // While we are string in the value, the cache reponds with InsertInProgress
@@ -265,13 +269,13 @@ TEST_F(SimpleCacheTest, BasicInvalid) {
   }*/
 
 /*TEST_F(SimpleCacheTest, MultiGet) {
-  // This covers CacheInterface's default implementation of MultiGet.
+  // This covers CacheInterfaceSharedPtr's default implementation of MultiGet.
   TestMultiGet();
   }*/
 
-TEST_F(SimpleCacheTest, KeyNotFoundWhenUnhealthy) {
+TEST_F(SimpleCacheTest, DescriptorNotFoundWhenUnhealthy) {
   checkPut("nameA", "valueA");
-  cache_->Shutdown(nullptr);
+  cache_->shutdown(nullptr);
   checkNotFound("nameA");
 }
 

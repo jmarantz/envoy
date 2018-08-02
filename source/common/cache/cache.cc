@@ -3,11 +3,26 @@
 namespace Envoy {
 namespace Cache {
 
-Backend::Backend() : self_(this) {}
+CacheInterfaceSharedPtr::CacheInterfaceSharedPtr() : self_(this) {}
 
-Backend::~Backend() { ASSERT(self_.get() == nullptr); }
+CacheInterfaceSharedPtr::~CacheInterfaceSharedPtr() { ASSERT(self_.get() == nullptr); }
 
-void Backend::multiLookup(const MultiLookupRequest&) { ASSERT(false); }
+LookupContextVec CacheInterfaceSharedPtr::multiLookup(const DescriptorVec& descriptors) {
+  LookupContextVec lookups;
+  lookups.reserve(descriptors.size());
+  for (const auto& desc : descriptors) {
+    lookups.push_back(lookup(desc));
+  }
+  return lookups;
+}
+
+void CacheInterfaceSharedPtr::shutdown(NotifyFn done) {
+  ASSERT(self_.get() != nullptr);
+  self_ = nullptr;
+  if (done) {
+    done(true);
+  }
+}
 
 bool ValidStatus(DataStatus status) {
   return status == DataStatus::ChunksImminent || status == DataStatus::ChunksPending ||
