@@ -86,8 +86,8 @@ using NotifyFn = std::function<void(bool)>;
 
 // Helper functions.
 Value makeValue();
-bool ValidStatus(DataStatus status);
-bool TerminalStatus(DataStatus status);
+bool validStatus(DataStatus status);
+bool terminalStatus(DataStatus status);
 
 // Insertion context manages the lifetime of an insertion. Client code wishing
 // to insert something into a cache can use this to stream data into a cache.

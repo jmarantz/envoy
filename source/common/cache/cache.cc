@@ -24,13 +24,13 @@ void CacheInterface::shutdown(NotifyFn done) {
   }
 }
 
-bool ValidStatus(DataStatus status) {
+bool validStatus(DataStatus status) {
   return status == DataStatus::ChunksImminent || status == DataStatus::ChunksPending ||
          status == DataStatus::LastChunk;
 }
 
-bool TerminalStatus(DataStatus status) {
-  return !ValidStatus(status) || status == DataStatus::LastChunk;
+bool terminalStatus(DataStatus status) {
+  return !validStatus(status) || status == DataStatus::LastChunk;
 }
 
 InsertContext::~InsertContext() {}

@@ -62,7 +62,7 @@ protected:
 
   void nextChunk(LookupContextPtr lookup) {
     lookup->read([this, &lookup](DataStatus status, const Value& value) {
-      if (ValidStatus(status)) {
+      if (validStatus(status)) {
         if ((status == DataStatus::LastChunk) && (value_.get() == nullptr)) {
           value_ = value; // Zero-copy share value if it came in one chunk.
         } else {
@@ -72,7 +72,7 @@ protected:
           absl::StrAppend(&value_->value_, value->value_);
         }
       }
-      if (TerminalStatus(status)) {
+      if (terminalStatus(status)) {
         status_ = status;
       } else {
         nextChunk(std::move(lookup));
