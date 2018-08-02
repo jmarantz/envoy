@@ -11,7 +11,7 @@ namespace Cache {
 class SimpleCacheTest : public testing::Test /*CacheTestBase*/ {
 protected:
   SimpleCacheTest()
-      : cache_((new SimpleCache)->self()), status_(DataStatus::Error),
+      : cache_(SimpleCache::make()), status_(DataStatus::Error),
         current_time_(time_source_.currentTime()) {}
 
   ~SimpleCacheTest() {

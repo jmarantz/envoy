@@ -9,40 +9,38 @@
 namespace Envoy {
 namespace Cache {
 
+using SimpleCacheSharedPtr = std::shared_ptr<SimpleCache>;
+
 class SimpleLookupContext : public LookupContext {
 public:
-  SimpleLookupContext(const Descriptor& descriptor, CacheSharedPtr cache)
+  SimpleLookupContext(const Descriptor& descriptor, SimpleCacheSharedPtr cache)
       : key_(std::string(descriptor.key())), split_(descriptor.hasAttribute("split")),
         cache_(cache) {}
 
   void read(DataReceiverFn receiver) override {
-    CacheSharedPtr cache = cache_;
-    if (cache.get() != nullptr) {
-      cache = cache->self();
-      if (cache.get() != nullptr) {
-        if (!split_) {
-          static_cast<SimpleCache*>(cache.get())->lookupHelper(key_, receiver);
-          return;
-        } else if (residual_value_.get() == nullptr) {
-          Value value;
-          static_cast<SimpleCache*>(cache.get())
-              ->lookupHelper(key_, [&value, this](DataStatus s, const Value& v) {
-                value = v;
-                residual_status_ = s;
-                return ReceiverStatus::Ok;
-              });
-          Value v1 = std::make_shared<ValueStruct>();
-          size_t size1 = value->value_.size() / 2;
-          v1->value_ = value->value_.substr(0, size1); // timestamp not touched.
-          residual_value_ = std::make_shared<ValueStruct>();
-          residual_value_->value_ = value->value_.substr(size1);
-          residual_value_->timestamp_ = value->timestamp_;
-          receiver(DataStatus::ChunksImminent, v1);
-        } else {
-          receiver(residual_status_, residual_value_);
-        }
+    SimpleCacheSharedPtr cache = cache_;
+    if (cache.get() != nullptr && cache->isHealthy()) {
+      if (!split_) {
+        cache->lookupHelper(key_, receiver);
         return;
+      } else if (residual_value_.get() == nullptr) {
+        Value value;
+        cache->lookupHelper(key_, [&value, this](DataStatus s, const Value& v) {
+                                    value = v;
+                                    residual_status_ = s;
+                                    return ReceiverStatus::Ok;
+                                  });
+        Value v1 = std::make_shared<ValueStruct>();
+        size_t size1 = value->value_.size() / 2;
+        v1->value_ = value->value_.substr(0, size1); // timestamp not touched.
+        residual_value_ = std::make_shared<ValueStruct>();
+        residual_value_->value_ = value->value_.substr(size1);
+        residual_value_->timestamp_ = value->timestamp_;
+        receiver(DataStatus::ChunksImminent, v1);
+      } else {
+        receiver(residual_status_, residual_value_);
       }
+      return;
     }
     receiver(DataStatus::NotFound, Value());
   }
@@ -50,51 +48,45 @@ public:
 private:
   std::string key_;
   bool split_;
-  CacheSharedPtr cache_;
+  SimpleCacheSharedPtr cache_;
   Value residual_value_;
   DataStatus residual_status_;
 };
 
 class SimpleInsertContext : public InsertContext {
 public:
-  SimpleInsertContext(const Descriptor& descriptor, CacheSharedPtr cache)
+  SimpleInsertContext(const Descriptor& descriptor, SimpleCacheSharedPtr cache)
       : key_(std::string(descriptor.key())), cache_(cache) {}
 
   virtual ~SimpleInsertContext() {
     // If a live cache has an uncommitted write, remove the 'in-progress' entry.
     if (!committed_) {
-      CacheSharedPtr cache = cache_;
-      if (cache.get() != nullptr) {
-        cache = cache->self();
-        if (cache.get() != nullptr) {
-          static_cast<SimpleCache*>(cache.get())->removeHelper(key_);
-        }
+      SimpleCacheSharedPtr cache = cache_;
+      if (cache.get() != nullptr && cache->isHealthy()) {
+        cache->removeHelper(key_);
       }
     }
   }
 
   void write(Value value, NotifyFn ready_for_next_chunk) override {
     ASSERT(!committed_);
-    CacheSharedPtr cache = cache_;
-    if (cache.get() != nullptr) {
-      cache = cache->self();
-      if (cache.get() != nullptr) {
-        if (ready_for_next_chunk == nullptr) { // Final chunk
-          if (value_.get() == nullptr) {
-            value_ = value;
-          } else {
-            absl::StrAppend(&value_->value_, value->value_);
-            value_->timestamp_ = value->timestamp_;
-          }
-          committed_ = true;
-          static_cast<SimpleCache*>(cache.get())->insertHelper(key_, value_);
+    SimpleCacheSharedPtr cache = cache_;
+    if (cache.get() != nullptr && cache->isHealthy()) {
+      if (ready_for_next_chunk == nullptr) { // Final chunk
+        if (value_.get() == nullptr) {
+          value_ = value;
         } else {
-          if (value_.get() == nullptr) {
-            value_ = std::make_shared<ValueStruct>();
-          }
           absl::StrAppend(&value_->value_, value->value_);
-          ready_for_next_chunk(true);
+          value_->timestamp_ = value->timestamp_;
         }
+        committed_ = true;
+        cache->insertHelper(key_, value_);
+      } else {
+        if (value_.get() == nullptr) {
+          value_ = std::make_shared<ValueStruct>();
+        }
+        absl::StrAppend(&value_->value_, value->value_);
+        ready_for_next_chunk(true);
       }
     }
   }
@@ -104,12 +96,12 @@ public:
 private:
   Value value_;
   std::string key_;
-  CacheSharedPtr cache_;
+  SimpleCacheSharedPtr cache_;
   bool committed_ = false;
 };
 
 LookupContextPtr SimpleCache::lookup(const Descriptor& descriptor) {
-  return std::make_unique<SimpleLookupContext>(descriptor, self());
+  return std::make_unique<SimpleLookupContext>(descriptor, self<SimpleCache>());
 }
 
 void SimpleCache::lookupHelper(const std::string& key, DataReceiverFn receiver) {
@@ -136,7 +128,7 @@ void SimpleCache::lookupHelper(const std::string& key, DataReceiverFn receiver) 
 }
 
 InsertContextPtr SimpleCache::insert(const Descriptor& descriptor) {
-  auto context = std::make_unique<SimpleInsertContext>(descriptor, self());
+  auto context = std::make_unique<SimpleInsertContext>(descriptor, self<SimpleCache>());
   Value value;
   {
     Thread::LockGuard lock(mutex_);

@@ -194,10 +194,16 @@ public:
   // be computed from the caches it is constructed with.
   virtual std::string name() const = 0;
 
-  std::shared_ptr<CacheInterface> self() { return self_; }
-
 protected:
   CacheInterface();
+
+  // Helper function for implementations to get access to a shared_ptr referencing
+  // their derived type. This is useful for setting up LookupContext and InsertContext
+  // that can then access implementation-specific functionality.
+  template<class Derived>
+  std::shared_ptr<Derived> self() {
+    return std::dynamic_pointer_cast<Derived>(self_);
+  }
 
 private:
   std::shared_ptr<CacheInterface> self_; // Cleared on shutdown.
