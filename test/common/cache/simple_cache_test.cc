@@ -1,6 +1,7 @@
 #include "common/cache/simple_cache.h"
 #include "common/common/utility.h"
 
+#include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
 #include "gtest/gtest.h"
 
@@ -22,7 +23,7 @@ protected:
   }
 
   // Writes a value into the cache.
-  void checkPut(const std::string& key, const std::string& value) { checkPut(Cache(), key, value); }
+  void checkPut(const std::string& key, const std::string& value) { checkPut(cache(), key, value); }
 
   void checkPut(CacheInterfaceSharedPtrSharedPtr cache, const std::string& key,
                 absl::string_view value) {
@@ -32,12 +33,12 @@ protected:
   }
 
   void checkRemove(const std::string& key) {
-    Cache()->remove(makeDescriptor(key), nullptr);
+    cache()->remove(makeDescriptor(key), nullptr);
     PostOpCleanup();
   }
 
   // Performs a Get and verifies that the key is not found.
-  void checkNotFound(const char* key) { checkNotFound(Cache(), key); }
+  void checkNotFound(const char* key) { checkNotFound(cache(), key); }
 
   void checkNotFound(CacheInterfaceSharedPtrSharedPtr cache, absl::string_view key) {
     initiateGet(cache, key);
@@ -46,7 +47,7 @@ protected:
 
   // Initiate a cache Get, and return the Callback* which can be
   // passed to WaitAndCheck or WaitAndcheckNotFound.
-  void initiateGet(absl::string_view key) { return initiateGet(Cache(), key); }
+  void initiateGet(absl::string_view key) { return initiateGet(cache(), key); }
 
   void initiateGet(CacheInterfaceSharedPtrSharedPtr cache, absl::string_view key) {
     /*
@@ -67,7 +68,7 @@ protected:
           value_ = value; // Zero-copy share value if it came in one chunk.
         } else {
           if (value_.get() == nullptr) {
-            value_ = std::make_shared<ValueStruct>();
+            value_ = Cache::makeValue();
           }
           absl::StrAppend(&value_->value_, value->value_);
         }
@@ -84,7 +85,7 @@ protected:
   // Performs a cache Get, waits for callback completion, and checks the
   // result is as expected.
   void checkGet(absl::string_view key, absl::string_view expected_value) {
-    checkGet(Cache(), key, expected_value);
+    checkGet(cache(), key, expected_value);
   }
 
   void checkGet(CacheInterfaceSharedPtrSharedPtr cache, absl::string_view key,
@@ -93,19 +94,45 @@ protected:
     EXPECT_EQ(expected_value, value_->value_);
   }
 
-  CacheInterfaceSharedPtrSharedPtr Cache() { return cache_; }
+  CacheInterfaceSharedPtrSharedPtr cache() { return cache_; }
   void PostOpCleanup() { /*cache_->SanityCheck();*/
   }
 
-  Descriptor makeDescriptor(absl::string_view key_str) {
-    return {.key_ = key_str, .attributes_ = attributes_};
+  Descriptor makeDescriptor(absl::string_view key) {
+    Descriptor desc{key, current_time_, attributes_};
+    return desc;
   };
 
   Value makeValue(absl::string_view val) {
-    Value value = std::make_shared<ValueStruct>();
+    Value value = Cache::makeValue();
     value->value_ = std::string(val);
     value->timestamp_ = current_time_;
     return value;
+  }
+
+  void testMultiGet() {
+    populateCache(2);
+    DescriptorVec descs({makeDescriptor("n0"), makeDescriptor("n1"), makeDescriptor("not found")});
+    LookupContextVec lookups = cache()->multiLookup(descs);
+    struct {
+      const char* value;
+      DataStatus status;
+    } expected_results[] = {
+        {"v0", DataStatus::LastChunk}, {"v1", DataStatus::LastChunk}, {"", DataStatus::NotFound}};
+    for (size_t i = 0; i < lookups.size(); ++i) {
+      value_ = Cache::makeValue();
+      nextChunk(std::move(lookups[i]));
+      EXPECT_EQ(expected_results[i].value, value_->value_);
+      EXPECT_EQ(expected_results[i].status, status_);
+    }
+  }
+
+  // Populates the cache with keys in pattern n0 n1 n2 n3...
+  // and values in pattern v0 v1 v2 v3...
+  void populateCache(int num) {
+    for (int i = 0; i < num; ++i) {
+      checkPut(absl::StrCat("n", i), absl::StrCat("v", i));
+    }
   }
 
   CacheInterfaceSharedPtrSharedPtr cache_;
@@ -268,10 +295,10 @@ TEST_F(SimpleCacheTest, BasicInvalid) {
   checkGet("nameB", "valueB");
   }*/
 
-/*TEST_F(SimpleCacheTest, MultiGet) {
-  // This covers CacheInterfaceSharedPtr's default implementation of MultiGet.
-  TestMultiGet();
-  }*/
+TEST_F(SimpleCacheTest, MultiGet) {
+  // This covers CacheInterface's default implementation of MultiGet.
+  testMultiGet();
+}
 
 TEST_F(SimpleCacheTest, DescriptorNotFoundWhenUnhealthy) {
   checkPut("nameA", "valueA");

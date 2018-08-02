@@ -16,6 +16,7 @@ struct ValueStruct {
   MonotonicTime timestamp_;
 };
 using Value = std::shared_ptr<ValueStruct>;
+Value makeValue();
 
 // All required strings in the attribute-map and key are copied into the cache
 // on API calls, so the caller need only maintain the storage when initiating an

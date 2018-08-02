@@ -36,5 +36,7 @@ bool TerminalStatus(DataStatus status) {
 InsertContext::~InsertContext() {}
 LookupContext::~LookupContext() {}
 
+Value makeValue() { return std::make_shared<ValueStruct>(); }
+
 } // namespace Cache
 } // namespace Envoy
