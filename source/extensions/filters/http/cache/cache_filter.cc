@@ -38,8 +38,8 @@ const std::vector<std::string>& defaultContentEncoding() {
 } // namespace
 
 CacheFilterConfig::CacheFilterConfig(const envoy::config::filter::http::cache::v2::Cache& cache,
-                                   const std::string& stats_prefix, Stats::Scope& scope,
-                                   Runtime::Loader& runtime)
+                                     const std::string& stats_prefix, Stats::Scope& scope,
+                                     Runtime::Loader& runtime)
     : compression_level_(compressionLevelEnum(cache.compression_level())),
       compression_strategy_(compressionStrategyEnum(cache.compression_strategy())),
       content_length_(contentLengthUint(cache.content_length().value())),
@@ -253,8 +253,8 @@ bool CacheFilter::isTransferEncodingAllowed(Http::HeaderMap& headers) const {
          // computed twice. Find all other sites where this can be improved.
          StringUtil::splitToken(transfer_encoding->value().c_str(), ",", true)) {
       const auto trimmed_value = StringUtil::trim(header_value);
-      if (//@StringUtil::caseCompare(trimmed_value,
-              //@                        Http::Headers::get().TransferEncodingValues.Cache) ||
+      if ( //@StringUtil::caseCompare(trimmed_value,
+           //@                        Http::Headers::get().TransferEncodingValues.Cache) ||
           StringUtil::caseCompare(trimmed_value,
                                   Http::Headers::get().TransferEncodingValues.Deflate)) {
         return false;

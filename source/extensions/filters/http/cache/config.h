@@ -13,7 +13,8 @@ namespace Cache {
 /**
  * Config registration for the cache filter. @see NamedHttpFilterConfigFactory.
  */
-class CacheFilterFactory : public Common::FactoryBase<envoy::config::filter::http::cache::v2::Cache> {
+class CacheFilterFactory
+    : public Common::FactoryBase<envoy::config::filter::http::cache::v2::Cache> {
 public:
   CacheFilterFactory() : FactoryBase(HttpFilterNames::get().EnvoyCache) {}
 
