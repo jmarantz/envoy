@@ -1,7 +1,8 @@
 #pragma once
 
-#include "common/cache/cache.h"
 #include "common/common/thread.h"
+
+#include "extensions/cache/cache.h"
 
 namespace Envoy {
 namespace Cache {

@@ -1,5 +1,6 @@
-#include "common/cache/simple_cache.h"
 #include "common/common/utility.h"
+
+#include "extensions/cache/simple_cache.h"
 
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"

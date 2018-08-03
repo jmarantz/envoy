@@ -13,6 +13,6 @@ envoy_cc_test(
     name = "simple_cache_test",
     srcs = ["simple_cache_test.cc"],
     deps = [
-        "//source/common/cache:simple_cache_lib",
+        "//source/extensions/cache:simple_cache_lib",
     ],
 )

@@ -1,4 +1,4 @@
-#include "common/cache/cache.h"
+#include "extensions/cache/cache.h"
 
 namespace Envoy {
 namespace Cache {

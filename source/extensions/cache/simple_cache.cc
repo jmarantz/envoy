@@ -1,7 +1,8 @@
-#include "common/cache/simple_cache.h"
+#include "extensions/cache/simple_cache.h"
 
-#include "common/cache/cache.h"
 #include "common/common/lock_guard.h"
+
+#include "extensions/cache/cache.h"
 
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
