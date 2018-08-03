@@ -89,6 +89,20 @@ Value makeValue();
 bool validStatus(DataStatus status);
 bool terminalStatus(DataStatus status);
 
+// Template function to instantiate an implementation of CacheInterface,
+// returning a shared pointer to it. This differs from std::make_shared because
+// the shared_ptr is owned by the cache itself, which holds a self-reference
+// until explicit shutdown.
+//
+// Usage:
+//   CacheSharedPtr cache = Cache::make<SimpleCache>();
+// or
+//   std::shared_ptr<SimpleCache> cache = Cache::make<SimpleCache>();
+template <class Impl, typename... Args> static std::shared_ptr<Impl> make(Args&&... args) {
+  Impl* impl = new Impl(std::forward<Args>(args)...);
+  return impl->template self<Impl>();
+}
+
 // Insertion context manages the lifetime of an insertion. Client code wishing
 // to insert something into a cache can use this to stream data into a cache.
 // An insertion context is returned by CacheInterface::insert(). Clients should only
@@ -142,11 +156,6 @@ using LookupContextVec = std::vector<LookupContextPtr>; // for multiGet
 
 class CacheInterface {
 public:
-  template <class Derived, typename... Args> static std::shared_ptr<Derived> make(Args&&... args) {
-    Derived* d = new Derived(std::forward<Args>(args)...);
-    return d->template self<Derived>();
-  }
-
   virtual ~CacheInterface();
 
   // Initiates streaming of cached payload stored at key. The client calls
@@ -199,15 +208,15 @@ public:
   // be computed from the caches it is constructed with.
   virtual std::string name() const = 0;
 
-protected:
-  CacheInterface();
-
-  // Helper function for implementations to get access to a shared_ptr referencing
-  // their derived type. This is useful for setting up LookupContext and InsertContext
-  // that can then access implementation-specific functionality.
+  // Provides a shared_ptr to the derived type. This is useful for setting up
+  // LookupContext and InsertContext that can then access
+  // implementation-specific functionality.
   template <class Derived> std::shared_ptr<Derived> self() {
     return std::dynamic_pointer_cast<Derived>(self_);
   }
+
+protected:
+  CacheInterface();
 
 private:
   std::shared_ptr<CacheInterface> self_; // Cleared on shutdown.
