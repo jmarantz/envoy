@@ -14,6 +14,7 @@ public:
   SimpleCache();
   ~SimpleCache() override;
 
+  // CacheInterface
   LookupContextPtr lookup(const Descriptor& descriptor) override;
   InsertContextPtr insert(const Descriptor& descriptor) override;
   void remove(const Descriptor& descriptor, NotifyFn confirm_fn) override;
