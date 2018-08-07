@@ -78,6 +78,7 @@ using DescriptorVec = std::vector<Descriptor>;
 struct CacheInfo {
   size_t chunk_size_bytes_; // Optimum size for range-requests.
   size_t max_size_bytes_;   // Maximum permissible size for single chunks.
+  bool is_thread_safe_ = false;
 };
 
 // Callback definitions.
@@ -127,7 +128,7 @@ public:
 using InsertContextPtr = std::unique_ptr<InsertContext>;
 
 // Lookup context manages the lifetime of a lookup, helping clients to pull
-// data from the cache at pace that works for them. Call read() until the
+// data from the cache at a pace that works for them. Call read() until the
 // receiver receives a DataStatus where TerminalStatus(status) is true (error
 // or last chunk). At any time a client can abort in-progress lookup by simply
 // dropping the LookupContextPtr.
@@ -204,7 +205,7 @@ public:
   // Returns statically known information about a cache.
   virtual CacheInfo cacheInfo() const = 0;
 
-  // Returns a name describing the cache. Note that for adapaters, the name may
+  // Returns a name describing the cache. Note that for adapters, the name may
   // be computed from the caches it is constructed with.
   virtual std::string name() const = 0;
 

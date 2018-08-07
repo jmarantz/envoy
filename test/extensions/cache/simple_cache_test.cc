@@ -64,7 +64,8 @@ protected:
   void nextChunk(LookupContextPtr lookup) {
     lookup->read([this, &lookup](DataStatus status, const Value& value) {
       if (validStatus(status)) {
-        if ((status == DataStatus::LastChunk) && (value_.get() == nullptr)) {
+        if ((status == DataStatus::LastChunk) &&
+            ((value_.get() == nullptr) || (value_->value_.empty()))) {
           value_ = value; // Zero-copy share value if it came in one chunk.
         } else {
           if (value_.get() == nullptr) {

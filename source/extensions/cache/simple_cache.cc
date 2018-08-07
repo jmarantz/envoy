@@ -14,36 +14,45 @@ using SimpleCacheSharedPtr = std::shared_ptr<SimpleCache>;
 
 class SimpleLookupContext : public LookupContext {
 public:
+  // We look for a 'split' attribute to make it easier to test streaming lookups.
   SimpleLookupContext(const Descriptor& descriptor, SimpleCacheSharedPtr cache)
       : key_(std::string(descriptor.key())), split_(descriptor.hasAttribute("split")),
         cache_(cache) {}
 
   void read(DataReceiverFn receiver) override {
     SimpleCacheSharedPtr cache = cache_;
-    if (cache.get() != nullptr && cache->isHealthy()) {
-      if (!split_) {
-        cache->lookupHelper(key_, receiver);
-        return;
-      } else if (residual_value_.get() == nullptr) {
-        Value value;
-        cache->lookupHelper(key_, [&value, this](DataStatus s, const Value& v) {
-          value = v;
-          residual_status_ = s;
-          return ReceiverStatus::Ok;
-        });
-        Value v1 = std::make_shared<ValueStruct>();
-        size_t size1 = value->value_.size() / 2;
-        v1->value_ = value->value_.substr(0, size1); // timestamp not touched.
-        residual_value_ = std::make_shared<ValueStruct>();
-        residual_value_->value_ = value->value_.substr(size1);
-        residual_value_->timestamp_ = value->timestamp_;
-        receiver(DataStatus::ChunksImminent, v1);
-      } else {
-        receiver(residual_status_, residual_value_);
-      }
+
+    if (cache.get() == nullptr || !cache->isHealthy()) {
+      receiver(DataStatus::NotFound, Value());
       return;
     }
-    receiver(DataStatus::NotFound, Value());
+
+    if (!split_) {
+      // This is the normal case; in a really simple cache, this method ends here.
+      cache->lookupHelper(key_, receiver);
+      return;
+    }
+
+    // Handle finding a split-point of for the value, saving the residual part
+    // in a member variable, and streaming the first part out.
+    if (residual_value_.get() == nullptr) {
+      // In this section we
+      Value value;
+      cache->lookupHelper(key_, [&value, this](DataStatus s, const Value& v) {
+        value = v;
+        residual_status_ = s;
+        return ReceiverStatus::Ok;
+      });
+      Value v1 = std::make_shared<ValueStruct>();
+      size_t size1 = value->value_.size() / 2;
+      v1->value_ = value->value_.substr(0, size1); // timestamp not touched.
+      residual_value_ = std::make_shared<ValueStruct>();
+      residual_value_->value_ = value->value_.substr(size1);
+      residual_value_->timestamp_ = value->timestamp_;
+      receiver(DataStatus::ChunksImminent, v1);
+    } else {
+      receiver(residual_status_, residual_value_);
+    }
   }
 
 private:
@@ -165,6 +174,7 @@ CacheInfo SimpleCache::cacheInfo() const {
   CacheInfo cache_info;
   cache_info.chunk_size_bytes_ = 100 * 000;
   cache_info.max_size_bytes_ = 10 * 1000 * 1000;
+  cache_info.is_thread_safe_ = true;
   return cache_info;
 }
 
