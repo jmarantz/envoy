@@ -146,6 +146,66 @@ protected:
   MonotonicTime current_time_;
 };
 
+// Cache Adapter that splits responses in half, to help test response streaming.
+class ResponseSplitter : public CacheInterface {
+public:
+  ResponseSplitter(const CacheSharedPtr& cache) : cache_(cache) {}
+
+  class SplitLookupContext : public LookupContext {
+  public:
+    SplitLookupContext(LookupContextPtr lookup_context)
+        : lookup_context_(std::move(lookup_context)) {}
+
+    void read(DataReceiverFn receiver) override {
+      // Handle finding a split-point of for the value, saving the residual part
+      // in a member variable, and streaming the first part out.
+      if (residual_value_.get() == nullptr) {
+        lookup_context_->read(
+            [this, &receiver](DataStatus status, const Value& value) -> ReceiverStatus {
+              Value v = std::make_shared<ValueStruct>();
+              size_t size = value->value_.size() / 2;
+              v->value_ = value->value_.substr(0, size); // timestamp not touched.
+              residual_value_ = std::make_shared<ValueStruct>();
+              residual_value_->value_ = value->value_.substr(size);
+              residual_value_->timestamp_ = value->timestamp_;
+              residual_status_ = status;
+              receiver(DataStatus::ChunksImminent, v);
+              return ReceiverStatus::Ok;
+            });
+      } else {
+        Value v = residual_value_;
+        residual_value_.reset();
+        receiver(residual_status_, v);
+      }
+    }
+
+  private:
+    LookupContextPtr lookup_context_;
+    Value residual_value_;
+    DataStatus residual_status_;
+  };
+
+  LookupContextPtr lookup(const Descriptor& descriptor) override {
+    // Wrap the underlying cache's LookupContext in our own, that does response splitting.
+    return std::make_unique<SplitLookupContext>(cache_->lookup(descriptor));
+  }
+
+  // Inserts, removals, and cacheInfo() are direct.
+  InsertContextPtr insert(const Descriptor& descriptor) override {
+    return cache_->insert(descriptor);
+  }
+
+  void remove(const Descriptor& descriptor, NotifyFn notify) override {
+    cache_->remove(descriptor, notify);
+  }
+
+  CacheInfo cacheInfo() const override { return cache_->cacheInfo(); }
+  std::string name() const override { return absl::StrCat("Splitter(" + cache_->name() + ")"); }
+
+private:
+  CacheSharedPtr cache_;
+};
+
 // Simple flow of putting in an item, getting it, deleting it.
 TEST_F(SimpleCacheTest, PutGetRemove) {
   // EXPECT_EQ(static_cast<size_t>(0), cache_->size_bytes());
@@ -188,6 +248,11 @@ TEST_F(SimpleCacheTest, StreamingPut) {
 
 TEST_F(SimpleCacheTest, StreamingGet) {
   checkPut("Name", "Value");
+
+  // Interpose a cache adapter that splits responses, so we can test the flow for
+  // accumulating a streaming get.
+  cache_ = make<ResponseSplitter>(cache_);
+
   Attribute attr({.name_ = "split", .value_ = "true"});
   attributes_.push_back(attr);
   checkGet("Name", "Value");
