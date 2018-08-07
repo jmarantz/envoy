@@ -2,6 +2,7 @@
 
 #include "extensions/cache/simple_cache.h"
 
+#include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
 #include "gtest/gtest.h"
@@ -202,6 +203,14 @@ public:
   CacheInfo cacheInfo() const override { return cache_->cacheInfo(); }
   std::string name() const override { return absl::StrCat("Splitter(" + cache_->name() + ")"); }
 
+  void shutdown(NotifyFn done) override {
+    cache_->shutdown([this, &done](bool status) {
+      EXPECT_TRUE(status);
+      EXPECT_FALSE(cache_->isHealthy());
+      CacheInterface::shutdown(done);
+    });
+  }
+
 private:
   CacheSharedPtr cache_;
 };
@@ -256,6 +265,31 @@ TEST_F(SimpleCacheTest, StreamingGet) {
   Attribute attr({.name_ = "split", .value_ = "true"});
   attributes_.push_back(attr);
   checkGet("Name", "Value");
+}
+
+TEST_F(SimpleCacheTest, AbortedGet) {
+  std::string key("Key");
+  std::string val("Value");
+  checkPut(key, val);
+
+  // Interpose a cache adapter that splits responses, so we can test the flow for
+  // accumulating a streaming get.
+  cache_ = make<ResponseSplitter>(cache_);
+
+  LookupContextPtr lookup = cache_->lookup(makeDescriptor(key));
+  lookup->read([&val](DataStatus status, const Value& value) -> ReceiverStatus {
+    // Check that this first chunk that comes in is a non-empty,
+    // but non-complete chunk of the expected value.
+    EXPECT_EQ(DataStatus::ChunksImminent, status);
+    EXPECT_TRUE(absl::StartsWith(val, value->value_));
+    EXPECT_LT(0, value->value_.size());
+    EXPECT_GT(val.size(), value->value_.size());
+
+    // Now return a status of OK, but we'll just abanodon the read
+    // by ending the test. What we are really testing here is that
+    // everything closes out, with no memory leaks.
+    return ReceiverStatus::Ok;
+  });
 }
 
 /*TEST_F(SimpleCacheTest, RemoveWithPrefix) {
