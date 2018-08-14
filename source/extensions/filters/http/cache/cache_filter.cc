@@ -1,6 +1,7 @@
 #include "extensions/filters/http/cache/cache_filter.h"
 
 #include "common/common/macros.h"
+
 #include "extensions/cache/cache.h"
 #include "extensions/cache/simple_cache.h"
 
@@ -19,16 +20,15 @@ CacheFilterConfig::CacheFilterConfig(const envoy::config::filter::http::cache::v
     : stats_(generateStats(stats_prefix + "cache.", scope)), runtime_(runtime) {}
 
 CacheFilter::CacheFilter(const CacheFilterConfigSharedPtr& config,
-                         const Envoy::Cache::CacheSharedPtr& cache, MonotonicTimeSource& time_source)
-    : config_(config),
-      cache_(cache),
-      time_source_(time_source) {
-    }
+                         const Envoy::Cache::CacheSharedPtr& cache,
+                         MonotonicTimeSource& time_source)
+    : config_(config), cache_(cache), time_source_(time_source) {}
 
 Http::FilterHeadersStatus CacheFilter::decodeHeaders(Http::HeaderMap& headers, bool) {
   if (config_->runtime().snapshot().featureEnabled("cache.filter_enabled", 100) &&
       isCacheableRequest(headers)) {
-    current_time_ = time_source_.currentTime();;
+    current_time_ = time_source_.currentTime();
+    ;
     Envoy::Cache::Descriptor desc(headers.Path()->value().getStringView(), current_time_);
     lookup_ = cache_->lookup(desc);
     readChunkFromCache();
@@ -38,32 +38,31 @@ Http::FilterHeadersStatus CacheFilter::decodeHeaders(Http::HeaderMap& headers, b
 }
 
 void CacheFilter::readChunkFromCache() {
-  lookup_->read(
-      [this](Envoy::Cache::DataStatus status, const Envoy::Cache::Value& value)
-      -> Envoy::Cache::ReceiverStatus {
-        switch (status) {
-          case Envoy::Cache::DataStatus::NotFound:
-            enable_cache_fill_ = true;
-            FALLTHRU;
-          case Envoy::Cache::DataStatus::Error:
-          case Envoy::Cache::DataStatus::InsertInProgress:
-            decoder_callbacks_->continueDecoding();
-            return Envoy::Cache::ReceiverStatus::Ok;
-          case Envoy::Cache::DataStatus::ChunksImminent:
-          case Envoy::Cache::DataStatus::ChunksPending: {
-            Envoy::Cache::ReceiverStatus status = sendDataDownstream(value, false);
-            readChunkFromCache();
-            return status;
-          }
-          case Envoy::Cache::DataStatus::LastChunk: {
-            return sendDataDownstream(value, true);
-          }
-        }
-      });
+  lookup_->read([this](Envoy::Cache::DataStatus status,
+                       const Envoy::Cache::Value& value) -> Envoy::Cache::ReceiverStatus {
+    switch (status) {
+    case Envoy::Cache::DataStatus::NotFound:
+      enable_cache_fill_ = true;
+      FALLTHRU;
+    case Envoy::Cache::DataStatus::Error:
+    case Envoy::Cache::DataStatus::InsertInProgress:
+      decoder_callbacks_->continueDecoding();
+      return Envoy::Cache::ReceiverStatus::Ok;
+    case Envoy::Cache::DataStatus::ChunksImminent:
+    case Envoy::Cache::DataStatus::ChunksPending: {
+      Envoy::Cache::ReceiverStatus status = sendDataDownstream(value, false);
+      readChunkFromCache();
+      return status;
+    }
+    case Envoy::Cache::DataStatus::LastChunk: {
+      return sendDataDownstream(value, true);
+    }
+    }
+  });
 }
 
-Envoy::Cache::ReceiverStatus CacheFilter::sendDataDownstream(
-    const Envoy::Cache::Value& value, bool end_stream) {
+Envoy::Cache::ReceiverStatus CacheFilter::sendDataDownstream(const Envoy::Cache::Value& value,
+                                                             bool end_stream) {
   // TODO(jmarantz): think about avoiding this string copy, possibly
   // by using Buffer::Instance as part of Envoy::Cache::ValueStruct
   // rather tha a std::string. The drawback is that for an in-memory
@@ -71,12 +70,12 @@ Envoy::Cache::ReceiverStatus CacheFilter::sendDataDownstream(
   // might mutate the buffer during encoding.
   Buffer::OwnedImpl data(value->value_);
   switch (encodeData(data, end_stream)) {
-    case Http::FilterDataStatus::Continue:
-      return Envoy::Cache::ReceiverStatus::Ok;
-    case Http::FilterDataStatus::StopIterationAndBuffer:
-    case Http::FilterDataStatus::StopIterationAndWatermark:
-    case Http::FilterDataStatus::StopIterationNoBuffer:
-      break;
+  case Http::FilterDataStatus::Continue:
+    return Envoy::Cache::ReceiverStatus::Ok;
+  case Http::FilterDataStatus::StopIterationAndBuffer:
+  case Http::FilterDataStatus::StopIterationAndWatermark:
+  case Http::FilterDataStatus::StopIterationNoBuffer:
+    break;
   }
   return Envoy::Cache::ReceiverStatus::Invalid;
 }
@@ -96,12 +95,14 @@ std::string CacheFilter::serializeHeaders(Http::HeaderMap& headers) {
   // TODO(jmarantz): switch to protobuf. Note that if there is a : in the header this
   // fails, but that's OK for a prototype.
   std::string out;
-  headers.iterate([](const Http::HeaderEntry& header, void* context) -> Http::HeaderMap::Iterate {
-                    std::string* out = static_cast<std::string*>(context);
-                    absl::StrAppend(out, header.key().getStringView(), ": ",
-                                    header.value().getStringView(), "\n");
-                    return Http::HeaderMap::Iterate::Continue;
-                        }, &out);
+  headers.iterate(
+      [](const Http::HeaderEntry& header, void* context) -> Http::HeaderMap::Iterate {
+        std::string* out = static_cast<std::string*>(context);
+        absl::StrAppend(out, header.key().getStringView(), ": ", header.value().getStringView(),
+                        "\n");
+        return Http::HeaderMap::Iterate::Continue;
+      },
+      &out);
   // Add an extra newline to identify the gap to main content.
   absl::StrAppend(&out, "\n");
   return out;
@@ -112,7 +113,7 @@ Http::FilterDataStatus CacheFilter::encodeData(Buffer::Instance& data, bool end_
     end_insertion_stream_ = end_stream;
     if (ready_for_next_insertion_chunk_) {
       ASSERT(buffer_.empty());
-      ready_for_next_insertion_chunk_= false;
+      ready_for_next_insertion_chunk_ = false;
       // TODO(jmarantz): this very non-performant. I think we should probably hold onto
       // the Buffer::Instance and stream the data out to the cache at a pace dictated
       // to us by the cache, but I don't see a mechanism right now to take ownership of
@@ -134,7 +135,7 @@ void CacheFilter::readyForNextInsertionChunk(bool ok) {
   if (ok) {
     ASSERT(!ready_for_next_insertion_chunk_);
     if (buffer_.empty()) {
-      ready_for_next_insertion_chunk_= true;
+      ready_for_next_insertion_chunk_ = true;
     } else {
       std::string value;
       value.swap(buffer_.front());
@@ -145,7 +146,7 @@ void CacheFilter::readyForNextInsertionChunk(bool ok) {
     // Cache has aborted the operation. Drop the insertion context and buffers.
     insert_.reset();
     std::queue<std::string> temp;
-    temp.swap(buffer_);  // std::queue lacks clear().
+    temp.swap(buffer_); // std::queue lacks clear().
   }
 }
 
