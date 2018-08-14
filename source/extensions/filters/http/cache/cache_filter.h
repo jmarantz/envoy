@@ -1,5 +1,7 @@
 #pragma once
 
+#include <queue>
+
 #include "envoy/config/filter/http/cache/v2/cache.pb.h"
 #include "envoy/http/filter.h"
 #include "envoy/http/header_map.h"
@@ -13,6 +15,7 @@
 #include "common/json/config_schemas.h"
 #include "common/json/json_validator.h"
 #include "common/protobuf/protobuf.h"
+#include "extensions/cache/cache.h"
 
 namespace Envoy {
 namespace Extensions {
@@ -20,35 +23,24 @@ namespace HttpFilters {
 namespace Cache {
 
 /**
- * All cache filter stats. @see stats_macros.h
- * "total_uncompressed_bytes" only includes bytes
- * from requests that were marked for compression.
- * If the request was not marked for compression,
- * the filter increments "not_compressed", but does
- * not add to "total_uncompressed_bytes". This way,
- * the user can measure the memory performance of the
- * compression.
+ * All cache filter stats. @see stats_macros.h.
  */
 // clang-format off
-#define ALL_GZIP_STATS(COUNTER)    \
-  COUNTER(compressed)              \
-  COUNTER(not_compressed)          \
-  COUNTER(no_accept_header)        \
-  COUNTER(header_identity)         \
-  COUNTER(header_cache)             \
-  COUNTER(header_wildcard)         \
-  COUNTER(header_not_valid)        \
-  COUNTER(total_uncompressed_bytes)\
-  COUNTER(total_compressed_bytes)  \
-  COUNTER(content_length_too_small)\
-  COUNTER(not_compressed_etag)     \
+#define ALL_CACHE_STATS(COUNTER)     \
+  COUNTER(cacheable)                \
+  COUNTER(uncacheable)              \
+  COUNTER(hits)                     \
+  COUNTER(inserts)                  \
+  COUNTER(misses)                   \
+  COUNTER(total_inserted_bytes)     \
+  COUNTER(total_cached_bytes)       \
 // clang-format on
 
 /**
  * Struct definition for cache stats. @see stats_macros.h
  */
 struct CacheStats {
-  ALL_GZIP_STATS(GENERATE_COUNTER_STRUCT)
+  ALL_CACHE_STATS(GENERATE_COUNTER_STRUCT)
 };
 
 /**
@@ -61,48 +53,14 @@ public:
                    const std::string& stats_prefix,
                    Stats::Scope& scope, Runtime::Loader& runtime);
 
-  Compressor::ZlibCompressorImpl::CompressionLevel compressionLevel() const {
-    return compression_level_;
-  }
-  Compressor::ZlibCompressorImpl::CompressionStrategy compressionStrategy() const {
-    return compression_strategy_;
-  }
-
   Runtime::Loader& runtime() { return runtime_; }
   CacheStats& stats() { return stats_; }
-  const StringUtil::CaseUnorderedSet& contentTypeValues() const { return content_type_values_; }
-  bool disableOnEtagHeader() const { return disable_on_etag_header_; }
-  bool removeAcceptEncodingHeader() const { return remove_accept_encoding_header_; }
-  uint64_t memoryLevel() const { return memory_level_; }
-  uint64_t minimumLength() const { return content_length_; }
-  uint64_t windowBits() const { return window_bits_; }
 
 private:
-  static Compressor::ZlibCompressorImpl::CompressionLevel compressionLevelEnum(
-      envoy::config::filter::http::cache::v2::Cache_CompressionLevel_Enum compression_level);
-  static Compressor::ZlibCompressorImpl::CompressionStrategy compressionStrategyEnum(
-      envoy::config::filter::http::cache::v2::Cache_CompressionStrategy compression_strategy);
-  static StringUtil::CaseUnorderedSet
-  contentTypeSet(const Protobuf::RepeatedPtrField<Envoy::ProtobufTypes::String>& types);
-
-  static uint64_t contentLengthUint(Protobuf::uint32 length);
-  static uint64_t memoryLevelUint(Protobuf::uint32 level);
-  static uint64_t windowBitsUint(Protobuf::uint32 window_bits);
-
   static CacheStats generateStats(const std::string& prefix, Stats::Scope& scope) {
-    return CacheStats{ALL_GZIP_STATS(POOL_COUNTER_PREFIX(scope, prefix))};
+    return CacheStats{ALL_CACHE_STATS(POOL_COUNTER_PREFIX(scope, prefix))};
   }
 
-  Compressor::ZlibCompressorImpl::CompressionLevel compression_level_;
-  Compressor::ZlibCompressorImpl::CompressionStrategy compression_strategy_;
-
-  int32_t content_length_;
-  int32_t memory_level_;
-  int32_t window_bits_;
-
-  StringUtil::CaseUnorderedSet content_type_values_;
-  bool disable_on_etag_header_;
-  bool remove_accept_encoding_header_;
   CacheStats stats_;
   Runtime::Loader& runtime_;
 };
@@ -113,7 +71,8 @@ typedef std::shared_ptr<CacheFilterConfig> CacheFilterConfigSharedPtr;
  */
 class CacheFilter : public Http::StreamFilter {
 public:
-  CacheFilter(const CacheFilterConfigSharedPtr& config);
+  CacheFilter(const CacheFilterConfigSharedPtr& config, const Envoy::Cache::CacheSharedPtr& cache,
+              MonotonicTimeSource& time_source);
 
   // Http::StreamFilterBase
   void onDestroy() override{};
@@ -136,9 +95,7 @@ public:
   }
   Http::FilterHeadersStatus encodeHeaders(Http::HeaderMap& headers, bool end_stream) override;
   Http::FilterDataStatus encodeData(Buffer::Instance& buffer, bool end_stream) override;
-  Http::FilterTrailersStatus encodeTrailers(Http::HeaderMap&) override {
-    return Http::FilterTrailersStatus::Continue;
-  }
+  Http::FilterTrailersStatus encodeTrailers(Http::HeaderMap&) override;
   void setEncoderFilterCallbacks(Http::StreamEncoderFilterCallbacks& callbacks) override {
     encoder_callbacks_ = &callbacks;
   }
@@ -148,6 +105,15 @@ private:
   // the logic in these private member functions would be availale in another class.
   friend class CacheFilterTest;
 
+  bool isCacheableRequest(Http::HeaderMap& headers) const;
+  bool isCacheableResponse(Http::HeaderMap& headers) const;
+  void readChunkFromCache();
+  Envoy::Cache::ReceiverStatus sendDataDownstream(const Envoy::Cache::Value& value, bool end_stream);
+  std::string serializeHeaders(Http::HeaderMap& headers);
+  void readyForNextInsertionChunk(bool ok);
+  void writeChunk(std::string&& chunk);
+
+  /*
   bool hasCacheControlNoTransform(Http::HeaderMap& headers) const;
   bool isAcceptEncodingAllowed(Http::HeaderMap& headers) const;
   bool isContentTypeAllowed(Http::HeaderMap& headers) const;
@@ -161,10 +127,21 @@ private:
   bool skip_compression_;
   Buffer::OwnedImpl compressed_data_;
   Compressor::ZlibCompressorImpl compressor_;
+  */
   CacheFilterConfigSharedPtr config_;
 
   Http::StreamDecoderFilterCallbacks* decoder_callbacks_{nullptr};
   Http::StreamEncoderFilterCallbacks* encoder_callbacks_{nullptr};
+
+  Envoy::Cache::CacheSharedPtr cache_;
+  MonotonicTimeSource& time_source_;
+  MonotonicTime current_time_;
+  bool enable_cache_fill_ = false;
+  bool ready_for_next_insertion_chunk_ = false;
+  bool end_insertion_stream_ = false;
+  Envoy::Cache::LookupContextPtr lookup_;
+  Envoy::Cache::InsertContextPtr insert_;
+  std::queue<std::string> buffer_;
 };
 
 } // namespace Cache

@@ -79,6 +79,9 @@ struct CacheInfo {
   size_t chunk_size_bytes_; // Optimum size for range-requests.
   size_t max_size_bytes_;   // Maximum permissible size for single chunks.
   bool is_thread_safe_ = false;
+  bool supports_range_requests_ = false;
+  bool supports_invalidation_requests_ = false;
+  bool supports_vary_ = false;
 };
 
 // Callback definitions.
@@ -123,7 +126,7 @@ public:
   // The client can abort the streaming insertion by dropping the
   // InsertContextPtr. A cache can abort the insertion by passing 'false'
   // into ready_for_next_chunk.
-  virtual void write(Value chunk, NotifyFn ready_for_next_chunk) = 0;
+  virtual void write(const Value& chunk, NotifyFn ready_for_next_chunk) = 0;
 };
 using InsertContextPtr = std::unique_ptr<InsertContext>;
 

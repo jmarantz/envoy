@@ -49,7 +49,7 @@ public:
     }
   }
 
-  void write(Value value, NotifyFn ready_for_next_chunk) override {
+  void write(const Value& value, NotifyFn ready_for_next_chunk) override {
     ASSERT(!committed_);
     SimpleCacheSharedPtr cache = cache_;
     if (cache.get() != nullptr && cache->isHealthy()) {

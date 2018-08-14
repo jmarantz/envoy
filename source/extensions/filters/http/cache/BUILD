@@ -38,6 +38,8 @@ envoy_cc_library(
     hdrs = ["config.h"],
     deps = [
         "//include/envoy/registry",
+        "//source/extensions/cache:cache_lib",
+        "//source/extensions/cache:simple_cache_lib",
         "//source/extensions/filters/http:well_known_names",
         "//source/extensions/filters/http/cache:cache_filter_lib",
         "//source/extensions/filters/http/common:factory_base_lib",

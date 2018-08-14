@@ -2,6 +2,8 @@
 
 #include "envoy/config/filter/http/cache/v2/cache.pb.h"
 
+#include "extensions/cache/cache.h"
+#include "extensions/filters/http/cache/cache_filter.h"
 #include "extensions/filters/http/common/factory_base.h"
 #include "extensions/filters/http/well_known_names.h"
 
@@ -16,13 +18,16 @@ namespace Cache {
 class CacheFilterFactory
     : public Common::FactoryBase<envoy::config::filter::http::cache::v2::Cache> {
 public:
-  CacheFilterFactory() : FactoryBase(HttpFilterNames::get().EnvoyCache) {}
+  CacheFilterFactory();
 
 private:
   Http::FilterFactoryCb
   createFilterFactoryFromProtoTyped(const envoy::config::filter::http::cache::v2::Cache& config,
                                     const std::string& stats_prefix,
                                     Server::Configuration::FactoryContext& context) override;
+
+  Envoy::Cache::CacheSharedPtr cache_;
+  MonotonicTimeSource& time_source_;
 };
 
 } // namespace Cache
