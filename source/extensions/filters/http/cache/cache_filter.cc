@@ -38,6 +38,12 @@ Http::FilterHeadersStatus CacheFilter::decodeHeaders(Http::HeaderMap& headers, b
 }
 
 void CacheFilter::readChunkFromCache() {
+  // Don't read more from the cache if we've queued up more than one chunk already.
+  if (posted_encodings_ > 1) {
+    ++deferred_lookups_;
+    return;
+  }
+
   lookup_->read([this](Envoy::Cache::DataStatus status,
                        const Envoy::Cache::Value& value) -> Envoy::Cache::ReceiverStatus {
     switch (status) {
@@ -46,38 +52,46 @@ void CacheFilter::readChunkFromCache() {
       FALLTHRU;
     case Envoy::Cache::DataStatus::Error:
     case Envoy::Cache::DataStatus::InsertInProgress:
-      decoder_callbacks_->continueDecoding();
-      return Envoy::Cache::ReceiverStatus::Ok;
+      decoder_callbacks_->dispatcher().post([this]() { decoder_callbacks_->continueDecoding(); });
+      break;
     case Envoy::Cache::DataStatus::ChunksImminent:
-    case Envoy::Cache::DataStatus::ChunksPending: {
-      Envoy::Cache::ReceiverStatus status = sendDataDownstream(value, false);
+    case Envoy::Cache::DataStatus::ChunksPending:
+      sendDataDownstream(value, false);
       readChunkFromCache();
-      return status;
+      break;
+    case Envoy::Cache::DataStatus::LastChunk:
+      sendDataDownstream(value, true);
+      break;
     }
-    case Envoy::Cache::DataStatus::LastChunk: {
-      return sendDataDownstream(value, true);
-    }
-    }
+    return Envoy::Cache::ReceiverStatus::Ok;
   });
 }
 
-Envoy::Cache::ReceiverStatus CacheFilter::sendDataDownstream(const Envoy::Cache::Value& value,
-                                                             bool end_stream) {
+void CacheFilter::sendDataDownstream(const Envoy::Cache::Value& value, bool end_stream) {
   // TODO(jmarantz): think about avoiding this string copy, possibly
   // by using Buffer::Instance as part of Envoy::Cache::ValueStruct
   // rather tha a std::string. The drawback is that for an in-memory
   // cache, we'd have to copy the data anyway as downstream filters
   // might mutate the buffer during encoding.
-  Buffer::OwnedImpl data(value->value_);
-  switch (encodeData(data, end_stream)) {
-  case Http::FilterDataStatus::Continue:
-    return Envoy::Cache::ReceiverStatus::Ok;
-  case Http::FilterDataStatus::StopIterationAndBuffer:
-  case Http::FilterDataStatus::StopIterationAndWatermark:
-  case Http::FilterDataStatus::StopIterationNoBuffer:
-    break;
-  }
-  return Envoy::Cache::ReceiverStatus::Invalid;
+  ++posted_encodings_;
+  decoder_callbacks_->dispatcher().post([this, value, end_stream]() {
+    Buffer::OwnedImpl data(value->value_);
+    switch (encodeData(data, end_stream)) {
+    case Http::FilterDataStatus::Continue:
+      break;
+    case Http::FilterDataStatus::StopIterationAndBuffer:
+    case Http::FilterDataStatus::StopIterationAndWatermark:
+    case Http::FilterDataStatus::StopIterationNoBuffer:
+      // signal
+      break;
+    }
+    --posted_encodings_;
+    if ((deferred_lookups_ > 0) && (posted_encodings_ <= 1)) {
+      --deferred_lookups_;
+      ASSERT(!end_stream);
+      readChunkFromCache();
+    }
+  });
 }
 
 Http::FilterHeadersStatus CacheFilter::encodeHeaders(Http::HeaderMap& headers, bool end_stream) {

@@ -31,31 +31,7 @@ protected:
   }
 
   // CacheFilter private member functions
-  void sanitizeEtagHeader(Http::HeaderMap& headers) { filter_->sanitizeEtagHeader(headers); }
-
-  void insertVaryHeader(Http::HeaderMap& headers) { filter_->insertVaryHeader(headers); }
-
-  bool isContentTypeAllowed(Http::HeaderMap& headers) {
-    return filter_->isContentTypeAllowed(headers);
-  }
-
-  bool isEtagAllowed(Http::HeaderMap& headers) { return filter_->isEtagAllowed(headers); }
-
-  bool hasCacheControlNoTransform(Http::HeaderMap& headers) {
-    return filter_->hasCacheControlNoTransform(headers);
-  }
-
-  bool isAcceptEncodingAllowed(Http::HeaderMap& headers) {
-    return filter_->isAcceptEncodingAllowed(headers);
-  }
-
-  bool isMinimumContentLength(Http::HeaderMap& headers) {
-    return filter_->isMinimumContentLength(headers);
-  }
-
-  bool isTransferEncodingAllowed(Http::HeaderMap& headers) {
-    return filter_->isTransferEncodingAllowed(headers);
-  }
+  //...
 
   // CacheFilterTest Helpers
   void setUpFilter(std::string&& json) {

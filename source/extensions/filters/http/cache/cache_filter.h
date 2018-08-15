@@ -96,7 +96,9 @@ public:
   }
   Http::FilterHeadersStatus encodeHeaders(Http::HeaderMap& headers, bool end_stream) override;
   Http::FilterDataStatus encodeData(Buffer::Instance& buffer, bool end_stream) override;
-  Http::FilterTrailersStatus encodeTrailers(Http::HeaderMap&) override;
+  Http::FilterTrailersStatus encodeTrailers(Http::HeaderMap&) override {
+    return Http::FilterTrailersStatus::Continue;
+  }
   void setEncoderFilterCallbacks(Http::StreamEncoderFilterCallbacks& callbacks) override {
     encoder_callbacks_ = &callbacks;
   }
@@ -109,7 +111,7 @@ private:
   bool isCacheableRequest(Http::HeaderMap& headers) const;
   bool isCacheableResponse(Http::HeaderMap& headers) const;
   void readChunkFromCache();
-  Envoy::Cache::ReceiverStatus sendDataDownstream(const Envoy::Cache::Value& value, bool end_stream);
+  void sendDataDownstream(const Envoy::Cache::Value& value, bool end_stream);
   std::string serializeHeaders(Http::HeaderMap& headers);
   void readyForNextInsertionChunk(bool ok);
   void writeChunk(std::string&& chunk);
@@ -143,6 +145,8 @@ private:
   Envoy::Cache::LookupContextPtr lookup_;
   Envoy::Cache::InsertContextPtr insert_;
   std::queue<std::string> buffer_;
+  std::atomic<uint32_t> posted_encodings_{0};
+  std::atomic<uint32_t> deferred_lookups_{0};
 };
 
 } // namespace Cache
