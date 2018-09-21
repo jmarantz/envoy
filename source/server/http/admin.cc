@@ -340,6 +340,12 @@ void AdminImpl::writeClustersAsJson(Buffer::Instance& response) {
   response.add(MessageUtil::getJsonStringFromMessage(clusters, true)); // pretty-print
 }
 
+void AdminImpl::sortStatValues(StatValueVector& stats) {
+  std::sort(stats.begin(), stats.end(), [](const StatValue& a, const StatValue& b) -> bool {
+    return a.first->name() < b.first->name();
+  });
+}
+
 void AdminImpl::writeClustersAsText(Buffer::Instance& response) {
   for (auto& cluster : server_.clusterManager().clusters()) {
     addOutlierInfo(cluster.second.get().info()->name(), cluster.second.get().outlierDetector(),
@@ -357,18 +363,19 @@ void AdminImpl::writeClustersAsText(Buffer::Instance& response) {
                              cluster.second.get().info()->addedViaApi()));
     for (auto& host_set : cluster.second.get().prioritySet().hostSetsPerPriority()) {
       for (auto& host : host_set->hosts()) {
-        std::map<std::string, uint64_t> all_stats;
+        StatValueVector all_stats; //(host->counters().size() + host->gauges().size());
         for (const Stats::CounterSharedPtr& counter : host->counters()) {
-          all_stats[counter->name()] = counter->value();
+          all_stats.push_back(StatValue(counter.get(), counter->value()));
         }
 
         for (const Stats::GaugeSharedPtr& gauge : host->gauges()) {
-          all_stats[gauge->name()] = gauge->value();
+          all_stats.push_back(StatValue(gauge.get(), gauge->value()));
         }
+        sortStatValues(all_stats);
 
         for (auto stat : all_stats) {
           response.add(fmt::format("{}::{}::{}::{}\n", cluster.second.get().info()->name(),
-                                   host->address()->asString(), stat.first, stat.second));
+                                   host->address()->asString(), stat.first->name(), stat.second));
         }
 
         response.add(fmt::format("{}::{}::health_flags::{}\n", cluster.second.get().info()->name(),
@@ -538,18 +545,19 @@ Http::Code AdminImpl::handlerStats(absl::string_view url, Http::HeaderMap& respo
           ? absl::optional<std::regex>{std::regex(params.at("filter"))}
           : absl::nullopt;
 
-  std::map<std::string, uint64_t> all_stats;
+  StatValueVector all_stats;
   for (const Stats::CounterSharedPtr& counter : server_.stats().counters()) {
     if (shouldShowMetric(counter, used_only, regex)) {
-      all_stats.emplace(counter->name(), counter->value());
+      all_stats.push_back(StatValue(counter.get(), counter->value()));
     }
   }
 
   for (const Stats::GaugeSharedPtr& gauge : server_.stats().gauges()) {
     if (shouldShowMetric(gauge, used_only, regex)) {
-      all_stats.emplace(gauge->name(), gauge->value());
+      all_stats.push_back(StatValue(gauge.get(), gauge->value()));
     }
   }
+  sortStatValues(all_stats);
 
   if (has_format) {
     const std::string format_value = params.at("format");
@@ -567,7 +575,7 @@ Http::Code AdminImpl::handlerStats(absl::string_view url, Http::HeaderMap& respo
     }
   } else { // Display plain stats if format query param is not there.
     for (auto stat : all_stats) {
-      response.add(fmt::format("{}: {}\n", stat.first, stat.second));
+      response.add(fmt::format("{}: {}\n", stat.first->name(), stat.second));
     }
     // TOOD(ramaraochavali): See the comment in ThreadLocalStoreImpl::histograms() for why we use a
     // multimap here. This makes sure that duplicate histograms get output. When shared storage is
@@ -643,7 +651,7 @@ PrometheusStatsFormatter::statsAsPrometheus(const std::vector<Stats::CounterShar
 }
 
 std::string
-AdminImpl::statsAsJson(const std::map<std::string, uint64_t>& all_stats,
+AdminImpl::statsAsJson(const StatValueVector& all_stats,
                        const std::vector<Stats::ParentHistogramSharedPtr>& all_histograms,
                        const bool used_only, const absl::optional<std::regex> regex,
                        const bool pretty_print) {
@@ -655,7 +663,7 @@ AdminImpl::statsAsJson(const std::map<std::string, uint64_t>& all_stats,
     Value stat_obj;
     stat_obj.SetObject();
     Value stat_name;
-    stat_name.SetString(stat.first.c_str(), allocator);
+    stat_name.SetString(stat.first->name().c_str(), allocator);
     stat_obj.AddMember("name", stat_name, allocator);
     Value stat_value;
     stat_value.SetInt(stat.second);

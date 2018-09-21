@@ -51,11 +51,10 @@ public:
     store_->addSink(sink_);
   }
 
-  static std::string
-  statsAsJsonHandler(std::map<std::string, uint64_t>& all_stats,
-                     const std::vector<Stats::ParentHistogramSharedPtr>& all_histograms,
-                     const bool used_only, const absl::optional<std::regex> regex = absl::nullopt) {
-    return AdminImpl::statsAsJson(all_stats, all_histograms, used_only, regex,
+  std::string statsAsJsonHandler(const std::vector<Stats::ParentHistogramSharedPtr>& all_histograms,
+                                 const bool used_only,
+                                 const absl::optional<std::regex> regex = absl::nullopt) {
+    return AdminImpl::statsAsJson(all_stats_, all_histograms, used_only, regex,
                                   true /*pretty_print*/);
   }
 
@@ -65,6 +64,7 @@ public:
   Stats::MockedTestAllocator alloc_;
   Stats::MockSink sink_;
   std::unique_ptr<Stats::ThreadLocalStoreImpl> store_;
+  AdminImpl::StatValueVector all_stats_;
 };
 
 class AdminFilterTest : public testing::TestWithParam<Network::Address::IpVersion> {
@@ -115,9 +115,7 @@ TEST_P(AdminStatsTest, StatsAsJson) {
 
   EXPECT_CALL(alloc_, free(_));
 
-  std::map<std::string, uint64_t> all_stats;
-
-  std::string actual_json = statsAsJsonHandler(all_stats, store_->histograms(), false);
+  std::string actual_json = statsAsJsonHandler(store_->histograms(), false);
 
   const std::string expected_json = R"EOF({
     "stats": [
@@ -260,9 +258,7 @@ TEST_P(AdminStatsTest, UsedOnlyStatsAsJson) {
 
   EXPECT_CALL(alloc_, free(_));
 
-  std::map<std::string, uint64_t> all_stats;
-
-  std::string actual_json = statsAsJsonHandler(all_stats, store_->histograms(), true);
+  std::string actual_json = statsAsJsonHandler(store_->histograms(), true);
 
   // Expected JSON should not have h2 values as it is not used.
   const std::string expected_json = R"EOF({
@@ -361,9 +357,7 @@ TEST_P(AdminStatsTest, StatsAsJsonFilterString) {
 
   EXPECT_CALL(alloc_, free(_));
 
-  std::map<std::string, uint64_t> all_stats;
-
-  std::string actual_json = statsAsJsonHandler(all_stats, store_->histograms(), false,
+  std::string actual_json = statsAsJsonHandler(store_->histograms(), false,
                                                absl::optional<std::regex>{std::regex("[a-z]1")});
 
   // Because this is a filter case, we don't expect to see any stats except for those containing
@@ -470,9 +464,7 @@ TEST_P(AdminStatsTest, UsedOnlyStatsAsJsonFilterString) {
 
   EXPECT_CALL(alloc_, free(_));
 
-  std::map<std::string, uint64_t> all_stats;
-
-  std::string actual_json = statsAsJsonHandler(all_stats, store_->histograms(), true,
+  std::string actual_json = statsAsJsonHandler(store_->histograms(), true,
                                                absl::optional<std::regex>{std::regex("h[12]")});
 
   // Expected JSON should not have h2 values as it is not used, and should not have h3 values as
