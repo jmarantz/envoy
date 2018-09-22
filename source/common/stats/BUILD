@@ -126,6 +126,7 @@ envoy_cc_library(
     hdrs = ["symbol_table_impl.h"],
     external_deps = ["abseil_base"],
     deps = [
+        "//include/envoy/stats:stats_interface",
         "//source/common/common:assert_lib",
         "//source/common/common:hash_lib",
         "//source/common/common:lock_guard_lib",

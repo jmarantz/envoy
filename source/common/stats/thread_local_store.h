@@ -213,8 +213,8 @@ public:
   const Stats::StatsOptions& statsOptions() const override { return stats_options_; }
 
 private:
-  template<class Stat>
-  using StatSet = std::unordered_set<Stat, StatPtrHash<Stat>, StatPtrCompare<Stat>>;
+  //template<class Stat>
+  //using StatSet = std::unordered_set<Stat, StatPtrHash<Stat>, StatPtrCompare<Stat>>;
 
   template<class Stat>
   using StatMap = std::unordered_map<StatNamePtr, Stat, StatNameUniquePtrHash,

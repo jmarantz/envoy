@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "envoy/common/exception.h"
+#include "envoy/stats/stat_name_ref.h"
 
 #include "common/common/assert.h"
 #include "common/common/hash.h"
@@ -157,6 +158,22 @@ private:
   SymbolVec symbol_vec_;
 };
 
+class SymbolStatNameRef : public StatNameRef {
+ public:
+  SymbolStatNameRef(const StatName& name) : name_(name) {}
+  uint64_t hash() const { return name_.hash(); }
+  bool operator==(StatNameRef& that) const {
+    SymbolStatNameRef* ref = dynamic_cast<SymbolStatNameRef*>(&that);
+    if (ref == nullptr) {
+      return false;
+    }
+    return ref->name_ == name_;
+  }
+
+ private:
+  const StatName& name_;
+};
+
 struct StatNamePtrHash {
   size_t operator()(const StatName* a) const { return a->hash(); }
 };
@@ -167,7 +184,7 @@ struct StatNamePtrCompare {
   }
 };
 
-struct StatNameRefHash {
+/*struct StatNameRefHash {
   size_t operator()(const StatName& a) const { return a.hash(); }
 };
 
@@ -176,7 +193,7 @@ struct StatNameRefCompare {
     // This extracts the underlying statnames.
     return a == b;
   }
-};
+  };*/
 
 struct StatNameUniquePtrHash {
   size_t operator()(const StatNamePtr& a) const { return a.hash(); }
