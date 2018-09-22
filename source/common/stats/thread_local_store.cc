@@ -36,13 +36,17 @@ ThreadLocalStoreImpl::~ThreadLocalStoreImpl() {
 std::vector<CounterSharedPtr> ThreadLocalStoreImpl::counters() const {
   // Handle de-dup due to overlapping scopes.
   std::vector<CounterSharedPtr> ret;
-  std::unordered_set<StatName*, StatNamePtrHash, StatNamePtrCompare> names;
+  std::unordered_set<const StatName*, StatNamePtrHash, StatNamePtrCompare> names;
+  //StatSet<CounterSharedPtr> names;
   Thread::LockGuard lock(lock_);
   for (ScopeImpl* scope : scopes_) {
     for (auto& counter : scope->central_cache_.counters_) {
-      if (names.insert(counter.first.get()).second) {
+      if (names.insert(&counter.first).second) {
         ret.push_back(counter.second);
       }
+      // if (names.insert(counter).second) {
+      //   ret.push_back(counter);
+      // }
     }
   }
 
@@ -59,13 +63,17 @@ ScopePtr ThreadLocalStoreImpl::createScope(const std::string& name) {
 std::vector<GaugeSharedPtr> ThreadLocalStoreImpl::gauges() const {
   // Handle de-dup due to overlapping scopes.
   std::vector<GaugeSharedPtr> ret;
-  std::unordered_set<StatName*, StatNamePtrHash, StatNamePtrCompare> names;
+  std::unordered_set<const StatName*, StatNamePtrHash, StatNamePtrCompare> names;
+  //StatSet<GaugeSharedPtr> names;
   Thread::LockGuard lock(lock_);
   for (ScopeImpl* scope : scopes_) {
     for (auto& gauge : scope->central_cache_.gauges_) {
-      if (names.insert(gauge.first.get()).second) {
+      if (names.insert(&gauge.first).second) {
         ret.push_back(gauge.second);
       }
+      //      if (names.insert(gauge).second) {
+      //        ret.push_back(gauge);
+      //      }
     }
   }
 
@@ -190,20 +198,19 @@ ThreadLocalStoreImpl::ScopeImpl::~ScopeImpl() { parent_.releaseScopeCrossThread(
 template <class StatType>
 StatType& ThreadLocalStoreImpl::ScopeImpl::safeMakeStat(
     const std::string& name,
-    std::unordered_map<StatNamePtr, std::shared_ptr<StatType>, StatNameUniquePtrHash,
-                       StatNameUniquePtrCompare>& central_cache_map,
-    MakeStatFn<StatType> make_stat, std::shared_ptr<StatType>* tls_ref) {
+    StatMap<StatType>& central_cache_map,
+    MakeStatFn<StatType> make_stat, StatType* tls_ref) {
 
   // If we have a valid cache entry, return it.
   if (tls_ref && *tls_ref) {
-    return **tls_ref;
+    return *tls_ref;
   }
 
   // We must now look in the central store so we must be locked. We grab a reference to the
   // central store location. It might contain nothing. In this case, we allocate a new stat.
   Thread::LockGuard lock(parent_.lock_);
   StatNamePtr stat_name_ptr = parent_.heap_allocator_.encode(name);
-  std::shared_ptr<StatType>& central_ref = central_cache_map[std::move(stat_name_ptr)];
+  StatType& central_ref = central_cache_map[std::move(stat_name_ptr)];
   if (!central_ref) {
     std::vector<Tag> tags;
 
@@ -211,7 +218,7 @@ StatType& ThreadLocalStoreImpl::ScopeImpl::safeMakeStat(
     // can complete properly, even if the tag values are partially truncated.
     std::string tag_extracted_name = parent_.getTagsForName(name, tags);
     absl::string_view truncated_name = parent_.truncateStatNameIfNeeded(name);
-    std::shared_ptr<StatType> stat =
+    StatType stat =
         make_stat(parent_.alloc_, truncated_name, std::move(tag_extracted_name), std::move(tags));
     if (stat == nullptr) {
       parent_.num_last_resort_stats_.inc();
@@ -228,7 +235,7 @@ StatType& ThreadLocalStoreImpl::ScopeImpl::safeMakeStat(
   }
 
   // Finally we return the reference.
-  return *central_ref;
+  return central_ref;
 }
 
 Counter& ThreadLocalStoreImpl::ScopeImpl::counter(const std::string& name) {
@@ -248,7 +255,7 @@ Counter& ThreadLocalStoreImpl::ScopeImpl::counter(const std::string& name) {
   }
   lock.release();
 
-  return safeMakeStat<Counter>(
+  return *safeMakeStat<CounterSharedPtr>(
       final_name, central_cache_.counters_,
       [](StatDataAllocator& allocator, absl::string_view name, std::string&& tag_extracted_name,
          std::vector<Tag>&& tags) -> CounterSharedPtr {
@@ -287,7 +294,7 @@ Gauge& ThreadLocalStoreImpl::ScopeImpl::gauge(const std::string& name) {
   }
   lock.release();
 
-  return safeMakeStat<Gauge>(
+  return *safeMakeStat<GaugeSharedPtr>(
       final_name, central_cache_.gauges_,
       [](StatDataAllocator& allocator, absl::string_view name, std::string&& tag_extracted_name,
          std::vector<Tag>&& tags) -> GaugeSharedPtr {

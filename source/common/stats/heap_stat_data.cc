@@ -39,8 +39,14 @@ void HeapStatDataAllocator::free(HeapStatData& data) {
     size_t key_removed = stats_.erase(&data);
     ASSERT(key_removed == 1);
   }
+  data.name_ptr_.free(table_);
 
   delete &data;
+}
+
+std::string HeapStatData::name(SymbolTable* symbol_table) const {
+  ASSERT(symbol_table);
+  return name_ptr_.toString(*symbol_table);
 }
 
 template class StatDataAllocatorImpl<HeapStatData>;

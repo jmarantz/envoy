@@ -23,6 +23,8 @@
 namespace Envoy {
 namespace Stats {
 
+class RawStatDataAllocator;
+
 /**
  * This structure is the backing memory for both CounterImpl and GaugeImpl. It is designed so that
  * it can be allocated from shared memory if needed.
@@ -77,7 +79,7 @@ struct RawStatData {
   /**
    * Returns the name as a std::string.
    */
-  std::string name() const { return std::string(name_); }
+  std::string name(SymbolTable*) const { return std::string(name_); }
 
   std::atomic<uint64_t> value_;
   std::atomic<uint64_t> pending_increment_;
@@ -91,7 +93,9 @@ class RawStatDataAllocator : public StatDataAllocatorImpl<RawStatData> {
 public:
   // StatDataAllocator
   bool requiresBoundedStatNameSize() const override { return true; }
+  SymbolTable* symbolTable() override { return nullptr; }
 };
+
 
 } // namespace Stats
 } // namespace Envoy

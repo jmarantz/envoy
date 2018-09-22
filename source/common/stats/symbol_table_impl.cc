@@ -19,7 +19,7 @@ StatNamePtr SymbolTable::encode(const absl::string_view name) {
   Thread::LockGuard lock(lock_);
   std::transform(name_vec.begin(), name_vec.end(), std::back_inserter(symbol_vec),
                  [this](absl::string_view x) { return toSymbol(x); });
-  return std::make_unique<StatName>(symbol_vec, *this);
+  return StatName(symbol_vec); // std::make_unique<StatName>(symbol_vec/*, *this*/);
 }
 
 std::string SymbolTable::decode(const SymbolVec& symbol_vec) const {

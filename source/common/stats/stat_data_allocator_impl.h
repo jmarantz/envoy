@@ -8,6 +8,7 @@
 
 #include "common/common/assert.h"
 #include "common/stats/metric_impl.h"
+#include "common/stats/symbol_table_impl.h"
 
 #include "absl/strings/string_view.h"
 
@@ -50,6 +51,8 @@ public:
    * @param data the data returned by alloc().
    */
   virtual void free(StatData& data) PURE;
+
+  virtual SymbolTable* symbolTable() PURE;
 };
 
 /**
@@ -67,7 +70,8 @@ public:
   ~CounterImpl() { alloc_.free(data_); }
 
   // Stats::Metric
-  const std::string name() const override { return data_.name(); }
+  const std::string name() const override { return data_.name(alloc_.symbolTable()); }
+  //const StatName& nameRef() const override { return data_.nameRef(); }
 
   // Stats::Counter
   void add(uint64_t amount) override {
@@ -98,7 +102,8 @@ public:
   ~GaugeImpl() { alloc_.free(data_); }
 
   // Stats::Metric
-  const std::string name() const override { return data_.name(); }
+  const std::string name() const override { return data_.name(alloc_.symbolTable()); }
+  //const StatName& nameRef() const override { return data_.nameRef(); }
 
   // Stats::Gauge
   virtual void add(uint64_t amount) override {

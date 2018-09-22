@@ -14,6 +14,8 @@
 namespace Envoy {
 namespace Stats {
 
+class HeapStatDataAllocator;
+
 /**
  * This structure is an alternate backing store for both CounterImpl and GaugeImpl. It is designed
  * so that it can be allocated efficiently from the heap on demand.
@@ -24,15 +26,16 @@ struct HeapStatData {
   /**
    * @returns std::string the name as a std::string with no truncation.
    */
-  std::string name() const { return name_ptr_->toString(); }
+  std::string name(SymbolTable* symbol_table) const;
+  //const StatName& nameRef() const { return name_ptr; }
 
-  bool operator==(const HeapStatData& rhs) const { return *name_ptr_ == *rhs.name_ptr_; }
+  bool operator==(const HeapStatData& rhs) const { return name_ptr_ == rhs.name_ptr_; }
 
   std::atomic<uint64_t> value_{0};
   std::atomic<uint64_t> pending_increment_{0};
   std::atomic<uint16_t> flags_{0};
   std::atomic<uint16_t> ref_count_{1};
-  StatNamePtr name_ptr_;
+  StatName name_ptr_;
 };
 
 /**
@@ -53,10 +56,13 @@ public:
 
   // SymbolTable
   StatNamePtr encode(absl::string_view sv) { return table_.encode(sv); }
+  SymbolTable* symbolTable() override { return &table_; }
 
 private:
+  friend HeapStatData;
+
   struct HeapStatHash {
-    size_t operator()(const HeapStatData* a) const { return a->name_ptr_->hash(); }
+    size_t operator()(const HeapStatData* a) const { return a->name_ptr_.hash(); }
   };
   struct HeapStatCompare {
     bool operator()(const HeapStatData* a, const HeapStatData* b) const { return *a == *b; }

@@ -10,6 +10,7 @@
 
 #include "envoy/thread_local/thread_local.h"
 
+#include "common/common/utility.h"
 #include "common/stats/heap_stat_data.h"
 #include "common/stats/histogram_impl.h"
 #include "common/stats/source_impl.h"
@@ -212,12 +213,16 @@ public:
   const Stats::StatsOptions& statsOptions() const override { return stats_options_; }
 
 private:
+  template<class Stat>
+  using StatSet = std::unordered_set<Stat, StatPtrHash<Stat>, StatPtrCompare<Stat>>;
+
+  template<class Stat>
+  using StatMap = std::unordered_map<StatNamePtr, Stat, StatNameUniquePtrHash,
+                                     StatNameUniquePtrCompare>;
+
   struct TlsCacheEntry {
-    std::unordered_map<StatNamePtr, CounterSharedPtr, StatNameUniquePtrHash,
-                       StatNameUniquePtrCompare>
-        counters_;
-    std::unordered_map<StatNamePtr, GaugeSharedPtr, StatNameUniquePtrHash, StatNameUniquePtrCompare>
-        gauges_;
+    StatMap<CounterSharedPtr> counters_;
+    StatMap<GaugeSharedPtr> gauges_;
     std::unordered_map<StatNamePtr, TlsHistogramSharedPtr, StatNameUniquePtrHash,
                        StatNameUniquePtrCompare>
         histograms_;
@@ -227,11 +232,8 @@ private:
   };
 
   struct CentralCacheEntry {
-    std::unordered_map<StatNamePtr, CounterSharedPtr, StatNameUniquePtrHash,
-                       StatNameUniquePtrCompare>
-        counters_;
-    std::unordered_map<StatNamePtr, GaugeSharedPtr, StatNameUniquePtrHash, StatNameUniquePtrCompare>
-        gauges_;
+    StatMap<CounterSharedPtr> counters_;
+    StatMap<GaugeSharedPtr> gauges_;
     std::unordered_map<StatNamePtr, ParentHistogramImplSharedPtr, StatNameUniquePtrHash,
                        StatNameUniquePtrCompare>
         histograms_;
@@ -256,9 +258,9 @@ private:
 
     template <class StatType>
     using MakeStatFn =
-        std::function<std::shared_ptr<StatType>(StatDataAllocator&, absl::string_view name,
-                                                std::string&& tag_extracted_name,
-                                                std::vector<Tag>&& tags)>;
+        std::function<StatType(StatDataAllocator&, absl::string_view name,
+                               std::string&& tag_extracted_name,
+                               std::vector<Tag>&& tags)>;
 
     /**
      * Makes a stat either by looking it up in the central cache,
@@ -274,10 +276,8 @@ private:
     template <class StatType>
     StatType&
     safeMakeStat(const std::string& name,
-                 std::unordered_map<StatNamePtr, std::shared_ptr<StatType>, StatNameUniquePtrHash,
-                                    StatNameUniquePtrCompare>& central_cache_map,
-                 MakeStatFn<StatType> make_stat, std::shared_ptr<StatType>* tls_ref);
-
+                 StatMap<StatType>& central_cache_map,
+                 MakeStatFn<StatType> make_stat, StatType* tls_ref);
     static std::atomic<uint64_t> next_scope_id_;
 
     const uint64_t scope_id_;

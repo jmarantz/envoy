@@ -7,6 +7,8 @@
 
 #include "envoy/common/pure.h"
 
+#include "common/common/hash.h"
+
 #include "absl/strings/string_view.h"
 
 namespace Envoy {
@@ -24,6 +26,11 @@ public:
    * Returns the full name of the Metric.
    */
   virtual const std::string name() const PURE;
+
+  /**
+   * Returns a reference to the StatName.
+   */
+  //virtual const StatName& nameRef() const PURE;
 
   /**
    * Returns a vector of configurable tags to identify this Metric.
@@ -74,6 +81,17 @@ public:
 };
 
 typedef std::shared_ptr<Gauge> GaugeSharedPtr;
+
+template<class StatPtr>
+struct StatPtrHash {
+  size_t operator()(const StatPtr& a) const { return HashUtil::xxHash64(a->name()); }
+};
+
+template<class StatPtr>
+struct StatPtrCompare {
+  size_t operator()(const StatPtr& a, const StatPtr& b) const { return a->name() == b->name(); }
+};
+
 
 } // namespace Stats
 } // namespace Envoy

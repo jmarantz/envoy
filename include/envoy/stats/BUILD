@@ -24,7 +24,10 @@ envoy_cc_library(
         "tag_extractor.h",
         "tag_producer.h",
     ],
-    deps = ["//include/envoy/common:interval_set_interface"],
+    deps = [
+        "//include/envoy/common:interval_set_interface",
+        "//source/common/common:hash_lib",
+    ],
 )
 
 envoy_cc_library(

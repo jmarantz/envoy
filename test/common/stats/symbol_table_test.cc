@@ -12,7 +12,7 @@ namespace Stats {
 
 class StatNameTest : public testing::Test {
 protected:
-  SymbolVec getSymbols(StatName* stat_name_ptr) { return stat_name_ptr->symbolVec(); }
+  SymbolVec getSymbols(StatName& stat_name) { return stat_name.symbolVec(); }
   std::string decodeSymbolVec(const SymbolVec& symbol_vec) { return table_.decode(symbol_vec); }
   Symbol monotonicCounter() { return table_.monotonicCounter(); }
 
@@ -22,7 +22,7 @@ protected:
 TEST_F(StatNameTest, TestArbitrarySymbolRoundtrip) {
   const std::vector<std::string> stat_names = {"", " ", "  ", ",", "\t", "$", "%", "`", "."};
   for (auto stat_name : stat_names) {
-    EXPECT_EQ(stat_name, table_.encode(stat_name)->toString());
+    EXPECT_EQ(stat_name, table_.encode(stat_name).toString(table_));
   }
 }
 
@@ -30,22 +30,22 @@ TEST_F(StatNameTest, TestUnusualDelimitersRoundtrip) {
   const std::vector<std::string> stat_names = {".",    "..",    "...",    "foo",    "foo.",
                                                ".foo", ".foo.", ".foo..", "..foo.", "..foo.."};
   for (auto stat_name : stat_names) {
-    EXPECT_EQ(stat_name, table_.encode(stat_name)->toString());
+    EXPECT_EQ(stat_name, table_.encode(stat_name).toString(table_));
   }
 }
 
 TEST_F(StatNameTest, TestSuccessfulDoubleLookup) {
   StatNamePtr stat_name_1 = table_.encode("foo.bar.baz");
   StatNamePtr stat_name_2 = table_.encode("foo.bar.baz");
-  EXPECT_EQ(getSymbols(stat_name_1.get()), getSymbols(stat_name_2.get()));
+  EXPECT_EQ(getSymbols(stat_name_1), getSymbols(stat_name_2));
 }
 
 TEST_F(StatNameTest, TestSuccessfulDecode) {
   std::string stat_name = "foo.bar.baz";
   auto stat_name_1 = table_.encode(stat_name);
   auto stat_name_2 = table_.encode(stat_name);
-  EXPECT_EQ(stat_name_1->toString(), stat_name_2->toString());
-  EXPECT_EQ(stat_name_1->toString(), stat_name);
+  EXPECT_EQ(stat_name_1.toString(table_), stat_name_2.toString(table_));
+  EXPECT_EQ(stat_name_1.toString(table_), stat_name);
 }
 
 TEST_F(StatNameTest, TestBadDecodes) {
@@ -57,10 +57,10 @@ TEST_F(StatNameTest, TestBadDecodes) {
 
   {
     StatNamePtr stat_name_1 = table_.encode("foo");
-    SymbolVec vec_1 = getSymbols(stat_name_1.get());
+    SymbolVec vec_1 = getSymbols(stat_name_1);
     // Decoding a symbol vec that exists is perfectly normal...
     EXPECT_NO_THROW(decodeSymbolVec(vec_1));
-    stat_name_1.reset();
+    stat_name_1.free(table_);
     // But when the StatNamePtr is destroyed, its symbols are as well.
     EXPECT_DEATH(decodeSymbolVec(vec_1), "");
   }
@@ -69,16 +69,16 @@ TEST_F(StatNameTest, TestBadDecodes) {
 TEST_F(StatNameTest, TestDifferentStats) {
   auto stat_name_1 = table_.encode("foo.bar");
   auto stat_name_2 = table_.encode("bar.foo");
-  EXPECT_NE(stat_name_1->toString(), stat_name_2->toString());
-  EXPECT_NE(getSymbols(stat_name_1.get()), getSymbols(stat_name_2.get()));
+  EXPECT_NE(stat_name_1.toString(table_), stat_name_2.toString(table_));
+  EXPECT_NE(getSymbols(stat_name_1), getSymbols(stat_name_2));
 }
 
 TEST_F(StatNameTest, TestSymbolConsistency) {
   auto stat_name_1 = table_.encode("foo.bar");
   auto stat_name_2 = table_.encode("bar.foo");
   // We expect the encoding of "foo" in one context to be the same as another.
-  SymbolVec vec_1 = getSymbols(stat_name_1.get());
-  SymbolVec vec_2 = getSymbols(stat_name_2.get());
+  SymbolVec vec_1 = getSymbols(stat_name_1);
+  SymbolVec vec_2 = getSymbols(stat_name_2);
   EXPECT_EQ(vec_1[0], vec_2[1]);
   EXPECT_EQ(vec_2[0], vec_1[1]);
 }
@@ -88,11 +88,11 @@ TEST_F(StatNameTest, TestSameValueOnPartialFree) {
   // freed, we expect both instances of "foo" to have the same symbol.
   StatNamePtr stat_foo = table_.encode("foo");
   StatNamePtr stat_foobar_1 = table_.encode("foo.bar");
-  SymbolVec stat_foobar_1_symbols = getSymbols(stat_foobar_1.get());
-  stat_foobar_1.reset();
+  SymbolVec stat_foobar_1_symbols = getSymbols(stat_foobar_1);
+  stat_foobar_1.free(table_);
 
   StatNamePtr stat_foobar_2 = table_.encode("foo.bar");
-  SymbolVec stat_foobar_2_symbols = getSymbols(stat_foobar_2.get());
+  SymbolVec stat_foobar_2_symbols = getSymbols(stat_foobar_2);
 
   EXPECT_EQ(stat_foobar_1_symbols[0],
             stat_foobar_2_symbols[0]); // Both "foo" components have the same symbol,
@@ -114,6 +114,11 @@ TEST_F(StatNameTest, FreePoolTest) {
     StatNamePtr stat_5 = table_.encode("5a");
     EXPECT_EQ(monotonicCounter(), 5);
     EXPECT_EQ(table_.size(), 5);
+    stat_1.free(table_);
+    stat_2.free(table_);
+    stat_3.free(table_);
+    stat_4.free(table_);
+    stat_5.free(table_);
   }
   EXPECT_EQ(monotonicCounter(), 5);
   EXPECT_EQ(table_.size(), 0);
@@ -158,22 +163,22 @@ TEST_F(StatNameTest, TestShrinkingExpectation) {
   size_t table_size_5 = table_.size();
   EXPECT_GE(table_size_5, table_size_4);
 
-  stat_ace.reset();
+  stat_ace.free(table_);
   EXPECT_EQ(table_size_4, table_.size());
 
-  stat_acd.reset();
+  stat_acd.free(table_);
   EXPECT_EQ(table_size_3, table_.size());
 
-  stat_ac.reset();
+  stat_ac.free(table_);
   EXPECT_EQ(table_size_2, table_.size());
 
-  stat_ab.reset();
+  stat_ab.free(table_);
   EXPECT_EQ(table_size_1, table_.size());
 
-  stat_aa.reset();
+  stat_aa.free(table_);
   EXPECT_EQ(table_size_1, table_.size());
 
-  stat_a.reset();
+  stat_a.free(table_);
   EXPECT_EQ(table_size_0, table_.size());
 }
 
