@@ -14,23 +14,67 @@ namespace Stats {
 // integer, if we can help it.
 StatName SymbolTable::encode(const absl::string_view name) {
   SymbolVec symbol_vec;
-  std::vector<absl::string_view> name_vec = absl::StrSplit(name, '.');
-  symbol_vec.reserve(name_vec.size());
   Thread::LockGuard lock(lock_);
-  std::transform(name_vec.begin(), name_vec.end(), std::back_inserter(symbol_vec),
-                 [this](absl::string_view x) { return toSymbol(x); });
-  return StatName(symbol_vec); // std::make_unique<StatName>(symbol_vec/*, *this*/);
+  for (absl::string_view name : absl::StrSplit(name, '.')) {
+    Symbol symbol = toSymbol(name);
+    // high-order bit of each byte indicates there is more to come.
+    do {
+      if (symbol < (1 << 7)) {
+        symbol_vec += static_cast<char>(symbol);
+      } else {
+        symbol_vec += static_cast<char>((symbol & 0x7f) | 0x80);
+      }
+      symbol >>= 7;
+    } while (symbol != 0);
+  }
+  return StatName(symbol_vec);
+}
+
+bool SymbolTable::nextChar(uint8_t c, Symbol& symbol, int& shift) {
+  uint32_t uc = static_cast<uint32_t>(c);
+  symbol |= (uc & 0x7f) << shift;
+  if ((uc & 0x80) == 0) {
+    shift = 0;
+    return true;
+  }
+  shift += 7;
+  return false;
 }
 
 std::string SymbolTable::decode(const SymbolVec& symbol_vec) const {
   std::vector<absl::string_view> name;
-  name.reserve(symbol_vec.size());
-  Thread::ReleasableLockGuard lock(lock_);
-  std::transform(symbol_vec.begin(), symbol_vec.end(), std::back_inserter(name),
-                 [this](Symbol x) { return fromSymbol(x); });
-  lock.release();
+  {
+    Thread::LockGuard lock(lock_);
+    Symbol symbol = 0;
+    int shift = 0;
+    for (uint8_t c : symbol_vec) {
+      if (nextChar(c, symbol, shift)) {
+        name.push_back(fromSymbol(symbol));
+        symbol = 0;
+      }
+    }
+  }
   return absl::StrJoin(name, ".");
 }
+
+/*std::string SymbolTable::decode(const SymbolVec& symbol_vec) const {
+  uint32_t symbol_value = 0;
+  std::vector<uint32_t> symbols;
+  std::vector<absl::string_view> name;
+  {
+    Thread::LockGuard lock(lock_);
+    for (uint8_t c : symbol_vec) {
+      uint32_t uc = static_cast<uint32_t>(c);
+      if (uc & 0x80) {
+        symbol_value |= (uc & 0x7f) << 7;
+      } else {
+        name.push_back(fromSymbol(symbol_value | uc));
+        symbol_value = 0;
+      }
+    }
+  }
+  return absl::StrJoin(name, ".");
+  }*/
 
 bool SymbolTable::compareString(const StatName& stat_name, const absl::string_view str) const {
   // TOOD(jmarantz): rather than elaboarating the string, it will be straightforward to
@@ -47,20 +91,25 @@ uint64_t SymbolTable::hash(const StatName& stat_name) const {
 
 void SymbolTable::free(const SymbolVec& symbol_vec) {
   Thread::LockGuard lock(lock_);
-  for (const Symbol symbol : symbol_vec) {
-    auto decode_search = decode_map_.find(symbol);
-    ASSERT(decode_search != decode_map_.end());
+  Symbol symbol = 0;
+  int shift = 0;
+  for (uint8_t c : symbol_vec) {
+    if (nextChar(c, symbol, shift)) {
+      auto decode_search = decode_map_.find(symbol);
+      ASSERT(decode_search != decode_map_.end());
 
-    auto encode_search = encode_map_.find(decode_search->second);
-    ASSERT(encode_search != encode_map_.end());
+      auto encode_search = encode_map_.find(decode_search->second);
+      ASSERT(encode_search != encode_map_.end());
 
-    encode_search->second.ref_count_--;
-    // If that was the last remaining client usage of the symbol, erase the the current
-    // mappings and add the now-unused symbol to the reuse pool.
-    if (encode_search->second.ref_count_ == 0) {
-      decode_map_.erase(decode_search);
-      encode_map_.erase(encode_search);
-      pool_.push(symbol);
+      encode_search->second.ref_count_--;
+      // If that was the last remaining client usage of the symbol, erase the the current
+      // mappings and add the now-unused symbol to the reuse pool.
+      if (encode_search->second.ref_count_ == 0) {
+        decode_map_.erase(decode_search);
+        encode_map_.erase(encode_search);
+        pool_.push(symbol);
+      }
+      symbol = 0;
     }
   }
 }

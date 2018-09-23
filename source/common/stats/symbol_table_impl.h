@@ -22,7 +22,7 @@ namespace Envoy {
 namespace Stats {
 
 using Symbol = uint32_t;
-using SymbolVec = std::vector<Symbol>;
+using SymbolVec = std::string;
 class StatName; // forward declaration
 //using StatNamePtr = std::unique_ptr<StatName>;
 //using StatNamePtr = StatName;
@@ -110,6 +110,8 @@ private:
     return monotonic_counter_;
   }
 
+  static bool nextChar(uint8_t c, Symbol& symbol, int& shift);
+
   // Stores the symbol to be used at next insertion. This should exist ahead of insertion time so
   // that if insertion succeeds, the value written is the correct one.
   Symbol next_symbol_ GUARDED_BY(lock_);
@@ -135,8 +137,10 @@ private:
  */
 class StatName {
 public:
-  explicit StatName(const SymbolVec& symbol_vec /*, SymbolTable& symbol_table*/)
-      : symbol_vec_(symbol_vec) /*, symbol_table_(symbol_table)*/ {}
+  explicit StatName(const SymbolVec& symbol_vec /*, SymbolTable& symbol_table*/) {
+    symbol_vec_.reserve(symbol_vec_.size());
+    symbol_vec_ = symbol_vec;
+  }
   //~StatName() { ASSERT(symbol_vec_.empty()); }  // { symbolb_table_.free(symbol_vec_); }
 
   void free(SymbolTable& symbol_table) {
@@ -147,7 +151,7 @@ public:
 
   // Returns a hash of the underlying symbol vector, since StatNames are uniquely defined by their
   // symbol vectors.
-  uint64_t hash() const { return HashUtil::hashVector(symbol_vec_); }
+  uint64_t hash() const { return HashUtil::xxHash64(symbol_vec_); }
   // Compares on the underlying symbol vectors.
   // NB: operator==(std::vector) checks size first, then compares equality for each element.
   bool operator==(const StatName& rhs) const { return symbol_vec_ == rhs.symbol_vec_; }

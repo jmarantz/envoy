@@ -26,6 +26,13 @@ TEST_F(StatNameTest, TestArbitrarySymbolRoundtrip) {
   }
 }
 
+TEST_F(StatNameTest, TestMillionSymbolsRoundtrip) {
+  for (int i = 0; i < 1*1000*1000; ++i) {
+    const std::string stat_name = absl::StrCat("symbol_", i);
+    EXPECT_EQ(stat_name, table_.encode(stat_name).toString(table_));
+  }
+}
+
 TEST_F(StatNameTest, TestUnusualDelimitersRoundtrip) {
   const std::vector<std::string> stat_names = {".",    "..",    "...",    "foo",    "foo.",
                                                ".foo", ".foo.", ".foo..", "..foo.", "..foo.."};
