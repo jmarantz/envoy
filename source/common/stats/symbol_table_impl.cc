@@ -12,11 +12,12 @@ namespace Stats {
 // TODO(ambuc): There is a possible performance optimization here for avoiding the encoding of IPs /
 // numbers if they appear in stat names. We don't want to waste time symbolizing an integer as an
 // integer, if we can help it.
-StatName SymbolTable::encode(const absl::string_view name) {
+SymbolVec SymbolTable::encode(const absl::string_view name) {
+  auto tokens = absl::StrSplit(name, '.');
   SymbolVec symbol_vec;
   Thread::LockGuard lock(lock_);
-  for (absl::string_view name : absl::StrSplit(name, '.')) {
-    Symbol symbol = toSymbol(name);
+  for (absl::string_view token : tokens) {
+    Symbol symbol = toSymbol(token);
     // high-order bit of each byte indicates there is more to come.
     do {
       if (symbol < (1 << 7)) {
@@ -27,7 +28,7 @@ StatName SymbolTable::encode(const absl::string_view name) {
       symbol >>= 7;
     } while (symbol != 0);
   }
-  return StatName(symbol_vec);
+  return symbol_vec;
 }
 
 bool SymbolTable::nextChar(uint8_t c, Symbol& symbol, int& shift) {
@@ -41,14 +42,14 @@ bool SymbolTable::nextChar(uint8_t c, Symbol& symbol, int& shift) {
   return false;
 }
 
-std::string SymbolTable::decode(const SymbolVec& symbol_vec) const {
+std::string SymbolTable::decode(const uint8_t* symbol_vec, size_t size) const {
   std::vector<absl::string_view> name;
   {
     Thread::LockGuard lock(lock_);
     Symbol symbol = 0;
     int shift = 0;
-    for (uint8_t c : symbol_vec) {
-      if (nextChar(c, symbol, shift)) {
+    for (size_t i = 0; i < size; ++i) {
+      if (nextChar(symbol_vec[i], symbol, shift)) {
         name.push_back(fromSymbol(symbol));
         symbol = 0;
       }
@@ -89,12 +90,12 @@ uint64_t SymbolTable::hash(const StatName& stat_name) const {
   return HashUtil::xxHash64(stat_name.toString(*this));
 }
 
-void SymbolTable::free(const SymbolVec& symbol_vec) {
+void SymbolTable::free(uint8_t* symbol_vec, size_t size) {
   Thread::LockGuard lock(lock_);
   Symbol symbol = 0;
   int shift = 0;
-  for (uint8_t c : symbol_vec) {
-    if (nextChar(c, symbol, shift)) {
+  for (size_t i = 0; i < size; ++i) {
+    if (nextChar(symbol_vec[i], symbol, shift)) {
       auto decode_search = decode_map_.find(symbol);
       ASSERT(decode_search != decode_map_.end());
 

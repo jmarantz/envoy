@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cstring>
 #include <memory>
 #include <stack>
 #include <string>
@@ -12,6 +13,7 @@
 #include "common/common/assert.h"
 #include "common/common/hash.h"
 #include "common/common/lock_guard.h"
+#include "common/common/non_copyable.h"
 #include "common/common/thread.h"
 #include "common/common/utility.h"
 
@@ -43,7 +45,7 @@ public:
     monotonic_counter_ = 0;
   }
 
-  StatName encode(absl::string_view name);
+  SymbolVec encode(absl::string_view name);
 
   // For testing purposes only.
   size_t size() const {
@@ -75,7 +77,7 @@ private:
    * @param symbol_vec the vector of symbols to decode.
    * @return std::string the retrieved stat name.
    */
-  std::string decode(const SymbolVec& symbol_vec) const;
+  std::string decode(const uint8_t* symbol_vec, size_t size) const;
 
   /**
    * Since SymbolTable does manual reference counting, a client of SymbolTable (such as
@@ -84,7 +86,7 @@ private:
    *
    * @param symbol_vec the vector of symbols to be freed.
    */
-  void free(const SymbolVec& symbol_vec);
+  void free(uint8_t* symbol_vec, size_t size);
 
   /**
    * Convenience function for encode(), symbolizing one string segment at a time.
@@ -135,33 +137,53 @@ private:
  * Implements RAII for Symbols, since the StatName destructor does the work of freeing its component
  * symbols.
  */
-class StatName {
+class StatName : public NonCopyable {
 public:
-  explicit StatName(const SymbolVec& symbol_vec /*, SymbolTable& symbol_table*/) {
-    symbol_vec_.reserve(symbol_vec_.size());
-    symbol_vec_ = symbol_vec;
+  explicit StatName(const SymbolVec& symbol_vec) {
+    size_t size = symbol_vec.size();
+    ASSERT(size < 65536);
+    symbol_vec_ = new uint8_t[symbol_vec.size() + 2];
+    symbol_vec_[0] = size & 0xff;
+    symbol_vec_[1] = size >> 8;
+    memcpy(data(), symbol_vec.data(), size * sizeof(uint8_t));
   }
+
+  ~StatName() {
+    delete [] symbol_vec_;
+  }
+
   //~StatName() { ASSERT(symbol_vec_.empty()); }  // { symbolb_table_.free(symbol_vec_); }
 
-  void free(SymbolTable& symbol_table) {
-    symbol_table.free(symbol_vec_);
-    symbol_vec_.clear();
+  size_t size() const {
+    return symbol_vec_[0] | (static_cast<size_t>(symbol_vec_[1]) << 8);
   }
-  std::string toString(const SymbolTable& table) const { return table.decode(symbol_vec_); }
+
+  uint8_t* data() { return symbol_vec_ + 2; }
+  const uint8_t* data() const { return symbol_vec_ + 2; }
+
+  void free(SymbolTable& symbol_table) { symbol_table.free(data(), size()); }
+  std::string toString(const SymbolTable& table) const { return table.decode(data(), size()); }
 
   // Returns a hash of the underlying symbol vector, since StatNames are uniquely defined by their
   // symbol vectors.
-  uint64_t hash() const { return HashUtil::xxHash64(symbol_vec_); }
+  uint64_t hash() const {
+    const char* cdata = reinterpret_cast<const char*>(data());
+    return HashUtil::xxHash64(absl::string_view(cdata, size()));
+  }
+
   // Compares on the underlying symbol vectors.
   // NB: operator==(std::vector) checks size first, then compares equality for each element.
-  bool operator==(const StatName& rhs) const { return symbol_vec_ == rhs.symbol_vec_; }
+  bool operator==(const StatName& rhs) const {
+    const size_t sz = size();
+    return sz == rhs.size() && memcmp(data(), rhs.data(), sz * sizeof(uint8_t)) == 0;
+  }
+  bool operator!=(const StatName& rhs) const { return !(*this == rhs); }
 
 private:
   friend SymbolTable;
 
   friend class StatNameTest;
-  const SymbolVec& symbolVec() { return symbol_vec_; }
-  SymbolVec symbol_vec_;
+  uint8_t* symbol_vec_;
 };
 
 struct StatNamePtrHash {

@@ -11,6 +11,7 @@
 
 #include "common/common/utility.h"
 #include "common/stats/heap_stat_data.h"
+#include "common/stats/stat_name_ref.h"
 #include "common/stats/stats_options_impl.h"
 #include "common/stats/symbol_table_impl.h"
 #include "common/stats/utility.h"
@@ -26,17 +27,20 @@ public:
   typedef std::function<std::shared_ptr<Base>(const std::string& name)> Allocator;
 
   IsolatedStatsCache(Allocator alloc, HeapStatDataAllocator& heap_alloc)
-      : alloc_(alloc), heap_alloc_(heap_alloc) {}
+      : alloc_(alloc), heap_alloc_(heap_alloc), stats_(
+            defaultBucketCount(), StatNameRefPtrHash(*heap_alloc.symbolTable()),
+            StatNameRefPtrCompare(*heap_alloc.symbolTable()))
+  {}
 
   Base& get(const std::string& name) {
-    StatName ptr = heap_alloc_.encode(name);
-    auto stat = stats_.find(ptr);
+    std::unique_ptr<StatNameRef> stat_name(new StringViewStatNameRef(name));
+    auto stat = stats_.find(stat_name);
     if (stat != stats_.end()) {
       return *stat->second;
     }
 
     std::shared_ptr<Base> new_stat = alloc_(name);
-    stats_.emplace(std::move(ptr), new_stat);
+    stats_.emplace(new_stat->nameRef(), new_stat);
     return *new_stat;
   }
 
@@ -50,12 +54,17 @@ public:
     return vec;
   }
 
+  static size_t defaultBucketCount() {
+    std::unordered_map<int, int> map;
+    return map.bucket_count();
+  }
+
 private:
-  std::unordered_map<StatName, std::shared_ptr<Base>, StatNameUniquePtrHash,
-                     StatNameUniquePtrCompare>
-      stats_;
+  using StatMap = std::unordered_map<StatNameRefPtr, std::shared_ptr<Base>, StatNameRefPtrHash,
+                                     StatNameRefPtrCompare>;
   Allocator alloc_;
   HeapStatDataAllocator& heap_alloc_;
+  StatMap stats_;
 };
 
 class IsolatedStoreImpl : public Store {

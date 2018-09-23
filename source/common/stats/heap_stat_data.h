@@ -23,7 +23,7 @@ class HeapStatDataAllocator;
  * so that it can be allocated efficiently from the heap on demand.
  */
 struct HeapStatData {
-  explicit HeapStatData(StatName&& name) : name_(std::move(name)) {}
+  explicit HeapStatData(const SymbolVec& name) : name_(name) {}
 
   /**
    * @returns std::string the name as a std::string with no truncation.
@@ -57,7 +57,7 @@ public:
   bool requiresBoundedStatNameSize() const override { return false; }
 
   // SymbolTable
-  StatName encode(absl::string_view sv) { return table_.encode(sv); }
+  //StatName encode(absl::string_view sv) { return table_.encode(sv); }
   const SymbolTable* symbolTable() const override { return &table_; }
 
 private:

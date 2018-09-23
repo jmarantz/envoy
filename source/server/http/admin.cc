@@ -509,6 +509,9 @@ Http::Code AdminImpl::handlerMemory(absl::string_view, Http::HeaderMap&, Buffer:
   memory.set_allocated(Memory::Stats::totalCurrentlyAllocated());
   memory.set_heap_size(Memory::Stats::totalCurrentlyReserved());
   response.add(MessageUtil::getJsonStringFromMessage(memory, true)); // pretty-print
+  auto& alloc = server_.hotRestart().statsAllocator();
+  auto* symtab = alloc.symbolTable();
+  response.add(absl::StrCat("\n  num_symbols=", symtab->size()) + "\n");
   return Http::Code::OK;
 }
 
