@@ -35,8 +35,8 @@ TEST_F(StatNameTest, TestUnusualDelimitersRoundtrip) {
 }
 
 TEST_F(StatNameTest, TestSuccessfulDoubleLookup) {
-  StatNamePtr stat_name_1 = table_.encode("foo.bar.baz");
-  StatNamePtr stat_name_2 = table_.encode("foo.bar.baz");
+  StatName stat_name_1 = table_.encode("foo.bar.baz");
+  StatName stat_name_2 = table_.encode("foo.bar.baz");
   EXPECT_EQ(getSymbols(stat_name_1), getSymbols(stat_name_2));
 }
 
@@ -56,12 +56,12 @@ TEST_F(StatNameTest, TestBadDecodes) {
   }
 
   {
-    StatNamePtr stat_name_1 = table_.encode("foo");
+    StatName stat_name_1 = table_.encode("foo");
     SymbolVec vec_1 = getSymbols(stat_name_1);
     // Decoding a symbol vec that exists is perfectly normal...
     EXPECT_NO_THROW(decodeSymbolVec(vec_1));
     stat_name_1.free(table_);
-    // But when the StatNamePtr is destroyed, its symbols are as well.
+    // But when the StatName is destroyed, its symbols are as well.
     EXPECT_DEATH(decodeSymbolVec(vec_1), "");
   }
 }
@@ -86,12 +86,12 @@ TEST_F(StatNameTest, TestSymbolConsistency) {
 TEST_F(StatNameTest, TestSameValueOnPartialFree) {
   // This should hold true for components as well. Since "foo" persists even when "foo.bar" is
   // freed, we expect both instances of "foo" to have the same symbol.
-  StatNamePtr stat_foo = table_.encode("foo");
-  StatNamePtr stat_foobar_1 = table_.encode("foo.bar");
+  StatName stat_foo = table_.encode("foo");
+  StatName stat_foobar_1 = table_.encode("foo.bar");
   SymbolVec stat_foobar_1_symbols = getSymbols(stat_foobar_1);
   stat_foobar_1.free(table_);
 
-  StatNamePtr stat_foobar_2 = table_.encode("foo.bar");
+  StatName stat_foobar_2 = table_.encode("foo.bar");
   SymbolVec stat_foobar_2_symbols = getSymbols(stat_foobar_2);
 
   EXPECT_EQ(stat_foobar_1_symbols[0],
@@ -107,11 +107,11 @@ TEST_F(StatNameTest, FreePoolTest) {
   //   coexisting symbols during the life of the table.
 
   {
-    StatNamePtr stat_1 = table_.encode("1a");
-    StatNamePtr stat_2 = table_.encode("2a");
-    StatNamePtr stat_3 = table_.encode("3a");
-    StatNamePtr stat_4 = table_.encode("4a");
-    StatNamePtr stat_5 = table_.encode("5a");
+    StatName stat_1 = table_.encode("1a");
+    StatName stat_2 = table_.encode("2a");
+    StatName stat_3 = table_.encode("3a");
+    StatName stat_4 = table_.encode("4a");
+    StatName stat_5 = table_.encode("5a");
     EXPECT_EQ(monotonicCounter(), 5);
     EXPECT_EQ(table_.size(), 5);
     stat_1.free(table_);
@@ -125,15 +125,15 @@ TEST_F(StatNameTest, FreePoolTest) {
 
   // These are different strings being encoded, but they should recycle through the same symbols as
   // the stats above.
-  StatNamePtr stat_1 = table_.encode("1b");
-  StatNamePtr stat_2 = table_.encode("2b");
-  StatNamePtr stat_3 = table_.encode("3b");
-  StatNamePtr stat_4 = table_.encode("4b");
-  StatNamePtr stat_5 = table_.encode("5b");
+  StatName stat_1 = table_.encode("1b");
+  StatName stat_2 = table_.encode("2b");
+  StatName stat_3 = table_.encode("3b");
+  StatName stat_4 = table_.encode("4b");
+  StatName stat_5 = table_.encode("5b");
   EXPECT_EQ(monotonicCounter(), 5);
   EXPECT_EQ(table_.size(), 5);
 
-  StatNamePtr stat_6 = table_.encode("6");
+  StatName stat_6 = table_.encode("6");
   EXPECT_EQ(monotonicCounter(), 6);
   EXPECT_EQ(table_.size(), 6);
 }
@@ -144,22 +144,22 @@ TEST_F(StatNameTest, TestShrinkingExpectation) {
   // ::size() is a public function, but should only be used for testing.
   size_t table_size_0 = table_.size();
 
-  StatNamePtr stat_a = table_.encode("a");
+  StatName stat_a = table_.encode("a");
   size_t table_size_1 = table_.size();
 
-  StatNamePtr stat_aa = table_.encode("a.a");
+  StatName stat_aa = table_.encode("a.a");
   EXPECT_EQ(table_size_1, table_.size());
 
-  StatNamePtr stat_ab = table_.encode("a.b");
+  StatName stat_ab = table_.encode("a.b");
   size_t table_size_2 = table_.size();
 
-  StatNamePtr stat_ac = table_.encode("a.c");
+  StatName stat_ac = table_.encode("a.c");
   size_t table_size_3 = table_.size();
 
-  StatNamePtr stat_acd = table_.encode("a.c.d");
+  StatName stat_acd = table_.encode("a.c.d");
   size_t table_size_4 = table_.size();
 
-  StatNamePtr stat_ace = table_.encode("a.c.e");
+  StatName stat_ace = table_.encode("a.c.e");
   size_t table_size_5 = table_.size();
   EXPECT_GE(table_size_5, table_size_4);
 

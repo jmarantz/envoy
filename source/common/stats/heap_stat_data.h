@@ -4,6 +4,8 @@
 #include <string>
 #include <unordered_set>
 
+#include "common/stats/stat_name_ref.h"
+
 #include "common/common/hash.h"
 #include "common/common/lock_guard.h"
 #include "common/common/thread.h"
@@ -21,21 +23,21 @@ class HeapStatDataAllocator;
  * so that it can be allocated efficiently from the heap on demand.
  */
 struct HeapStatData {
-  explicit HeapStatData(StatNamePtr name_ptr);
+  explicit HeapStatData(StatName&& name) : name_(std::move(name)) {}
 
   /**
    * @returns std::string the name as a std::string with no truncation.
    */
-  std::string name(SymbolTable* symbol_table) const;
-  //const StatName& nameRef() const { return name_ptr; }
+  std::string name(const SymbolTable* symbol_table) const;
+  StatNamePtr nameRef() const { return std::make_unique<SymbolStatNameRef>(name_); }
 
-  bool operator==(const HeapStatData& rhs) const { return name_ptr_ == rhs.name_ptr_; }
+  bool operator==(const HeapStatData& rhs) const { return name_ == rhs.name_; }
 
   std::atomic<uint64_t> value_{0};
   std::atomic<uint64_t> pending_increment_{0};
   std::atomic<uint16_t> flags_{0};
   std::atomic<uint16_t> ref_count_{1};
-  StatName name_ptr_;
+  StatName name_;
 };
 
 /**
@@ -55,14 +57,14 @@ public:
   bool requiresBoundedStatNameSize() const override { return false; }
 
   // SymbolTable
-  StatNamePtr encode(absl::string_view sv) { return table_.encode(sv); }
-  SymbolTable* symbolTable() override { return &table_; }
+  StatName encode(absl::string_view sv) { return table_.encode(sv); }
+  const SymbolTable* symbolTable() const override { return &table_; }
 
 private:
   friend HeapStatData;
 
   struct HeapStatHash {
-    size_t operator()(const HeapStatData* a) const { return a->name_ptr_.hash(); }
+    size_t operator()(const HeapStatData* a) const { return a->name_.hash(); }
   };
   struct HeapStatCompare {
     bool operator()(const HeapStatData* a, const HeapStatData* b) const { return *a == *b; }

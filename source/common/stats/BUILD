@@ -14,11 +14,21 @@ envoy_cc_library(
     hdrs = ["heap_stat_data.h"],
     deps = [
         ":stat_data_allocator_lib",
+        ":stat_name_ref_lib",
         ":symbol_table_lib",
         "//source/common/common:assert_lib",
         "//source/common/common:hash_lib",
         "//source/common/common:thread_annotations",
         "//source/common/common:thread_lib",
+    ],
+)
+
+envoy_cc_library(
+    name = "stat_name_ref_lib",
+    hdrs = ["stat_name_ref.h"],
+    deps = [
+        ":symbol_table_lib",
+        "//source/common/common:hash_lib",
     ],
 )
 
@@ -31,6 +41,7 @@ envoy_cc_library(
     ],
     deps = [
         ":metric_impl_lib",
+        ":stat_name_ref_lib",
         "//source/common/common:assert_lib",
         "//source/common/common:hash_lib",
         "//source/common/common:utility_lib",
@@ -65,6 +76,7 @@ envoy_cc_library(
     hdrs = ["raw_stat_data.h"],
     deps = [
         ":stat_data_allocator_lib",
+        ":stat_name_ref_lib",
         ":symbol_table_lib",
         "//include/envoy/stats:stats_interface",
         "//source/common/common:assert_lib",

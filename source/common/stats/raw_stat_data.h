@@ -12,6 +12,7 @@
 #include <unordered_map>
 
 #include "envoy/stats/stat_data_allocator.h"
+#include "common/stats/stat_name_ref.h"
 #include "envoy/stats/stats_options.h"
 
 #include "common/common/assert.h"
@@ -79,7 +80,10 @@ struct RawStatData {
   /**
    * Returns the name as a std::string.
    */
-  std::string name(SymbolTable*) const { return std::string(name_); }
+  std::string name(const SymbolTable*) const { return std::string(name_); }
+  StatNamePtr nameRef() const {
+    return std::make_unique<StringViewStatNameRef>(absl::string_view(name_));
+  }
 
   std::atomic<uint64_t> value_;
   std::atomic<uint64_t> pending_increment_;
@@ -93,7 +97,7 @@ class RawStatDataAllocator : public StatDataAllocatorImpl<RawStatData> {
 public:
   // StatDataAllocator
   bool requiresBoundedStatNameSize() const override { return true; }
-  SymbolTable* symbolTable() override { return nullptr; }
+  const SymbolTable* symbolTable() const override { return nullptr; }
 };
 
 

@@ -51,8 +51,6 @@ public:
    * @param data the data returned by alloc().
    */
   virtual void free(StatData& data) PURE;
-
-  virtual SymbolTable* symbolTable() PURE;
 };
 
 /**
@@ -71,7 +69,7 @@ public:
 
   // Stats::Metric
   const std::string name() const override { return data_.name(alloc_.symbolTable()); }
-  //const StatName& nameRef() const override { return data_.nameRef(); }
+  StatNamePtr nameRef() const override { return data_.nameRef(); }
 
   // Stats::Counter
   void add(uint64_t amount) override {
@@ -103,7 +101,7 @@ public:
 
   // Stats::Metric
   const std::string name() const override { return data_.name(alloc_.symbolTable()); }
-  //const StatName& nameRef() const override { return data_.nameRef(); }
+  StatNamePtr nameRef() const override { return data_.nameRef(); }
 
   // Stats::Gauge
   virtual void add(uint64_t amount) override {

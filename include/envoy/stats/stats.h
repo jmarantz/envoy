@@ -6,7 +6,6 @@
 #include <vector>
 
 #include "envoy/common/pure.h"
-#include "envoy/stats/stat_name_ref.h"
 
 #include "common/common/hash.h"
 
@@ -15,6 +14,8 @@
 namespace Envoy {
 namespace Stats {
 
+class StatNameRef;
+using StatNamePtr = std::unique_ptr<StatNameRef>;
 struct Tag;
 
 /**
@@ -29,9 +30,9 @@ public:
   virtual const std::string name() const PURE;
 
   /**
-   * Returns a reference to the StatName.
+   * Returns a reference to the name of the stat.
    */
-  //virtual StatNameRef nameRef() const PURE;
+  virtual StatNamePtr nameRef() const PURE;
 
   /**
    * Returns a vector of configurable tags to identify this Metric.

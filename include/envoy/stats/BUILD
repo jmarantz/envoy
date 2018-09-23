@@ -17,7 +17,6 @@ envoy_cc_library(
         "sink.h",
         "source.h",
         "stat_data_allocator.h",
-        "stat_name_ref.h",
         "stats.h",
         "stats_options.h",
         "store.h",

@@ -29,7 +29,7 @@ public:
       : alloc_(alloc), heap_alloc_(heap_alloc) {}
 
   Base& get(const std::string& name) {
-    StatNamePtr ptr = heap_alloc_.encode(name);
+    StatName ptr = heap_alloc_.encode(name);
     auto stat = stats_.find(ptr);
     if (stat != stats_.end()) {
       return *stat->second;
@@ -51,7 +51,7 @@ public:
   }
 
 private:
-  std::unordered_map<StatNamePtr, std::shared_ptr<Base>, StatNameUniquePtrHash,
+  std::unordered_map<StatName, std::shared_ptr<Base>, StatNameUniquePtrHash,
                      StatNameUniquePtrCompare>
       stats_;
   Allocator alloc_;

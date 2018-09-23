@@ -8,7 +8,6 @@
 #include <vector>
 
 #include "envoy/common/exception.h"
-#include "envoy/stats/stat_name_ref.h"
 
 #include "common/common/assert.h"
 #include "common/common/hash.h"
@@ -26,7 +25,7 @@ using Symbol = uint32_t;
 using SymbolVec = std::vector<Symbol>;
 class StatName; // forward declaration
 //using StatNamePtr = std::unique_ptr<StatName>;
-using StatNamePtr = StatName;
+//using StatNamePtr = StatName;
 
 /**
  * Underlying SymbolTable implementation which manages per-symbol reference counting.
@@ -44,7 +43,7 @@ public:
     monotonic_counter_ = 0;
   }
 
-  StatNamePtr encode(absl::string_view name);
+  StatName encode(absl::string_view name);
 
   // For testing purposes only.
   size_t size() const {
@@ -52,6 +51,9 @@ public:
     ASSERT(encode_map_.size() == decode_map_.size());
     return encode_map_.size();
   }
+
+  uint64_t hash(const StatName& stat_name) const;
+  bool compareString(const StatName& stat_name, const absl::string_view str) const;
 
 private:
   friend class StatName;
@@ -141,7 +143,7 @@ public:
     symbol_table.free(symbol_vec_);
     symbol_vec_.clear();
   }
-  std::string toString(SymbolTable& table) const { return table.decode(symbol_vec_); }
+  std::string toString(const SymbolTable& table) const { return table.decode(symbol_vec_); }
 
   // Returns a hash of the underlying symbol vector, since StatNames are uniquely defined by their
   // symbol vectors.
@@ -156,22 +158,6 @@ private:
   friend class StatNameTest;
   const SymbolVec& symbolVec() { return symbol_vec_; }
   SymbolVec symbol_vec_;
-};
-
-class SymbolStatNameRef : public StatNameRef {
- public:
-  SymbolStatNameRef(const StatName& name) : name_(name) {}
-  uint64_t hash() const { return name_.hash(); }
-  bool operator==(StatNameRef& that) const {
-    SymbolStatNameRef* ref = dynamic_cast<SymbolStatNameRef*>(&that);
-    if (ref == nullptr) {
-      return false;
-    }
-    return ref->name_ == name_;
-  }
-
- private:
-  const StatName& name_;
 };
 
 struct StatNamePtrHash {
@@ -196,11 +182,11 @@ struct StatNameRefCompare {
   };*/
 
 struct StatNameUniquePtrHash {
-  size_t operator()(const StatNamePtr& a) const { return a.hash(); }
+  size_t operator()(const StatName& a) const { return a.hash(); }
 };
 
 struct StatNameUniquePtrCompare {
-  bool operator()(const StatNamePtr& a, const StatNamePtr& b) const {
+  bool operator()(const StatName& a, const StatName& b) const {
     // This extracts the underlying statnames.
     return a == b;
   }

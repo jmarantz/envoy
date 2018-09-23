@@ -12,7 +12,7 @@ namespace Stats {
 // TODO(ambuc): There is a possible performance optimization here for avoiding the encoding of IPs /
 // numbers if they appear in stat names. We don't want to waste time symbolizing an integer as an
 // integer, if we can help it.
-StatNamePtr SymbolTable::encode(const absl::string_view name) {
+StatName SymbolTable::encode(const absl::string_view name) {
   SymbolVec symbol_vec;
   std::vector<absl::string_view> name_vec = absl::StrSplit(name, '.');
   symbol_vec.reserve(name_vec.size());
@@ -30,6 +30,19 @@ std::string SymbolTable::decode(const SymbolVec& symbol_vec) const {
                  [this](Symbol x) { return fromSymbol(x); });
   lock.release();
   return absl::StrJoin(name, ".");
+}
+
+bool SymbolTable::compareString(const StatName& stat_name, const absl::string_view str) const {
+  // TOOD(jmarantz): rather than elaboarating the string, it will be straightforward to
+  // adapt the encode() algorithm and return false on the first mismatching token split
+  // out from str. In the meantime it's easy to just allocate a temp and compare.
+  return str == stat_name.toString(*this);
+}
+
+uint64_t SymbolTable::hash(const StatName& stat_name) const {
+  // TOOD(jmarantz): we could memoize the hash instead of computing it. It would be
+  // nicer to hash iteratively but we are treating XX64 as a black box.
+  return HashUtil::xxHash64(stat_name.toString(*this));
 }
 
 void SymbolTable::free(const SymbolVec& symbol_vec) {

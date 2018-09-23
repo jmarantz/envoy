@@ -6,9 +6,11 @@
 #include <memory>
 #include <string>
 #include <unordered_set>
+#include <utility>
 
 #include "envoy/stats/histogram.h"
 #include "envoy/stats/sink.h"
+#include "envoy/stats/scope.h"
 #include "envoy/stats/stat_data_allocator.h"
 #include "envoy/stats/stats.h"
 #include "envoy/stats/stats_options.h"
@@ -23,9 +25,10 @@ namespace Stats {
 
 ThreadLocalStoreImpl::ThreadLocalStoreImpl(const StatsOptions& stats_options,
                                            StatDataAllocator& alloc)
-    : stats_options_(stats_options), alloc_(alloc), default_scope_(createScope("")),
-      tag_producer_(std::make_unique<TagProducerImpl>()),
-      num_last_resort_stats_(default_scope_->counter("stats.overflow")), source_(*this) {}
+    : stats_options_(stats_options), alloc_(alloc), symbol_table_(findSymbolTable()),
+      default_scope_(createScope("")), tag_producer_(std::make_unique<TagProducerImpl>()),
+      num_last_resort_stats_(default_scope_->counter("stats.overflow")), source_(*this) {
+}
 
 ThreadLocalStoreImpl::~ThreadLocalStoreImpl() {
   ASSERT(shutting_down_);
@@ -33,15 +36,27 @@ ThreadLocalStoreImpl::~ThreadLocalStoreImpl() {
   ASSERT(scopes_.empty());
 }
 
+const SymbolTable& ThreadLocalStoreImpl::findSymbolTable() {
+  const SymbolTable* symbol_table = alloc_.symbolTable();
+  if (symbol_table == nullptr) {
+    Thread::LockGuard lock(lock_);
+    symbol_table = heap_allocator_.symbolTable();
+    ASSERT(symbol_table);
+  }
+  return *symbol_table;
+}
+
 std::vector<CounterSharedPtr> ThreadLocalStoreImpl::counters() const {
   // Handle de-dup due to overlapping scopes.
   std::vector<CounterSharedPtr> ret;
-  std::unordered_set<const StatName*, StatNamePtrHash, StatNamePtrCompare> names;
-  //StatSet<CounterSharedPtr> names;
   Thread::LockGuard lock(lock_);
+  std::unordered_set<StatNameRef*, StatNameRefStarHash, StatNameRefStarCompare> names(
+      defaultBucketCount(), StatNameRefStarHash(symbol_table_),
+      StatNameRefStarCompare(symbol_table_));
+  //StatSet<CounterSharedPtr> names;
   for (ScopeImpl* scope : scopes_) {
     for (auto& counter : scope->central_cache_.counters_) {
-      if (names.insert(&counter.first).second) {
+      if (names.insert(counter.first.get()).second) {
         ret.push_back(counter.second);
       }
       // if (names.insert(counter).second) {
@@ -63,12 +78,14 @@ ScopePtr ThreadLocalStoreImpl::createScope(const std::string& name) {
 std::vector<GaugeSharedPtr> ThreadLocalStoreImpl::gauges() const {
   // Handle de-dup due to overlapping scopes.
   std::vector<GaugeSharedPtr> ret;
-  std::unordered_set<const StatName*, StatNamePtrHash, StatNamePtrCompare> names;
-  //StatSet<GaugeSharedPtr> names;
   Thread::LockGuard lock(lock_);
+  std::unordered_set<StatNameRef*, StatNameRefStarHash, StatNameRefStarCompare> names(
+      defaultBucketCount(), StatNameRefStarHash(symbol_table_),
+      StatNameRefStarCompare(symbol_table_));
+  //StatSet<GaugeSharedPtr> names;
   for (ScopeImpl* scope : scopes_) {
     for (auto& gauge : scope->central_cache_.gauges_) {
-      if (names.insert(&gauge.first).second) {
+      if (names.insert(gauge.first.get()).second) {
         ret.push_back(gauge.second);
       }
       //      if (names.insert(gauge).second) {
@@ -102,8 +119,8 @@ void ThreadLocalStoreImpl::initializeThreading(Event::Dispatcher& main_thread_di
                                                ThreadLocal::Instance& tls) {
   main_thread_dispatcher_ = &main_thread_dispatcher;
   tls_ = tls.allocateSlot();
-  tls_->set([](Event::Dispatcher&) -> ThreadLocal::ThreadLocalObjectSharedPtr {
-    return std::make_shared<TlsCache>();
+  tls_->set([this](Event::Dispatcher&) -> ThreadLocal::ThreadLocalObjectSharedPtr {
+              return std::make_shared<TlsCache>(symbol_table_);
   });
 }
 
@@ -199,19 +216,36 @@ template <class StatType>
 StatType& ThreadLocalStoreImpl::ScopeImpl::safeMakeStat(
     const std::string& name,
     StatMap<StatType>& central_cache_map,
-    MakeStatFn<StatType> make_stat, StatType* tls_ref) {
+    MakeStatFn<StatType> make_stat,
+    StatMap<StatType>* tls_cache) {
+    //StatType* tls_ref) {
 
   // If we have a valid cache entry, return it.
+  /*
   if (tls_ref && *tls_ref) {
     return *tls_ref;
+  }
+  */
+  //SymbolTable& table = *parent_.heap_allocator_.symbolTable();
+  std::unique_ptr<StatNameRef> stat_name(new StringViewStatNameRef(name));
+  //StatNameRefPtr stat_name = table.encode(name);
+  if (tls_cache) {
+    auto pos = tls_cache->find(stat_name);
+    if (pos != tls_cache->end()) {
+      //stat_name.free(table);
+      return pos->second;
+    }
   }
 
   // We must now look in the central store so we must be locked. We grab a reference to the
   // central store location. It might contain nothing. In this case, we allocate a new stat.
   Thread::LockGuard lock(parent_.lock_);
-  StatNamePtr stat_name_ptr = parent_.heap_allocator_.encode(name);
-  StatType& central_ref = central_cache_map[std::move(stat_name_ptr)];
-  if (!central_ref) {
+  //StatType& central_ref = central_cache_map[std::move(stat_name_ptr)];
+  StatType* central_stat_ptr = nullptr;
+  auto pos = central_cache_map.find(stat_name);
+  if (pos != central_cache_map.end()) {
+    central_stat_ptr = &pos->second;
+  } else {
     std::vector<Tag> tags;
 
     // Tag extraction occurs on the original, untruncated name so the extraction
@@ -226,16 +260,22 @@ StatType& ThreadLocalStoreImpl::ScopeImpl::safeMakeStat(
                        std::move(tags));
       ASSERT(stat != nullptr);
     }
+    auto& central_ref = central_cache_map[stat->nameRef()];
     central_ref = stat;
+    central_stat_ptr = &central_ref;
   }
+  //stat_name.free(table);
 
   // If we have a TLS location to store or allocation into, do it.
-  if (tls_ref) {
-    *tls_ref = central_ref;
+  //if (tls_ref) {
+  //  *tls_ref = central_ref;
+  //}
+  if (tls_cache) {
+    tls_cache->insert(std::make_pair((*central_stat_ptr)->nameRef(), *central_stat_ptr));
   }
 
   // Finally we return the reference.
-  return central_ref;
+  return *central_stat_ptr;
 }
 
 Counter& ThreadLocalStoreImpl::ScopeImpl::counter(const std::string& name) {
@@ -245,13 +285,12 @@ Counter& ThreadLocalStoreImpl::ScopeImpl::counter(const std::string& name) {
   // We now try to acquire a *reference* to the TLS cache shared pointer. This might remain null
   // if we don't have TLS initialized currently. The de-referenced pointer might be null if there
   // is no cache entry.
-  CounterSharedPtr* tls_ref = nullptr;
+  //CounterSharedPtr* tls_ref = nullptr;
+  StatMap<CounterSharedPtr>* tls_cache = nullptr;
   Thread::ReleasableLockGuard lock(parent_.lock_);
-  StatNamePtr stat_name_ptr = parent_.heap_allocator_.encode(final_name);
+  //StatNamePtr stat_name_ptr = parent_.heap_allocator_.encode(final_name);
   if (!parent_.shutting_down_ && parent_.tls_) {
-    tls_ref = &parent_.tls_->getTyped<TlsCache>()
-                   .scope_cache_[this->scope_id_]
-                   .counters_[std::move(stat_name_ptr)];
+    tls_cache = &parent_.tls_->getTyped<TlsCache>().scopeCache(this->scope_id_).counters_;
   }
   lock.release();
 
@@ -261,7 +300,8 @@ Counter& ThreadLocalStoreImpl::ScopeImpl::counter(const std::string& name) {
          std::vector<Tag>&& tags) -> CounterSharedPtr {
         return allocator.makeCounter(name, std::move(tag_extracted_name), std::move(tags));
       },
-      tls_ref);
+      //tls_ref);
+      tls_cache);
 }
 
 void ThreadLocalStoreImpl::ScopeImpl::deliverHistogramToSinks(const Histogram& histogram,
@@ -284,13 +324,12 @@ Gauge& ThreadLocalStoreImpl::ScopeImpl::gauge(const std::string& name) {
   // See comments in counter(). There is no super clean way (via templates or otherwise) to
   // share this code so I'm leaving it largely duplicated for now.
   std::string final_name = prefix_ + name;
-  GaugeSharedPtr* tls_ref = nullptr;
+  //GaugeSharedPtr* tls_ref = nullptr;
+  StatMap<GaugeSharedPtr>* tls_cache = nullptr;
   Thread::ReleasableLockGuard lock(parent_.lock_);
-  StatNamePtr stat_name_ptr = parent_.heap_allocator_.encode(final_name);
+  //StatNamePtr stat_name_ptr = parent_.heap_allocator_.encode(final_name);
   if (!parent_.shutting_down_ && parent_.tls_) {
-    tls_ref = &parent_.tls_->getTyped<TlsCache>()
-                   .scope_cache_[this->scope_id_]
-                   .gauges_[std::move(stat_name_ptr)];
+    tls_cache = &parent_.tls_->getTyped<TlsCache>().scopeCache(this->scope_id_).gauges_;
   }
   lock.release();
 
@@ -300,7 +339,8 @@ Gauge& ThreadLocalStoreImpl::ScopeImpl::gauge(const std::string& name) {
          std::vector<Tag>&& tags) -> GaugeSharedPtr {
         return allocator.makeGauge(name, std::move(tag_extracted_name), std::move(tags));
       },
-      tls_ref);
+      //tls_ref);
+      tls_cache);
 }
 
 Histogram& ThreadLocalStoreImpl::ScopeImpl::histogram(const std::string& name) {
@@ -308,24 +348,24 @@ Histogram& ThreadLocalStoreImpl::ScopeImpl::histogram(const std::string& name) {
   // share this code so I'm leaving it largely duplicated for now.
   std::string final_name = prefix_ + name;
   ParentHistogramSharedPtr* tls_ref = nullptr;
-  Thread::LockGuard lock(parent_.lock_);
-  StatNamePtr stat_name_ptr = parent_.heap_allocator_.encode(final_name);
+  /*  SymbolTable* symbol_table;
+  {
+    Thread::LockGuard lock(parent_.lock_);
+    symbol_table = parent_.heap_allocator_.symbolTable();
+    }
+    StatName stat_name = symbol_table->encode(final_name);*/
   if (!parent_.shutting_down_ && parent_.tls_) {
     tls_ref = &parent_.tls_->getTyped<TlsCache>()
-                   .scope_cache_[this->scope_id_]
-                   .parent_histograms_[std::move(stat_name_ptr)];
+              .scopeCache(this->scope_id_)
+              .parent_histograms_[name];
+    if (*tls_ref) {
+      //stat_name.free(symbol_table);
+      return **tls_ref;
+    }
   }
 
-  if (tls_ref && *tls_ref) {
-    return **tls_ref;
-  }
-
-  // TODO(ambuc): This is obviously a duplicate of the work done just a few lines ago. If these were
-  // shared ptrs, or if we had a good method for duplicating StatNamePtrs without the cost of
-  // lookups, this could be optimized.
-  StatNamePtr stat_name_ptr_reencode = parent_.heap_allocator_.encode(final_name);
   ParentHistogramImplSharedPtr& central_ref =
-      central_cache_.histograms_[std::move(stat_name_ptr_reencode)];
+      central_cache_.histograms_[name];
   if (!central_ref) {
     std::vector<Tag> tags;
     std::string tag_extracted_name = parent_.getTagsForName(final_name, tags);
@@ -336,6 +376,7 @@ Histogram& ThreadLocalStoreImpl::ScopeImpl::histogram(const std::string& name) {
   if (tls_ref) {
     *tls_ref = central_ref;
   }
+  //stat_name.free(symbol_table);
   return *central_ref;
 }
 
@@ -346,12 +387,12 @@ Histogram& ThreadLocalStoreImpl::ScopeImpl::tlsHistogram(const std::string& name
   // Here prefix will not be considered because, by the time ParentHistogram calls this method
   // during recordValue, the prefix is already attached to the name.
   TlsHistogramSharedPtr* tls_ref = nullptr;
-  Thread::LockGuard lock(parent_.lock_);
-  StatNamePtr stat_name_ptr = parent_.heap_allocator_.encode(name);
+  //Thread::LockGuard lock(parent_.lock_);
+  //StatName stat_name = parent_.heap_allocator_.encode(name);
   if (!parent_.shutting_down_ && parent_.tls_) {
     tls_ref = &parent_.tls_->getTyped<TlsCache>()
-                   .scope_cache_[this->scope_id_]
-                   .histograms_[std::move(stat_name_ptr)];
+              .scopeCache(this->scope_id_)
+              .histograms_[name];
   }
 
   if (tls_ref && *tls_ref) {

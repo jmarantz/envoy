@@ -6,7 +6,7 @@
 namespace Envoy {
 namespace Stats {
 
-HeapStatData::HeapStatData(StatNamePtr name_ptr) : name_ptr_(std::move(name_ptr)) {}
+//HeapStatData::HeapStatData(StatNamePtr name_ptr) : name_ptr_(std::move(name_ptr)) {}
 
 HeapStatDataAllocator::HeapStatDataAllocator() {}
 
@@ -39,14 +39,14 @@ void HeapStatDataAllocator::free(HeapStatData& data) {
     size_t key_removed = stats_.erase(&data);
     ASSERT(key_removed == 1);
   }
-  data.name_ptr_.free(table_);
+  data.name_.free(table_);
 
   delete &data;
 }
 
-std::string HeapStatData::name(SymbolTable* symbol_table) const {
+std::string HeapStatData::name(const SymbolTable* symbol_table) const {
   ASSERT(symbol_table);
-  return name_ptr_.toString(*symbol_table);
+  return name_.toString(*symbol_table);
 }
 
 template class StatDataAllocatorImpl<HeapStatData>;

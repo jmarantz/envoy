@@ -9,6 +9,7 @@
 
 #include "common/common/non_copyable.h"
 #include "common/stats/metric_impl.h"
+#include "common/stats/stat_name_ref.h"
 
 #include "circllhist.h"
 
@@ -50,6 +51,9 @@ public:
 
   // Stats:;Metric
   const std::string name() const override { return name_; }
+  StatNamePtr nameRef() const override {
+    return std::make_unique<StringViewStatNameRef>(absl::string_view(name_));
+  }
 
   // Stats::Histogram
   void recordValue(uint64_t value) override { parent_.deliverHistogramToSinks(*this, value); }

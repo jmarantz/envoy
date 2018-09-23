@@ -17,6 +17,8 @@
 namespace Envoy {
 namespace Stats {
 
+class SymbolTable;
+
 /**
  * Abstract interface for allocating statistics. Implementations can
  * be created utilizing a single fixed-size block suitable for
@@ -51,6 +53,8 @@ public:
    * Determines whether this stats allocator requires bounded stat-name size.
    */
   virtual bool requiresBoundedStatNameSize() const PURE;
+
+  virtual const SymbolTable* symbolTable() const PURE;
 
   // TODO(jmarantz): create a parallel mechanism to instantiate histograms. At
   // the moment, histograms don't fit the same pattern of counters and gaugaes

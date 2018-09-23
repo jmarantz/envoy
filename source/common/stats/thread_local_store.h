@@ -14,6 +14,7 @@
 #include "common/stats/heap_stat_data.h"
 #include "common/stats/histogram_impl.h"
 #include "common/stats/source_impl.h"
+#include "common/stats/stat_name_ref.h"
 #include "common/stats/symbol_table_impl.h"
 #include "common/stats/utility.h"
 
@@ -51,6 +52,9 @@ public:
 
   // Stats::Metric
   const std::string name() const override { return name_; }
+  StatNamePtr nameRef() const override {
+    return std::make_unique<StringViewStatNameRef>(absl::string_view(name_));
+  }
 
 private:
   uint64_t otherHistogramIndex() const { return 1 - current_active_; }
@@ -94,6 +98,9 @@ public:
 
   // Stats::Metric
   const std::string name() const override { return name_; }
+  StatNamePtr nameRef() const override {
+    return std::make_unique<StringViewStatNameRef>(absl::string_view(name_));
+  }
 
 private:
   bool usedLockHeld() const EXCLUSIVE_LOCKS_REQUIRED(merge_lock_);
@@ -217,32 +224,43 @@ private:
   //using StatSet = std::unordered_set<Stat, StatPtrHash<Stat>, StatPtrCompare<Stat>>;
 
   template<class Stat>
-  using StatMap = std::unordered_map<StatNamePtr, Stat, StatNameUniquePtrHash,
-                                     StatNameUniquePtrCompare>;
+  //using StatMap = std::unordered_map<StatNamePtr, Stat, StatNameUniquePtrHash>;
+  using StatMap = std::unordered_map<StatNameRefPtr, Stat, StatNameRefPtrHash,
+                                     StatNameRefPtrCompare>;
+
+  static size_t defaultBucketCount() {
+    std::unordered_map<int, int> map;
+    return map.bucket_count();
+  }
 
   struct TlsCacheEntry {
+    explicit TlsCacheEntry(const SymbolTable& symbol_table)
+        : counters_(defaultBucketCount(), StatNameRefPtrHash(symbol_table),
+                    StatNameRefPtrCompare(symbol_table)),
+          gauges_(defaultBucketCount(), StatNameRefPtrHash(symbol_table),
+                  StatNameRefPtrCompare(symbol_table)) {}
     StatMap<CounterSharedPtr> counters_;
     StatMap<GaugeSharedPtr> gauges_;
-    std::unordered_map<StatNamePtr, TlsHistogramSharedPtr, StatNameUniquePtrHash,
-                       StatNameUniquePtrCompare>
-        histograms_;
-    std::unordered_map<StatNamePtr, ParentHistogramSharedPtr, StatNameUniquePtrHash,
-                       StatNameUniquePtrCompare>
-        parent_histograms_;
+    std::unordered_map<std::string, TlsHistogramSharedPtr> histograms_;
+    std::unordered_map<std::string, ParentHistogramSharedPtr> parent_histograms_;
   };
 
   struct CentralCacheEntry {
+    explicit CentralCacheEntry(const SymbolTable& symbol_table)
+        : counters_(defaultBucketCount(), StatNameRefPtrHash(symbol_table),
+                    StatNameRefPtrCompare(symbol_table)),
+          gauges_(defaultBucketCount(), StatNameRefPtrHash(symbol_table),
+                  StatNameRefPtrCompare(symbol_table)) {}
     StatMap<CounterSharedPtr> counters_;
     StatMap<GaugeSharedPtr> gauges_;
-    std::unordered_map<StatNamePtr, ParentHistogramImplSharedPtr, StatNameUniquePtrHash,
-                       StatNameUniquePtrCompare>
-        histograms_;
+    std::unordered_map<std::string, ParentHistogramImplSharedPtr> histograms_;
   };
 
   struct ScopeImpl : public TlsScope {
     ScopeImpl(ThreadLocalStoreImpl& parent, const std::string& prefix)
         : scope_id_(next_scope_id_++), parent_(parent),
-          prefix_(Utility::sanitizeStatsName(prefix)) {}
+          prefix_(Utility::sanitizeStatsName(prefix)),
+          central_cache_(parent.symbol_table_) {}
     ~ScopeImpl();
 
     // Stats::Scope
@@ -277,7 +295,10 @@ private:
     StatType&
     safeMakeStat(const std::string& name,
                  StatMap<StatType>& central_cache_map,
-                 MakeStatFn<StatType> make_stat, StatType* tls_ref);
+                 MakeStatFn<StatType> make_stat,
+                 //StatType* tls_ref);
+                 StatMap<StatType>* tls_cache);
+
     static std::atomic<uint64_t> next_scope_id_;
 
     const uint64_t scope_id_;
@@ -287,6 +308,19 @@ private:
   };
 
   struct TlsCache : public ThreadLocal::ThreadLocalObject {
+    explicit TlsCache(const SymbolTable& symbol_table) : symbol_table_(symbol_table) {}
+
+    TlsCacheEntry& scopeCache(uint64_t id) {
+      auto pos = scope_cache_.find(id);
+      if (pos != scope_cache_.end()) {
+        return pos->second;
+      }
+      auto emplacement = scope_cache_.emplace(std::make_pair(id, TlsCacheEntry(symbol_table_)));
+      return emplacement.first->second;
+    }
+
+    const SymbolTable& symbol_table_;
+
     // The TLS scope cache is keyed by scope ID. This is used to avoid complex circular references
     // during scope destruction. An ID is required vs. using the address of the scope pointer
     // because it's possible that the memory allocator will recyle the scope pointer immediately
@@ -294,7 +328,8 @@ private:
     // to reference the cache, and then subsequently cache flushed, leaving nothing in the central
     // store. See the overview for more information. This complexity is required for lockless
     // operation in the fast path.
-    std::unordered_map<uint64_t, TlsCacheEntry> scope_cache_;
+    using ScopeCacheMap = std::unordered_map<uint64_t, TlsCacheEntry>;
+    ScopeCacheMap scope_cache_;
   };
 
   std::string getTagsForName(const std::string& name, std::vector<Tag>& tags) const;
@@ -302,12 +337,14 @@ private:
   void releaseScopeCrossThread(ScopeImpl* scope);
   void mergeInternal(PostMergeCb mergeCb);
   absl::string_view truncateStatNameIfNeeded(absl::string_view name);
+  const SymbolTable& findSymbolTable();
 
   const Stats::StatsOptions& stats_options_;
   StatDataAllocator& alloc_;
   Event::Dispatcher* main_thread_dispatcher_{};
   mutable Thread::MutexBasicLockable lock_;
   HeapStatDataAllocator heap_allocator_ GUARDED_BY(lock_);
+  const SymbolTable& symbol_table_;
   ThreadLocal::SlotPtr tls_;
   std::unordered_set<ScopeImpl*> scopes_ GUARDED_BY(lock_);
   ScopePtr default_scope_;
