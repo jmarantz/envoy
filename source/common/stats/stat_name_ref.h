@@ -64,7 +64,7 @@ class SymbolStatNameRef : public StatNameRef {
   }
 
  private:
-  const StatName& name_;
+  StatName name_;
 };
 
 struct StatNameRefPtrHash {

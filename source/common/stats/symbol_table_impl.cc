@@ -90,7 +90,7 @@ uint64_t SymbolTable::hash(const StatName& stat_name) const {
   return HashUtil::xxHash64(stat_name.toString(*this));
 }
 
-void SymbolTable::free(uint8_t* symbol_vec, size_t size) {
+void SymbolTable::free(const uint8_t* symbol_vec, size_t size) {
   Thread::LockGuard lock(lock_);
   Symbol symbol = 0;
   int shift = 0;

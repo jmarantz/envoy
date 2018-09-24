@@ -15,7 +15,9 @@ HeapStatDataAllocator::~HeapStatDataAllocator() { ASSERT(stats_.empty()); }
 HeapStatData* HeapStatDataAllocator::alloc(absl::string_view name) {
   // Any expected truncation of name is done at the callsite. No truncation is
   // required to use this allocator.
-  auto data = std::make_unique<HeapStatData>(table_.encode(name));
+  SymbolVec symbol_vec = table_.encode(name);
+  void* memory = malloc(sizeof(HeapStatData) + StatName::size(symbol_vec));
+  std::unique_ptr<HeapStatData> data(new (memory) HeapStatData(symbol_vec));
   Thread::ReleasableLockGuard lock(mutex_);
   auto ret = stats_.insert(data.get());
   lock.release();
@@ -39,14 +41,14 @@ void HeapStatDataAllocator::free(HeapStatData& data) {
     size_t key_removed = stats_.erase(&data);
     ASSERT(key_removed == 1);
   }
-  data.name_.free(table_);
+  StatName(data.name_).free(table_);
 
   delete &data;
 }
 
 std::string HeapStatData::name(const SymbolTable* symbol_table) const {
   ASSERT(symbol_table);
-  return name_.toString(*symbol_table);
+  return StatName(name_).toString(*symbol_table);
 }
 
 template class StatDataAllocatorImpl<HeapStatData>;

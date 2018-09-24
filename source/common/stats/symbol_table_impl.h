@@ -86,7 +86,7 @@ private:
    *
    * @param symbol_vec the vector of symbols to be freed.
    */
-  void free(uint8_t* symbol_vec, size_t size);
+  void free(const uint8_t* symbol_vec, size_t size);
 
   /**
    * Convenience function for encode(), symbolizing one string segment at a time.
@@ -137,29 +137,33 @@ private:
  * Implements RAII for Symbols, since the StatName destructor does the work of freeing its component
  * symbols.
  */
-class StatName : public NonCopyable {
+class StatName {
 public:
-  explicit StatName(const SymbolVec& symbol_vec) {
+  explicit StatName(const uint8_t* symbol_array) : symbol_array_(symbol_array) {}
+  StatName(const SymbolVec& symbol_vec, uint8_t* symbol_array) : symbol_array_(symbol_array) {
     size_t size = symbol_vec.size();
     ASSERT(size < 65536);
-    symbol_vec_ = new uint8_t[symbol_vec.size() + 2];
-    symbol_vec_[0] = size & 0xff;
-    symbol_vec_[1] = size >> 8;
-    memcpy(data(), symbol_vec.data(), size * sizeof(uint8_t));
+    //symbol_array_ = new uint8_t[symbol_vec.size() + 2];
+    symbol_array[0] = size & 0xff;
+    symbol_array[1] = size >> 8;
+    memcpy(symbol_array + 2, symbol_vec.data(), size * sizeof(uint8_t));
   }
 
-  ~StatName() {
-    delete [] symbol_vec_;
-  }
+  static size_t size(const SymbolVec& symbol_vec) { return symbol_vec.size() + 2;}
 
-  //~StatName() { ASSERT(symbol_vec_.empty()); }  // { symbolb_table_.free(symbol_vec_); }
+
+
+  /*  ~StatName() {
+    delete [] symbol_array_;
+    }*/
+
+  //~StatName() { ASSERT(symbol_array_.empty()); }  // { symbolb_table_.free(symbol_array_); }
 
   size_t size() const {
-    return symbol_vec_[0] | (static_cast<size_t>(symbol_vec_[1]) << 8);
+    return symbol_array_[0] | (static_cast<size_t>(symbol_array_[1]) << 8);
   }
 
-  uint8_t* data() { return symbol_vec_ + 2; }
-  const uint8_t* data() const { return symbol_vec_ + 2; }
+  const uint8_t* data() const { return symbol_array_ + 2; }
 
   void free(SymbolTable& symbol_table) { symbol_table.free(data(), size()); }
   std::string toString(const SymbolTable& table) const { return table.decode(data(), size()); }
@@ -183,7 +187,7 @@ private:
   friend SymbolTable;
 
   friend class StatNameTest;
-  uint8_t* symbol_vec_;
+  const uint8_t* symbol_array_;
 };
 
 struct StatNamePtrHash {

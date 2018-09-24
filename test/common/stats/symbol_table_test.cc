@@ -16,10 +16,19 @@ protected:
   //std::string decodeSymbolVec(const SymbolVec& symbol_vec) { return table_.decode(symbol_vec); }
   Symbol monotonicCounter() { return table_.monotonicCounter(); }
   std::string EncodeDecode(absl::string_view stat_name) {
-    return StatName(table_.encode(stat_name)).toString(table_);
+    return makeStat(stat_name).toString(table_);
+  }
+
+  StatName makeStat(absl::string_view stat_name) {
+    SymbolVec symbol_vec = table_.encode(stat_name);
+    uint8_t* buffer = new uint8_t[StatName::size(symbol_vec)];
+    stat_name_buffers_.emplace_back(std::unique_ptr<uint8_t[]>(buffer));
+    return StatName(symbol_vec, buffer);
   }
 
   SymbolTable table_;
+
+  std::vector<std::unique_ptr<uint8_t[]>> stat_name_buffers_;
 };
 
 TEST_F(StatNameTest, TestArbitrarySymbolRoundtrip) {
@@ -45,15 +54,15 @@ TEST_F(StatNameTest, TestUnusualDelimitersRoundtrip) {
 }
 
 TEST_F(StatNameTest, TestSuccessfulDoubleLookup) {
-  StatName stat_name_1(table_.encode("foo.bar.baz"));
-  StatName stat_name_2(table_.encode("foo.bar.baz"));
+  StatName stat_name_1(makeStat("foo.bar.baz"));
+  StatName stat_name_2(makeStat("foo.bar.baz"));
   EXPECT_EQ(stat_name_1, stat_name_2);
 }
 
 TEST_F(StatNameTest, TestSuccessfulDecode) {
   std::string stat_name = "foo.bar.baz";
-  StatName stat_name_1(table_.encode(stat_name));
-  StatName stat_name_2(table_.encode(stat_name));
+  StatName stat_name_1(makeStat(stat_name));
+  StatName stat_name_2(makeStat(stat_name));
   EXPECT_EQ(stat_name_1.toString(table_), stat_name_2.toString(table_));
   EXPECT_EQ(stat_name_1.toString(table_), stat_name);
 }
@@ -67,7 +76,7 @@ TEST_F(StatNameTest, TestBadDecodes) {
   }
 
   {
-    StatName stat_name_1 = table_.encode("foo");
+    StatName stat_name_1 = makeStat("foo");
     SymbolVec vec_1 = getSymbols(stat_name_1);
     // Decoding a symbol vec that exists is perfectly normal...
     EXPECT_NO_THROW(decodeSymbolVec(vec_1));
@@ -78,16 +87,16 @@ TEST_F(StatNameTest, TestBadDecodes) {
   }*/
 
 TEST_F(StatNameTest, TestDifferentStats) {
-  StatName stat_name_1(table_.encode("foo.bar"));
-  StatName stat_name_2(table_.encode("bar.foo"));
+  StatName stat_name_1(makeStat("foo.bar"));
+  StatName stat_name_2(makeStat("bar.foo"));
   EXPECT_NE(stat_name_1.toString(table_), stat_name_2.toString(table_));
   EXPECT_NE(stat_name_1, stat_name_2);
 }
 
 /*
 TEST_F(StatNameTest, TestSymbolConsistency) {
-  StatName stat_name_1(table_.encode("foo.bar"));
-  StatName stat_name_2(table_.encode("bar.foo"));
+  StatName stat_name_1(makeStat("foo.bar"));
+  StatName stat_name_2(makeStat("bar.foo"));
   // We expect the encoding of "foo" in one context to be the same as another.
   SymbolVec vec_1 = getSymbols(stat_name_1);
   SymbolVec vec_2 = getSymbols(stat_name_2);
@@ -100,12 +109,12 @@ TEST_F(StatNameTest, TestSymbolConsistency) {
 TEST_F(StatNameTest, TestSameValueOnPartialFree) {
   // This should hold true for components as well. Since "foo" persists even when "foo.bar" is
   // freed, we expect both instances of "foo" to have the same symbol.
-  StatName stat_foo(table_.encode("foo"));
-  StatName stat_foobar_1(table_.encode("foo.bar"));
+  StatName stat_foo(makeStat("foo"));
+  StatName stat_foobar_1(makeStat("foo.bar"));
   SymbolVec stat_foobar_1_symbols = getSymbols(stat_foobar_1);
   stat_foobar_1.free(table_);
 
-  StatName stat_foobar_2(table_.encode("foo.bar"));
+  StatName stat_foobar_2(makeStat("foo.bar"));
   SymbolVec stat_foobar_2_symbols = getSymbols(stat_foobar_2);
 
   EXPECT_EQ(stat_foobar_1_symbols[0],
@@ -122,11 +131,11 @@ TEST_F(StatNameTest, FreePoolTest) {
   //   coexisting symbols during the life of the table.
 
   {
-    StatName stat_1(table_.encode("1a"));
-    StatName stat_2(table_.encode("2a"));
-    StatName stat_3(table_.encode("3a"));
-    StatName stat_4(table_.encode("4a"));
-    StatName stat_5(table_.encode("5a"));
+    StatName stat_1(makeStat("1a"));
+    StatName stat_2(makeStat("2a"));
+    StatName stat_3(makeStat("3a"));
+    StatName stat_4(makeStat("4a"));
+    StatName stat_5(makeStat("5a"));
     EXPECT_EQ(monotonicCounter(), 5);
     EXPECT_EQ(table_.size(), 5);
     stat_1.free(table_);
@@ -140,15 +149,15 @@ TEST_F(StatNameTest, FreePoolTest) {
 
   // These are different strings being encoded, but they should recycle through the same symbols as
   // the stats above.
-  StatName stat_1(table_.encode("1b"));
-  StatName stat_2(table_.encode("2b"));
-  StatName stat_3(table_.encode("3b"));
-  StatName stat_4(table_.encode("4b"));
-  StatName stat_5(table_.encode("5b"));
+  StatName stat_1(makeStat("1b"));
+  StatName stat_2(makeStat("2b"));
+  StatName stat_3(makeStat("3b"));
+  StatName stat_4(makeStat("4b"));
+  StatName stat_5(makeStat("5b"));
   EXPECT_EQ(monotonicCounter(), 5);
   EXPECT_EQ(table_.size(), 5);
 
-  StatName stat_6(table_.encode("6"));
+  StatName stat_6(makeStat("6"));
   EXPECT_EQ(monotonicCounter(), 6);
   EXPECT_EQ(table_.size(), 6);
 }
@@ -159,22 +168,22 @@ TEST_F(StatNameTest, TestShrinkingExpectation) {
   // ::size() is a public function, but should only be used for testing.
   size_t table_size_0 = table_.size();
 
-  StatName stat_a(table_.encode("a"));
+  StatName stat_a(makeStat("a"));
   size_t table_size_1 = table_.size();
 
-  StatName stat_aa(table_.encode("a.a"));
+  StatName stat_aa(makeStat("a.a"));
   EXPECT_EQ(table_size_1, table_.size());
 
-  StatName stat_ab(table_.encode("a.b"));
+  StatName stat_ab(makeStat("a.b"));
   size_t table_size_2 = table_.size();
 
-  StatName stat_ac(table_.encode("a.c"));
+  StatName stat_ac(makeStat("a.c"));
   size_t table_size_3 = table_.size();
 
-  StatName stat_acd(table_.encode("a.c.d"));
+  StatName stat_acd(makeStat("a.c.d"));
   size_t table_size_4 = table_.size();
 
-  StatName stat_ace(table_.encode("a.c.e"));
+  StatName stat_ace(makeStat("a.c.e"));
   size_t table_size_5 = table_.size();
   EXPECT_GE(table_size_5, table_size_4);
 

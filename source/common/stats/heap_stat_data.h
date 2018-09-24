@@ -23,21 +23,21 @@ class HeapStatDataAllocator;
  * so that it can be allocated efficiently from the heap on demand.
  */
 struct HeapStatData {
-  explicit HeapStatData(const SymbolVec& name) : name_(name) {}
+  explicit HeapStatData(const SymbolVec& symbol_vec) { StatName stat_name(symbol_vec, name_); }
 
   /**
    * @returns std::string the name as a std::string with no truncation.
    */
   std::string name(const SymbolTable* symbol_table) const;
-  StatNamePtr nameRef() const { return std::make_unique<SymbolStatNameRef>(name_); }
+  StatNamePtr nameRef() const { return std::make_unique<SymbolStatNameRef>(StatName(name_)); }
 
-  bool operator==(const HeapStatData& rhs) const { return name_ == rhs.name_; }
+  bool operator==(const HeapStatData& rhs) const { return StatName(name_) == StatName(rhs.name_); }
 
   std::atomic<uint64_t> value_{0};
   std::atomic<uint64_t> pending_increment_{0};
   std::atomic<uint16_t> flags_{0};
   std::atomic<uint16_t> ref_count_{1};
-  StatName name_;
+  uint8_t name_[];
 };
 
 /**
@@ -64,7 +64,7 @@ private:
   friend HeapStatData;
 
   struct HeapStatHash {
-    size_t operator()(const HeapStatData* a) const { return a->name_.hash(); }
+    size_t operator()(const HeapStatData* a) const { return StatName(a->name_).hash(); }
   };
   struct HeapStatCompare {
     bool operator()(const HeapStatData* a, const HeapStatData* b) const { return *a == *b; }
