@@ -60,6 +60,8 @@ public:
   //StatName encode(absl::string_view sv) { return table_.encode(sv); }
   const SymbolTable* symbolTable() const override { return &table_; }
 
+  int64_t bytesSaved() const { return bytes_saved_; }
+
 private:
   friend HeapStatData;
 
@@ -85,6 +87,7 @@ private:
   // free() operations are made from the destructors of the individual stat objects, which are not
   // protected by locks.
   Thread::MutexBasicLockable mutex_;
+  size_t bytes_saved_{0};
 };
 
 } // namespace Stats
