@@ -150,9 +150,10 @@ public:
     symbol_array[0] = size & 0xff;
     symbol_array[1] = size >> 8;
     memcpy(symbol_array + 2, symbol_vec.data(), size * sizeof(uint8_t));
-    return size;
+    return size + 2;
   }
 
+  // Returns the size in bytes needed for storage allocation.
   static size_t size(const SymbolVec& symbol_vec) { return symbol_vec.size() + 2;}
 
 
@@ -162,9 +163,13 @@ public:
 
   //~StatName() { ASSERT(symbol_array_.empty()); }  // { symbolb_table_.free(symbol_array_); }
 
+  // Returns the number of symbols.
   size_t size() const {
     return symbol_array_[0] | (static_cast<size_t>(symbol_array_[1]) << 8);
   }
+
+  // Returns the number of bytes in the representation.
+  size_t sizeBytes() const { return size() + 2; }
 
   const uint8_t* data() const { return symbol_array_ + 2; }
 

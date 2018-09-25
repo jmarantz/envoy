@@ -23,7 +23,7 @@ public:
   MetricImpl(std::string&& tag_extracted_name, std::vector<Tag>&& tags, SymbolTable& symbol_table);
 
   std::string tagExtractedName(const SymbolTable& symbol_table) const override {
-    StatName stat_name(&storage_[0]);
+    StatName stat_name(&storage_[1]);
     return stat_name.toString(symbol_table);
   }
   std::vector<Tag> tags(const SymbolTable&) const override;
@@ -37,9 +37,6 @@ protected:
   };
 
 private:
-  //StatName tagExtractedStatName() { return StatName(storage_); }
-
-  std::vector<std::pair<StatName, StatName>> tags_;
   std::unique_ptr<uint8_t[]> storage_;
 };
 
