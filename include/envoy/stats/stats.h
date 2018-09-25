@@ -16,6 +16,7 @@ namespace Stats {
 
 class StatNameRef;
 using StatNamePtr = std::unique_ptr<StatNameRef>;
+class SymbolTable;
 struct Tag;
 
 /**
@@ -37,12 +38,12 @@ public:
   /**
    * Returns a vector of configurable tags to identify this Metric.
    */
-  virtual const std::vector<Tag>& tags() const PURE;
+  virtual std::vector<Tag> tags(const SymbolTable&) const PURE;
 
   /**
    * Returns the name of the Metric with the portions designated as tags removed.
    */
-  virtual const std::string& tagExtractedName() const PURE;
+  virtual std::string tagExtractedName(const SymbolTable&) const PURE;
 
   /**
    * Indicates whether this metric has been updated since the server was started.

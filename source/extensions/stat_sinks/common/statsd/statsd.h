@@ -46,11 +46,13 @@ private:
 class UdpStatsdSink : public Stats::Sink {
 public:
   UdpStatsdSink(ThreadLocal::SlotAllocator& tls, Network::Address::InstanceConstSharedPtr address,
-                const bool use_tag, const std::string& prefix = getDefaultPrefix());
+                const bool use_tag, Stats::SymbolTable& symbol_table,
+                const std::string& prefix = getDefaultPrefix());
   // For testing.
   UdpStatsdSink(ThreadLocal::SlotAllocator& tls, const std::shared_ptr<Writer>& writer,
-                const bool use_tag, const std::string& prefix = getDefaultPrefix())
-      : tls_(tls.allocateSlot()), use_tag_(use_tag),
+                const bool use_tag, Stats::SymbolTable& symbol_table,
+                const std::string& prefix = getDefaultPrefix())
+      : tls_(tls.allocateSlot()), use_tag_(use_tag), symbol_table_(symbol_table),
         prefix_(prefix.empty() ? getDefaultPrefix() : prefix) {
     tls_->set(
         [writer](Event::Dispatcher&) -> ThreadLocal::ThreadLocalObjectSharedPtr { return writer; });
@@ -72,6 +74,7 @@ private:
   ThreadLocal::SlotPtr tls_;
   Network::Address::InstanceConstSharedPtr server_address_;
   const bool use_tag_;
+  Stats::SymbolTable& symbol_table_;
   // Prefix for all flushed stats.
   const std::string prefix_;
 };

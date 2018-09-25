@@ -28,7 +28,10 @@ public:
   MOCK_METHOD1(write, void(const std::string& message));
 };
 
-class UdpStatsdSinkTest : public testing::TestWithParam<Network::Address::IpVersion> {};
+class UdpStatsdSinkTest : public testing::TestWithParam<Network::Address::IpVersion> {
+ protected:
+  Stats::SymbolTable symbol_table_;
+};
 INSTANTIATE_TEST_CASE_P(IpVersions, UdpStatsdSinkTest,
                         testing::ValuesIn(TestEnvironment::getIpVersionsForTest()),
                         TestUtility::ipTestParamsToString);
@@ -39,7 +42,7 @@ TEST_P(UdpStatsdSinkTest, InitWithIpAddress) {
   Network::Address::InstanceConstSharedPtr server_address =
       Network::Utility::parseInternetAddressAndPort(
           fmt::format("{}:8125", Network::Test::getLoopbackAddressUrlString(GetParam())));
-  UdpStatsdSink sink(tls_, server_address, false);
+  UdpStatsdSink sink(tls_, server_address, false, symbol_table_);
   int fd = sink.getFdForTests();
   EXPECT_NE(fd, -1);
 
@@ -72,7 +75,10 @@ TEST_P(UdpStatsdSinkTest, InitWithIpAddress) {
   tls_.shutdownThread();
 }
 
-class UdpStatsdSinkWithTagsTest : public testing::TestWithParam<Network::Address::IpVersion> {};
+class UdpStatsdSinkWithTagsTest : public testing::TestWithParam<Network::Address::IpVersion> {
+ protected:
+  Stats::SymbolTable symbol_table_;
+};
 INSTANTIATE_TEST_CASE_P(IpVersions, UdpStatsdSinkWithTagsTest,
                         testing::ValuesIn(TestEnvironment::getIpVersionsForTest()),
                         TestUtility::ipTestParamsToString);
@@ -84,7 +90,7 @@ TEST_P(UdpStatsdSinkWithTagsTest, InitWithIpAddress) {
   Network::Address::InstanceConstSharedPtr server_address =
       Network::Utility::parseInternetAddressAndPort(
           fmt::format("{}:8125", Network::Test::getLoopbackAddressUrlString(GetParam())));
-  UdpStatsdSink sink(tls_, server_address, true);
+  UdpStatsdSink sink(tls_, server_address, true, symbol_table_);
   int fd = sink.getFdForTests();
   EXPECT_NE(fd, -1);
 
@@ -121,11 +127,11 @@ TEST_P(UdpStatsdSinkWithTagsTest, InitWithIpAddress) {
   tls_.shutdownThread();
 }
 
-TEST(UdpStatsdSinkTest, CheckActualStats) {
+TEST_F(UdpStatsdSinkTest, CheckActualStats) {
   NiceMock<Stats::MockSource> source;
   auto writer_ptr = std::make_shared<NiceMock<MockWriter>>();
   NiceMock<ThreadLocal::MockInstance> tls_;
-  UdpStatsdSink sink(tls_, writer_ptr, false);
+  UdpStatsdSink sink(tls_, writer_ptr, false, symbol_table_);
 
   auto counter = std::make_shared<NiceMock<Stats::MockCounter>>();
   counter->name_ = "test_counter";
@@ -157,11 +163,11 @@ TEST(UdpStatsdSinkTest, CheckActualStats) {
   tls_.shutdownThread();
 }
 
-TEST(UdpStatsdSinkWithTagsTest, CheckActualStats) {
+TEST_F(UdpStatsdSinkWithTagsTest, CheckActualStats) {
   NiceMock<Stats::MockSource> source;
   auto writer_ptr = std::make_shared<NiceMock<MockWriter>>();
   NiceMock<ThreadLocal::MockInstance> tls_;
-  UdpStatsdSink sink(tls_, writer_ptr, true);
+  UdpStatsdSink sink(tls_, writer_ptr, true, symbol_table_);
 
   std::vector<Stats::Tag> tags = {Stats::Tag{"key1", "value1"}, Stats::Tag{"key2", "value2"}};
   auto counter = std::make_shared<NiceMock<Stats::MockCounter>>();

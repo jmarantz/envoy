@@ -40,9 +40,10 @@ void Writer::write(const std::string& message) {
 
 UdpStatsdSink::UdpStatsdSink(ThreadLocal::SlotAllocator& tls,
                              Network::Address::InstanceConstSharedPtr address, const bool use_tag,
+                             Stats::SymbolTable& symbol_table,
                              const std::string& prefix)
     : tls_(tls.allocateSlot()), server_address_(std::move(address)), use_tag_(use_tag),
-      prefix_(prefix.empty() ? Statsd::getDefaultPrefix() : prefix) {
+      symbol_table_(symbol_table), prefix_(prefix.empty() ? Statsd::getDefaultPrefix() : prefix) {
   tls_->set([this](Event::Dispatcher&) -> ThreadLocal::ThreadLocalObjectSharedPtr {
     return std::make_shared<Writer>(this->server_address_);
   });
@@ -54,14 +55,14 @@ void UdpStatsdSink::flush(Stats::Source& source) {
     if (counter->used()) {
       uint64_t delta = counter->latch();
       writer.write(fmt::format("{}.{}:{}|c{}", prefix_, getName(*counter), delta,
-                               buildTagStr(counter->tags())));
+                               buildTagStr(counter->tags(symbol_table_))));
     }
   }
 
   for (const Stats::GaugeSharedPtr& gauge : source.cachedGauges()) {
     if (gauge->used()) {
       writer.write(fmt::format("{}.{}:{}|g{}", prefix_, getName(*gauge), gauge->value(),
-                               buildTagStr(gauge->tags())));
+                               buildTagStr(gauge->tags(symbol_table_))));
     }
   }
 }
@@ -70,13 +71,13 @@ void UdpStatsdSink::onHistogramComplete(const Stats::Histogram& histogram, uint6
   // For statsd histograms are all timers.
   const std::string message(fmt::format("{}.{}:{}|ms{}", prefix_, getName(histogram),
                                         std::chrono::milliseconds(value).count(),
-                                        buildTagStr(histogram.tags())));
+                                        buildTagStr(histogram.tags(symbol_table_))));
   tls_->getTyped<Writer>().write(message);
 }
 
 const std::string UdpStatsdSink::getName(const Stats::Metric& metric) {
   if (use_tag_) {
-    return metric.tagExtractedName();
+    return metric.tagExtractedName(symbol_table_);
   } else {
     return metric.name();
   }

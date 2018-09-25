@@ -48,11 +48,11 @@ MainCommonBase::MainCommonBase(OptionsImpl& options) : options_(options) {
   case Server::Mode::Serve: {
 #ifdef ENVOY_HOT_RESTART
     if (!options.hotRestartDisabled()) {
-      restarter_.reset(new Server::HotRestartImpl(options_));
+      restarter_.reset(new Server::HotRestartImpl(options_, symbol_table_));
     }
 #endif
     if (restarter_.get() == nullptr) {
-      restarter_.reset(new Server::HotRestartNopImpl());
+      restarter_.reset(new Server::HotRestartNopImpl(symbol_table_));
     }
 
     tls_.reset(new ThreadLocal::InstanceImpl);
@@ -72,7 +72,7 @@ MainCommonBase::MainCommonBase(OptionsImpl& options) : options_(options) {
     break;
   }
   case Server::Mode::Validate:
-    restarter_.reset(new Server::HotRestartNopImpl());
+    restarter_.reset(new Server::HotRestartNopImpl(symbol_table_));
     logging_context_ = std::make_unique<Logger::Context>(options_.logLevel(), options_.logFormat(),
                                                          restarter_->logLock());
     break;

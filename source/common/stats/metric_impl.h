@@ -6,6 +6,7 @@
 #include "envoy/stats/stats.h"
 
 #include "common/common/assert.h"
+#include "common/stats/symbol_table_impl.h"
 
 namespace Envoy {
 namespace Stats {
@@ -19,11 +20,13 @@ namespace Stats {
  */
 class MetricImpl : public virtual Metric {
 public:
-  MetricImpl(std::string&& tag_extracted_name, std::vector<Tag>&& tags)
-      : tag_extracted_name_(std::move(tag_extracted_name)), tags_(std::move(tags)) {}
+  MetricImpl(std::string&& tag_extracted_name, std::vector<Tag>&& tags, SymbolTable& symbol_table);
 
-  const std::string& tagExtractedName() const override { return tag_extracted_name_; }
-  const std::vector<Tag>& tags() const override { return tags_; }
+  std::string tagExtractedName(const SymbolTable& symbol_table) const override {
+    StatName stat_name(&storage_[0]);
+    return stat_name.toString(symbol_table);
+  }
+  std::vector<Tag> tags(const SymbolTable&) const override;
 
 protected:
   /**
@@ -34,8 +37,10 @@ protected:
   };
 
 private:
-  const std::string tag_extracted_name_;
-  const std::vector<Tag> tags_;
+  //StatName tagExtractedStatName() { return StatName(storage_); }
+
+  std::vector<std::pair<StatName, StatName>> tags_;
+  std::unique_ptr<uint8_t[]> storage_;
 };
 
 } // namespace Stats

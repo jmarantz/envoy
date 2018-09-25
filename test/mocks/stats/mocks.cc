@@ -14,8 +14,8 @@ namespace Envoy {
 namespace Stats {
 
 MockCounter::MockCounter() {
-  ON_CALL(*this, tagExtractedName()).WillByDefault(ReturnRef(name_));
-  ON_CALL(*this, tags()).WillByDefault(ReturnRef(tags_));
+  ON_CALL(*this, tagExtractedName(_)).WillByDefault(Return(name_));
+  ON_CALL(*this, tags(_)).WillByDefault(Return(tags_));
   ON_CALL(*this, used()).WillByDefault(ReturnPointee(&used_));
   ON_CALL(*this, value()).WillByDefault(ReturnPointee(&value_));
   ON_CALL(*this, latch()).WillByDefault(ReturnPointee(&latch_));
@@ -23,8 +23,8 @@ MockCounter::MockCounter() {
 MockCounter::~MockCounter() {}
 
 MockGauge::MockGauge() {
-  ON_CALL(*this, tagExtractedName()).WillByDefault(ReturnRef(name_));
-  ON_CALL(*this, tags()).WillByDefault(ReturnRef(tags_));
+  ON_CALL(*this, tagExtractedName(_)).WillByDefault(Return(name_));
+  ON_CALL(*this, tags(_)).WillByDefault(Return(tags_));
   ON_CALL(*this, used()).WillByDefault(ReturnPointee(&used_));
   ON_CALL(*this, value()).WillByDefault(ReturnPointee(&value_));
 }
@@ -36,8 +36,8 @@ MockHistogram::MockHistogram() {
       store_->deliverHistogramToSinks(*this, value);
     }
   }));
-  ON_CALL(*this, tagExtractedName()).WillByDefault(ReturnRef(name_));
-  ON_CALL(*this, tags()).WillByDefault(ReturnRef(tags_));
+  ON_CALL(*this, tagExtractedName(_)).WillByDefault(Return(name_));
+  ON_CALL(*this, tags(_)).WillByDefault(Return(tags_));
 }
 
 MockHistogram::~MockHistogram() {}
@@ -48,8 +48,8 @@ MockParentHistogram::MockParentHistogram() {
       store_->deliverHistogramToSinks(*this, value);
     }
   }));
-  ON_CALL(*this, tagExtractedName()).WillByDefault(ReturnRef(name_));
-  ON_CALL(*this, tags()).WillByDefault(ReturnRef(tags_));
+  ON_CALL(*this, tagExtractedName(_)).WillByDefault(Return(name_));
+  ON_CALL(*this, tags(_)).WillByDefault(Return(tags_));
   ON_CALL(*this, intervalStatistics()).WillByDefault(ReturnRef(*histogram_stats_));
   ON_CALL(*this, cumulativeStatistics()).WillByDefault(ReturnRef(*histogram_stats_));
   ON_CALL(*this, used()).WillByDefault(ReturnPointee(&used_));

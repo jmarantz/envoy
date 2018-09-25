@@ -31,7 +31,7 @@ namespace Stats {
 class ThreadLocalHistogramImpl : public Histogram, public MetricImpl {
 public:
   ThreadLocalHistogramImpl(const std::string& name, std::string&& tag_extracted_name,
-                           std::vector<Tag>&& tags);
+                           std::vector<Tag>&& tags, SymbolTable& symbol_table);
   ~ThreadLocalHistogramImpl();
 
   void merge(histogram_t* target);
@@ -75,7 +75,8 @@ class TlsScope;
 class ParentHistogramImpl : public ParentHistogram, public MetricImpl {
 public:
   ParentHistogramImpl(const std::string& name, Store& parent, TlsScope& tlsScope,
-                      std::string&& tag_extracted_name, std::vector<Tag>&& tags);
+                      std::string&& tag_extracted_name, std::vector<Tag>&& tags,
+                      SymbolTable& symbol_table);
   ~ParentHistogramImpl();
 
   void addTlsHistogram(const TlsHistogramSharedPtr& hist_ptr);
@@ -216,6 +217,7 @@ public:
   void mergeHistograms(PostMergeCb mergeCb) override;
 
   Source& source() override { return source_; }
+  SymbolTable& symbolTable() { return symbol_table_; }
 
   const Stats::StatsOptions& statsOptions() const override { return stats_options_; }
 
@@ -337,14 +339,13 @@ private:
   void releaseScopeCrossThread(ScopeImpl* scope);
   void mergeInternal(PostMergeCb mergeCb);
   absl::string_view truncateStatNameIfNeeded(absl::string_view name);
-  const SymbolTable& findSymbolTable();
 
   const Stats::StatsOptions& stats_options_;
   StatDataAllocator& alloc_;
   Event::Dispatcher* main_thread_dispatcher_{};
   mutable Thread::MutexBasicLockable lock_;
+  SymbolTable& symbol_table_;
   HeapStatDataAllocator heap_allocator_ GUARDED_BY(lock_);
-  const SymbolTable& symbol_table_;
   ThreadLocal::SlotPtr tls_;
   std::unordered_set<ScopeImpl*> scopes_ GUARDED_BY(lock_);
   ScopePtr default_scope_;

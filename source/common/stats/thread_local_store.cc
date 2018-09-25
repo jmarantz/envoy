@@ -25,8 +25,9 @@ namespace Stats {
 
 ThreadLocalStoreImpl::ThreadLocalStoreImpl(const StatsOptions& stats_options,
                                            StatDataAllocator& alloc)
-    : stats_options_(stats_options), alloc_(alloc), symbol_table_(findSymbolTable()),
-      default_scope_(createScope("")), tag_producer_(std::make_unique<TagProducerImpl>()),
+    : stats_options_(stats_options), alloc_(alloc), symbol_table_(alloc.symbolTable()),
+      heap_allocator_(symbol_table_), default_scope_(createScope("")),
+      tag_producer_(std::make_unique<TagProducerImpl>()),
       num_last_resort_stats_(default_scope_->counter("stats.overflow")), source_(*this) {
 }
 
@@ -34,16 +35,6 @@ ThreadLocalStoreImpl::~ThreadLocalStoreImpl() {
   ASSERT(shutting_down_);
   default_scope_.reset();
   ASSERT(scopes_.empty());
-}
-
-const SymbolTable& ThreadLocalStoreImpl::findSymbolTable() {
-  const SymbolTable* symbol_table = alloc_.symbolTable();
-  if (symbol_table == nullptr) {
-    Thread::LockGuard lock(lock_);
-    symbol_table = heap_allocator_.symbolTable();
-    ASSERT(symbol_table);
-  }
-  return *symbol_table;
 }
 
 std::vector<CounterSharedPtr> ThreadLocalStoreImpl::counters() const {
@@ -370,7 +361,8 @@ Histogram& ThreadLocalStoreImpl::ScopeImpl::histogram(const std::string& name) {
     std::vector<Tag> tags;
     std::string tag_extracted_name = parent_.getTagsForName(final_name, tags);
     central_ref.reset(new ParentHistogramImpl(final_name, parent_, *this,
-                                              std::move(tag_extracted_name), std::move(tags)));
+                                              std::move(tag_extracted_name), std::move(tags),
+                                              parent_.symbol_table_));
   }
 
   if (tls_ref) {
@@ -402,7 +394,7 @@ Histogram& ThreadLocalStoreImpl::ScopeImpl::tlsHistogram(const std::string& name
   std::vector<Tag> tags;
   std::string tag_extracted_name = parent_.getTagsForName(name, tags);
   TlsHistogramSharedPtr hist_tls_ptr = std::make_shared<ThreadLocalHistogramImpl>(
-      name, std::move(tag_extracted_name), std::move(tags));
+      name, std::move(tag_extracted_name), std::move(tags), parent_.symbol_table_);
 
   parent.addTlsHistogram(hist_tls_ptr);
 
@@ -414,9 +406,10 @@ Histogram& ThreadLocalStoreImpl::ScopeImpl::tlsHistogram(const std::string& name
 
 ThreadLocalHistogramImpl::ThreadLocalHistogramImpl(const std::string& name,
                                                    std::string&& tag_extracted_name,
-                                                   std::vector<Tag>&& tags)
-    : MetricImpl(std::move(tag_extracted_name), std::move(tags)), current_active_(0), flags_(0),
-      created_thread_id_(std::this_thread::get_id()), name_(name) {
+                                                   std::vector<Tag>&& tags,
+                                                   SymbolTable& symbol_table)
+    : MetricImpl(std::move(tag_extracted_name), std::move(tags), symbol_table),
+      current_active_(0), flags_(0), created_thread_id_(std::this_thread::get_id()), name_(name) {
   histograms_[0] = hist_alloc();
   histograms_[1] = hist_alloc();
 }
@@ -440,8 +433,8 @@ void ThreadLocalHistogramImpl::merge(histogram_t* target) {
 
 ParentHistogramImpl::ParentHistogramImpl(const std::string& name, Store& parent,
                                          TlsScope& tls_scope, std::string&& tag_extracted_name,
-                                         std::vector<Tag>&& tags)
-    : MetricImpl(std::move(tag_extracted_name), std::move(tags)), parent_(parent),
+                                         std::vector<Tag>&& tags, SymbolTable& symbol_table)
+    : MetricImpl(std::move(tag_extracted_name), std::move(tags), symbol_table), parent_(parent),
       tls_scope_(tls_scope), interval_histogram_(hist_alloc()), cumulative_histogram_(hist_alloc()),
       interval_statistics_(interval_histogram_), cumulative_statistics_(cumulative_histogram_),
       merged_(false), name_(name) {}

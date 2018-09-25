@@ -461,8 +461,8 @@ TEST_F(HystrixSinkTest, HistogramTest) {
   auto histogram = std::make_shared<NiceMock<Stats::MockParentHistogram>>();
   histogram->name_ = "cluster." + cluster1_name_ + ".upstream_rq_time";
   const std::string tag_extracted_name = "cluster.upstream_rq_time";
-  ON_CALL(*histogram, tagExtractedName())
-      .WillByDefault(testing::ReturnRefOfCopy(tag_extracted_name));
+  ON_CALL(*histogram, tagExtractedName(_))
+      .WillByDefault(testing::Return(tag_extracted_name));
   std::vector<Stats::Tag> tags;
   Stats::Tag tag = {
       Config::TagNames::get().CLUSTER_NAME, // name_

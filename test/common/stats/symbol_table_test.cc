@@ -19,11 +19,13 @@ protected:
     return makeStat(stat_name).toString(table_);
   }
 
-  StatName makeStat(absl::string_view stat_name) {
-    SymbolVec symbol_vec = table_.encode(stat_name);
+  StatName makeStat(absl::string_view name) {
+    SymbolVec symbol_vec = table_.encode(name);
     uint8_t* buffer = new uint8_t[StatName::size(symbol_vec)];
     stat_name_buffers_.emplace_back(std::unique_ptr<uint8_t[]>(buffer));
-    return StatName(symbol_vec, buffer);
+    StatName stat_name;
+    stat_name.init(symbol_vec, buffer);
+    return stat_name;
   }
 
   SymbolTable table_;
@@ -149,15 +151,15 @@ TEST_F(StatNameTest, FreePoolTest) {
 
   // These are different strings being encoded, but they should recycle through the same symbols as
   // the stats above.
-  StatName stat_1(makeStat("1b"));
-  StatName stat_2(makeStat("2b"));
-  StatName stat_3(makeStat("3b"));
-  StatName stat_4(makeStat("4b"));
-  StatName stat_5(makeStat("5b"));
+  makeStat("1b");
+  makeStat("2b");
+  makeStat("3b");
+  makeStat("4b");
+  makeStat("5b");
   EXPECT_EQ(monotonicCounter(), 5);
   EXPECT_EQ(table_.size(), 5);
 
-  StatName stat_6(makeStat("6"));
+  makeStat("6");
   EXPECT_EQ(monotonicCounter(), 6);
   EXPECT_EQ(table_.size(), 6);
 }

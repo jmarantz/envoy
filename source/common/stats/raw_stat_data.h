@@ -80,7 +80,7 @@ struct RawStatData {
   /**
    * Returns the name as a std::string.
    */
-  std::string name(const SymbolTable*) const { return std::string(name_); }
+  std::string name(const SymbolTable&) const { return std::string(name_); }
   StatNamePtr nameRef() const {
     return std::make_unique<StringViewStatNameRef>(absl::string_view(name_));
   }
@@ -95,9 +95,15 @@ struct RawStatData {
 
 class RawStatDataAllocator : public StatDataAllocatorImpl<RawStatData> {
 public:
+  explicit RawStatDataAllocator(SymbolTable& symbol_table) : symbol_table_(symbol_table) {}
+
   // StatDataAllocator
   bool requiresBoundedStatNameSize() const override { return true; }
-  const SymbolTable* symbolTable() const override { return nullptr; }
+  const SymbolTable& symbolTable() const override { return symbol_table_; }
+  SymbolTable& symbolTable() override { return symbol_table_; }
+
+ private:
+  SymbolTable& symbol_table_;
 };
 
 

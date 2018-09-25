@@ -178,6 +178,8 @@ public:
   void sendRawHttpAndWaitForResponse(int port, const char* raw_http, std::string* response,
                                      bool disconnect_after_headers_complete = false);
 
+  Stats::SymbolTable& symbolTable() { return test_server_->symbolTable(); }
+
 protected:
   bool initialized() const { return initialized_; }
 

@@ -46,8 +46,9 @@ private:
 class HistogramImpl : public Histogram, public MetricImpl {
 public:
   HistogramImpl(const std::string& name, Store& parent, std::string&& tag_extracted_name,
-                std::vector<Tag>&& tags)
-      : MetricImpl(std::move(tag_extracted_name), std::move(tags)), parent_(parent), name_(name) {}
+                std::vector<Tag>&& tags, SymbolTable& symbol_table)
+      : MetricImpl(std::move(tag_extracted_name), std::move(tags), symbol_table),
+        parent_(parent), name_(name) {}
 
   // Stats:;Metric
   const std::string name() const override { return name_; }

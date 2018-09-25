@@ -63,8 +63,9 @@ public:
 template <class StatData> class CounterImpl : public Counter, public MetricImpl {
 public:
   CounterImpl(StatData& data, StatDataAllocatorImpl<StatData>& alloc,
-              std::string&& tag_extracted_name, std::vector<Tag>&& tags)
-      : MetricImpl(std::move(tag_extracted_name), std::move(tags)), data_(data), alloc_(alloc) {}
+              std::string&& tag_extracted_name, std::vector<Tag>&& tags, SymbolTable& symbol_table)
+      : MetricImpl(std::move(tag_extracted_name), std::move(tags), symbol_table),
+        data_(data), alloc_(alloc) {}
   ~CounterImpl() { alloc_.free(data_); }
 
   // Stats::Metric
@@ -95,8 +96,9 @@ private:
 template <class StatData> class GaugeImpl : public Gauge, public MetricImpl {
 public:
   GaugeImpl(StatData& data, StatDataAllocatorImpl<StatData>& alloc,
-            std::string&& tag_extracted_name, std::vector<Tag>&& tags)
-      : MetricImpl(std::move(tag_extracted_name), std::move(tags)), data_(data), alloc_(alloc) {}
+            std::string&& tag_extracted_name, std::vector<Tag>&& tags, SymbolTable& symbol_table)
+      : MetricImpl(std::move(tag_extracted_name), std::move(tags), symbol_table),
+        data_(data), alloc_(alloc) {}
   ~GaugeImpl() { alloc_.free(data_); }
 
   // Stats::Metric
@@ -136,7 +138,7 @@ CounterSharedPtr StatDataAllocatorImpl<StatData>::makeCounter(absl::string_view 
     return nullptr;
   }
   return std::make_shared<CounterImpl<StatData>>(*data, *this, std::move(tag_extracted_name),
-                                                 std::move(tags));
+                                                 std::move(tags), symbolTable());
 }
 
 template <class StatData>
@@ -148,7 +150,7 @@ GaugeSharedPtr StatDataAllocatorImpl<StatData>::makeGauge(absl::string_view name
     return nullptr;
   }
   return std::make_shared<GaugeImpl<StatData>>(*data, *this, std::move(tag_extracted_name),
-                                               std::move(tags));
+                                               std::move(tags), symbolTable());
 }
 
 } // namespace Stats

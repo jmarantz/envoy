@@ -8,7 +8,8 @@ namespace Stats {
 
 //HeapStatData::HeapStatData(StatNamePtr name_ptr) : name_ptr_(std::move(name_ptr)) {}
 
-HeapStatDataAllocator::HeapStatDataAllocator() {}
+HeapStatDataAllocator::HeapStatDataAllocator(SymbolTable& symbol_table)
+    : table_(symbol_table) {}
 
 HeapStatDataAllocator::~HeapStatDataAllocator() { ASSERT(stats_.empty()); }
 
@@ -48,9 +49,8 @@ void HeapStatDataAllocator::free(HeapStatData& data) {
   delete &data;
 }
 
-std::string HeapStatData::name(const SymbolTable* symbol_table) const {
-  ASSERT(symbol_table);
-  return StatName(name_).toString(*symbol_table);
+std::string HeapStatData::name(const SymbolTable& symbol_table) const {
+  return StatName(name_).toString(symbol_table);
 }
 
 template class StatDataAllocatorImpl<HeapStatData>;

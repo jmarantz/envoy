@@ -27,6 +27,7 @@ envoy_cc_library(
     deps = [
         "//include/envoy/common:interval_set_interface",
         "//source/common/common:hash_lib",
+        "//source/common/stats:symbol_table_lib",
     ],
 )
 

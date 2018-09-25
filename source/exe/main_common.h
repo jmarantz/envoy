@@ -52,6 +52,7 @@ protected:
   ProdComponentFactory component_factory_;
   Event::RealTimeSystem time_system_;
   DefaultTestHooks default_test_hooks_;
+  Stats::SymbolTable symbol_table_;
   std::unique_ptr<ThreadLocal::InstanceImpl> tls_;
   std::unique_ptr<Server::HotRestart> restarter_;
   std::unique_ptr<Stats::ThreadLocalStoreImpl> stats_store_;

@@ -24,8 +24,9 @@ Stats::SinkPtr StatsdSinkFactory::createStatsSink(const Protobuf::Message& confi
     Network::Address::InstanceConstSharedPtr address =
         Network::Address::resolveProtoAddress(statsd_sink.address());
     ENVOY_LOG(debug, "statsd UDP ip address: {}", address->asString());
-    return std::make_unique<Common::Statsd::UdpStatsdSink>(server.threadLocal(), std::move(address),
-                                                           false, statsd_sink.prefix());
+    return std::make_unique<Common::Statsd::UdpStatsdSink>(
+        server.threadLocal(), std::move(address), false,
+        server.hotRestart().statsAllocator().symbolTable(), statsd_sink.prefix());
   }
   case envoy::config::metrics::v2::StatsdSink::kTcpClusterName:
     ENVOY_LOG(debug, "statsd TCP cluster: {}", statsd_sink.tcp_cluster_name());

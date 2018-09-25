@@ -184,6 +184,7 @@ private:
   std::vector<const UrlHandler*> sortedHandlers() const;
   static const std::vector<std::pair<std::string, Runtime::Snapshot::Entry>>
   sortedRuntime(const std::unordered_map<std::string, const Runtime::Snapshot::Entry>& entries);
+  Stats::SymbolTable& symbolTable() { return server_.hotRestart().statsAllocator().symbolTable(); }
 
   /**
    * URL handlers.
@@ -354,7 +355,7 @@ public:
    */
   static uint64_t statsAsPrometheus(const std::vector<Stats::CounterSharedPtr>& counters,
                                     const std::vector<Stats::GaugeSharedPtr>& gauges,
-                                    Buffer::Instance& response);
+                                    Buffer::Instance& response, Stats::SymbolTable& symbol_table);
   /**
    * Format the given tags, returning a string as a comma-separated list
    * of <tag_name>="<tag_value>" pairs.

@@ -509,12 +509,11 @@ Http::Code AdminImpl::handlerMemory(absl::string_view, Http::HeaderMap&, Buffer:
   memory.set_allocated(Memory::Stats::totalCurrentlyAllocated());
   memory.set_heap_size(Memory::Stats::totalCurrentlyReserved());
   response.add(MessageUtil::getJsonStringFromMessage(memory, true)); // pretty-print
-  auto& alloc = server_.hotRestart().statsAllocator();
-  auto* symtab = alloc.symbolTable();
-  response.add(absl::StrCat("\n  num_symbols=", symtab->size(), "\n"));
+  response.add(absl::StrCat("\n  num_symbols=", symbolTable().size(), "\n"));
   response.add(absl::StrCat(
       "\n  bytes_saved=",
-      static_cast<Stats::HeapStatDataAllocator&>(alloc).bytesSaved(), "\n"));
+      dynamic_cast<Stats::HeapStatDataAllocator&>(
+          server_.hotRestart().statsAllocator()).bytesSaved(), "\n"));
   return Http::Code::OK;
 }
 
@@ -602,7 +601,7 @@ Http::Code AdminImpl::handlerStats(absl::string_view url, Http::HeaderMap& respo
 Http::Code AdminImpl::handlerPrometheusStats(absl::string_view, Http::HeaderMap&,
                                              Buffer::Instance& response, AdminStream&) {
   PrometheusStatsFormatter::statsAsPrometheus(server_.stats().counters(), server_.stats().gauges(),
-                                              response);
+                                              response, symbolTable());
   return Http::Code::OK;
 }
 
@@ -632,11 +631,12 @@ std::string PrometheusStatsFormatter::metricName(const std::string& extractedNam
 uint64_t
 PrometheusStatsFormatter::statsAsPrometheus(const std::vector<Stats::CounterSharedPtr>& counters,
                                             const std::vector<Stats::GaugeSharedPtr>& gauges,
-                                            Buffer::Instance& response) {
+                                            Buffer::Instance& response,
+                                            Stats::SymbolTable& symbol_table) {
   std::unordered_set<std::string> metric_type_tracker;
   for (const auto& counter : counters) {
-    const std::string tags = formattedTags(counter->tags());
-    const std::string metric_name = metricName(counter->tagExtractedName());
+    const std::string tags = formattedTags(counter->tags(symbol_table));
+    const std::string metric_name = metricName(counter->tagExtractedName(symbol_table));
     if (metric_type_tracker.find(metric_name) == metric_type_tracker.end()) {
       metric_type_tracker.insert(metric_name);
       response.add(fmt::format("# TYPE {0} counter\n", metric_name));
@@ -645,8 +645,8 @@ PrometheusStatsFormatter::statsAsPrometheus(const std::vector<Stats::CounterShar
   }
 
   for (const auto& gauge : gauges) {
-    const std::string tags = formattedTags(gauge->tags());
-    const std::string metric_name = metricName(gauge->tagExtractedName());
+    const std::string tags = formattedTags(gauge->tags(symbol_table));
+    const std::string metric_name = metricName(gauge->tagExtractedName(symbol_table));
     if (metric_type_tracker.find(metric_name) == metric_type_tracker.end()) {
       metric_type_tracker.insert(metric_name);
       response.add(fmt::format("# TYPE {0} gauge\n", metric_name));

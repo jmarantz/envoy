@@ -19,29 +19,29 @@ TEST(StatsIsolatedStoreImplTest, All) {
   Counter& c2 = scope1->counter("c2");
   EXPECT_EQ("c1", c1.name());
   EXPECT_EQ("scope1.c2", c2.name());
-  EXPECT_EQ("c1", c1.tagExtractedName());
-  EXPECT_EQ("scope1.c2", c2.tagExtractedName());
-  EXPECT_EQ(0, c1.tags().size());
-  EXPECT_EQ(0, c1.tags().size());
+  EXPECT_EQ("c1", c1.tagExtractedName(store.symbolTable()));
+  EXPECT_EQ("scope1.c2", c2.tagExtractedName(store.symbolTable()));
+  EXPECT_EQ(0, c1.tags(store.symbolTable()).size());
+  EXPECT_EQ(0, c1.tags(store.symbolTable()).size());
 
   Gauge& g1 = store.gauge("g1");
   Gauge& g2 = scope1->gauge("g2");
   EXPECT_EQ("g1", g1.name());
   EXPECT_EQ("scope1.g2", g2.name());
-  EXPECT_EQ("g1", g1.tagExtractedName());
-  EXPECT_EQ("scope1.g2", g2.tagExtractedName());
-  EXPECT_EQ(0, g1.tags().size());
-  EXPECT_EQ(0, g1.tags().size());
+  EXPECT_EQ("g1", g1.tagExtractedName(store.symbolTable()));
+  EXPECT_EQ("scope1.g2", g2.tagExtractedName(store.symbolTable()));
+  EXPECT_EQ(0, g1.tags(store.symbolTable()).size());
+  EXPECT_EQ(0, g1.tags(store.symbolTable()).size());
 
   Histogram& h1 = store.histogram("h1");
   Histogram& h2 = scope1->histogram("h2");
   scope1->deliverHistogramToSinks(h2, 0);
   EXPECT_EQ("h1", h1.name());
   EXPECT_EQ("scope1.h2", h2.name());
-  EXPECT_EQ("h1", h1.tagExtractedName());
-  EXPECT_EQ("scope1.h2", h2.tagExtractedName());
-  EXPECT_EQ(0, h1.tags().size());
-  EXPECT_EQ(0, h2.tags().size());
+  EXPECT_EQ("h1", h1.tagExtractedName(store.symbolTable()));
+  EXPECT_EQ("scope1.h2", h2.tagExtractedName(store.symbolTable()));
+  EXPECT_EQ(0, h1.tags(store.symbolTable()).size());
+  EXPECT_EQ(0, h2.tags(store.symbolTable()).size());
   h1.recordValue(200);
   h2.recordValue(200);
 

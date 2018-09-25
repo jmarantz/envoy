@@ -37,8 +37,8 @@ public:
   MOCK_METHOD1(add, void(uint64_t amount));
   MOCK_METHOD0(inc, void());
   MOCK_METHOD0(latch, uint64_t());
-  MOCK_CONST_METHOD0(tagExtractedName, const std::string&());
-  MOCK_CONST_METHOD0(tags, const std::vector<Tag>&());
+  MOCK_CONST_METHOD1(tagExtractedName, std::string(const SymbolTable&));
+  MOCK_CONST_METHOD1(tags, std::vector<Tag>(const SymbolTable&));
   MOCK_METHOD0(reset, void());
   MOCK_CONST_METHOD0(used, bool());
   MOCK_CONST_METHOD0(value, uint64_t());
@@ -65,8 +65,8 @@ public:
   MOCK_METHOD1(add, void(uint64_t amount));
   MOCK_METHOD0(dec, void());
   MOCK_METHOD0(inc, void());
-  MOCK_CONST_METHOD0(tagExtractedName, const std::string&());
-  MOCK_CONST_METHOD0(tags, const std::vector<Tag>&());
+  MOCK_CONST_METHOD1(tagExtractedName, std::string(const SymbolTable&));
+  MOCK_CONST_METHOD1(tags, std::vector<Tag>(const SymbolTable&));
   MOCK_METHOD1(set, void(uint64_t value));
   MOCK_METHOD1(sub, void(uint64_t amount));
   MOCK_CONST_METHOD0(used, bool());
@@ -90,8 +90,8 @@ public:
     return std::make_unique<StringViewStatNameRef>(absl::string_view(name_));
   }
 
-  MOCK_CONST_METHOD0(tagExtractedName, const std::string&());
-  MOCK_CONST_METHOD0(tags, const std::vector<Tag>&());
+  MOCK_CONST_METHOD1(tagExtractedName, std::string(const SymbolTable&));
+  MOCK_CONST_METHOD1(tags, std::vector<Tag>(const SymbolTable&));
   MOCK_METHOD1(recordValue, void(uint64_t value));
   MOCK_CONST_METHOD0(used, bool());
 
@@ -115,8 +115,8 @@ public:
   const std::string summary() const override { return ""; };
 
   MOCK_CONST_METHOD0(used, bool());
-  MOCK_CONST_METHOD0(tagExtractedName, const std::string&());
-  MOCK_CONST_METHOD0(tags, const std::vector<Tag>&());
+  MOCK_CONST_METHOD1(tagExtractedName, std::string(const SymbolTable&));
+  MOCK_CONST_METHOD1(tags, std::vector<Tag>(const SymbolTable&));
   MOCK_METHOD1(recordValue, void(uint64_t value));
   MOCK_CONST_METHOD0(cumulativeStatistics, const HistogramStatistics&());
   MOCK_CONST_METHOD0(intervalStatistics, const HistogramStatistics&());

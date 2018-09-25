@@ -54,7 +54,8 @@ public:
    */
   virtual bool requiresBoundedStatNameSize() const PURE;
 
-  virtual const SymbolTable* symbolTable() const PURE;
+  virtual const SymbolTable& symbolTable() const PURE;
+  virtual SymbolTable& symbolTable() PURE;
 
   // TODO(jmarantz): create a parallel mechanism to instantiate histograms. At
   // the moment, histograms don't fit the same pattern of counters and gaugaes

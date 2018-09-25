@@ -34,12 +34,12 @@ TEST_P(StatsIntegrationTest, WithDefaultConfig) {
 
   auto live = test_server_->gauge("server.live");
   EXPECT_EQ(live->value(), 1);
-  EXPECT_EQ(live->tags().size(), 0);
+  EXPECT_EQ(live->tags(symbolTable()).size(), 0);
 
   auto counter = test_server_->counter("http.config_test.rq_total");
-  EXPECT_EQ(counter->tags().size(), 1);
-  EXPECT_EQ(counter->tags()[0].name_, "envoy.http_conn_manager_prefix");
-  EXPECT_EQ(counter->tags()[0].value_, "config_test");
+  EXPECT_EQ(counter->tags(symbolTable()).size(), 1);
+  EXPECT_EQ(counter->tags(symbolTable())[0].name_, "envoy.http_conn_manager_prefix");
+  EXPECT_EQ(counter->tags(symbolTable())[0].value_, "config_test");
 }
 
 TEST_P(StatsIntegrationTest, WithoutDefaultTagExtractors) {
@@ -49,7 +49,7 @@ TEST_P(StatsIntegrationTest, WithoutDefaultTagExtractors) {
   initialize();
 
   auto counter = test_server_->counter("http.config_test.rq_total");
-  EXPECT_EQ(counter->tags().size(), 0);
+  EXPECT_EQ(counter->tags(symbolTable()).size(), 0);
 }
 
 TEST_P(StatsIntegrationTest, WithDefaultTagExtractors) {
@@ -59,9 +59,9 @@ TEST_P(StatsIntegrationTest, WithDefaultTagExtractors) {
   initialize();
 
   auto counter = test_server_->counter("http.config_test.rq_total");
-  EXPECT_EQ(counter->tags().size(), 1);
-  EXPECT_EQ(counter->tags()[0].name_, "envoy.http_conn_manager_prefix");
-  EXPECT_EQ(counter->tags()[0].value_, "config_test");
+  EXPECT_EQ(counter->tags(symbolTable()).size(), 1);
+  EXPECT_EQ(counter->tags(symbolTable())[0].name_, "envoy.http_conn_manager_prefix");
+  EXPECT_EQ(counter->tags(symbolTable())[0].value_, "config_test");
 }
 
 // Given: a. use_all_default_tags = false, b. a tag specifier has the same name
@@ -80,9 +80,9 @@ TEST_P(StatsIntegrationTest, WithDefaultTagExtractorNameWithUserDefinedRegex) {
   initialize();
 
   auto counter = test_server_->counter("http.config_test.rq_total");
-  EXPECT_EQ(counter->tags().size(), 1);
-  EXPECT_EQ(counter->tags()[0].name_, tag_name);
-  EXPECT_EQ(counter->tags()[0].value_, "http.config_test.rq_total");
+  EXPECT_EQ(counter->tags(symbolTable()).size(), 1);
+  EXPECT_EQ(counter->tags(symbolTable())[0].name_, tag_name);
+  EXPECT_EQ(counter->tags(symbolTable())[0].value_, "http.config_test.rq_total");
 }
 
 TEST_P(StatsIntegrationTest, WithTagSpecifierMissingTagValue) {
@@ -94,9 +94,9 @@ TEST_P(StatsIntegrationTest, WithTagSpecifierMissingTagValue) {
   initialize();
 
   auto counter = test_server_->counter("http.config_test.rq_total");
-  EXPECT_EQ(counter->tags().size(), 1);
-  EXPECT_EQ(counter->tags()[0].name_, "envoy.http_conn_manager_prefix");
-  EXPECT_EQ(counter->tags()[0].value_, "config_test");
+  EXPECT_EQ(counter->tags(symbolTable()).size(), 1);
+  EXPECT_EQ(counter->tags(symbolTable())[0].name_, "envoy.http_conn_manager_prefix");
+  EXPECT_EQ(counter->tags(symbolTable())[0].value_, "config_test");
 }
 
 TEST_P(StatsIntegrationTest, WithTagSpecifierWithRegex) {
@@ -109,9 +109,9 @@ TEST_P(StatsIntegrationTest, WithTagSpecifierWithRegex) {
   initialize();
 
   auto counter = test_server_->counter("http.config_test.rq_total");
-  EXPECT_EQ(counter->tags().size(), 1);
-  EXPECT_EQ(counter->tags()[0].name_, "my.http_conn_manager_prefix");
-  EXPECT_EQ(counter->tags()[0].value_, "config_test");
+  EXPECT_EQ(counter->tags(symbolTable()).size(), 1);
+  EXPECT_EQ(counter->tags(symbolTable())[0].name_, "my.http_conn_manager_prefix");
+  EXPECT_EQ(counter->tags(symbolTable())[0].value_, "config_test");
 }
 
 TEST_P(StatsIntegrationTest, WithTagSpecifierWithFixedValue) {
@@ -124,9 +124,9 @@ TEST_P(StatsIntegrationTest, WithTagSpecifierWithFixedValue) {
 
   auto live = test_server_->gauge("server.live");
   EXPECT_EQ(live->value(), 1);
-  EXPECT_EQ(live->tags().size(), 1);
-  EXPECT_EQ(live->tags()[0].name_, "test.x");
-  EXPECT_EQ(live->tags()[0].value_, "xxx");
+  EXPECT_EQ(live->tags(symbolTable()).size(), 1);
+  EXPECT_EQ(live->tags(symbolTable())[0].name_, "test.x");
+  EXPECT_EQ(live->tags(symbolTable())[0].value_, "xxx");
 }
 
 } // namespace

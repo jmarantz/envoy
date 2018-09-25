@@ -1065,7 +1065,7 @@ TEST_P(XfccIntegrationTest, TagExtractedNameGenerationTest) {
         // Ignore any metrics that are not found in the map for ease of addition
         if (it != extracted_name_map.end()) {
           // Check that the tag extracted name matches the "golden" state.
-          EXPECT_EQ(it->second, metric.tagExtractedName());
+          EXPECT_EQ(it->second, metric.tagExtractedName(test_server_->symbolTable()));
         }
       };
 

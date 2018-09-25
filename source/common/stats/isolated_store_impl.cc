@@ -13,7 +13,8 @@ namespace Envoy {
 namespace Stats {
 
 IsolatedStoreImpl::IsolatedStoreImpl()
-    : counters_(
+    : alloc_(symbol_table_),
+      counters_(
           [this](const std::string& name) -> CounterSharedPtr {
             std::string tag_extracted_name = name;
             std::vector<Tag> tags;
@@ -30,7 +31,7 @@ IsolatedStoreImpl::IsolatedStoreImpl()
       histograms_(
           [this](const std::string& name) -> HistogramSharedPtr {
             return std::make_shared<HistogramImpl>(name, *this, std::string(name),
-                                                   std::vector<Tag>());
+                                                   std::vector<Tag>(), symbol_table_);
           },
           alloc_) {}
 

@@ -28,8 +28,8 @@ public:
 
   IsolatedStatsCache(Allocator alloc, HeapStatDataAllocator& heap_alloc)
       : alloc_(alloc), heap_alloc_(heap_alloc), stats_(
-            defaultBucketCount(), StatNameRefPtrHash(*heap_alloc.symbolTable()),
-            StatNameRefPtrCompare(*heap_alloc.symbolTable()))
+            defaultBucketCount(), StatNameRefPtrHash(heap_alloc.symbolTable()),
+            StatNameRefPtrCompare(heap_alloc.symbolTable()))
   {}
 
   Base& get(const std::string& name) {
@@ -81,6 +81,7 @@ public:
     return histogram;
   }
   const Stats::StatsOptions& statsOptions() const override { return stats_options_; }
+  const SymbolTable& symbolTable() const { return symbol_table_; }
 
   // Stats::Store
   std::vector<CounterSharedPtr> counters() const override { return counters_.toVector(); }
@@ -90,6 +91,7 @@ public:
   }
 
 private:
+  SymbolTable symbol_table_;
   HeapStatDataAllocator alloc_;
   IsolatedStatsCache<Counter> counters_;
   IsolatedStatsCache<Gauge> gauges_;

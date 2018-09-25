@@ -21,8 +21,9 @@ Stats::SinkPtr DogStatsdSinkFactory::createStatsSink(const Protobuf::Message& co
   Network::Address::InstanceConstSharedPtr address =
       Network::Address::resolveProtoAddress(sink_config.address());
   ENVOY_LOG(debug, "dog_statsd UDP ip address: {}", address->asString());
-  return std::make_unique<Common::Statsd::UdpStatsdSink>(server.threadLocal(), std::move(address),
-                                                         true);
+  return std::make_unique<Common::Statsd::UdpStatsdSink>(
+      server.threadLocal(), std::move(address), true,
+      server.hotRestart().statsAllocator().symbolTable());
 }
 
 ProtobufTypes::MessagePtr DogStatsdSinkFactory::createEmptyConfigProto() {

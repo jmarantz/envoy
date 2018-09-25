@@ -287,6 +287,8 @@ public:
     return Server::InstanceUtil::createRuntime(server, config);
   }
 
+  Stats::SymbolTable& symbolTable() { return symbol_table_; }
+
 protected:
   IntegrationTestServer(const std::string& config_path) : config_path_(config_path) {}
 
@@ -303,6 +305,7 @@ private:
   uint64_t pending_listeners_;
   DangerousDeprecatedTestTime test_time_;
   ConditionalInitializer server_set_;
+  Stats::SymbolTable symbol_table_;
   std::unique_ptr<Server::InstanceImpl> server_;
   Server::TestDrainManager* drain_manager_{};
   Stats::Store* stat_store_{};

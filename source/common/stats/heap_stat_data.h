@@ -23,12 +23,15 @@ class HeapStatDataAllocator;
  * so that it can be allocated efficiently from the heap on demand.
  */
 struct HeapStatData {
-  explicit HeapStatData(const SymbolVec& symbol_vec) { StatName stat_name(symbol_vec, name_); }
+  explicit HeapStatData(const SymbolVec& symbol_vec) {
+    StatName stat_name;
+    stat_name.init(symbol_vec, name_);
+  }
 
   /**
    * @returns std::string the name as a std::string with no truncation.
    */
-  std::string name(const SymbolTable* symbol_table) const;
+  std::string name(const SymbolTable& symbol_table) const;
   StatNamePtr nameRef() const { return std::make_unique<SymbolStatNameRef>(StatName(name_)); }
 
   bool operator==(const HeapStatData& rhs) const { return StatName(name_) == StatName(rhs.name_); }
@@ -46,7 +49,7 @@ struct HeapStatData {
  */
 class HeapStatDataAllocator : public StatDataAllocatorImpl<HeapStatData> {
 public:
-  HeapStatDataAllocator();
+  explicit HeapStatDataAllocator(SymbolTable& symbol_table);
   ~HeapStatDataAllocator();
 
   // StatDataAllocatorImpl
@@ -58,7 +61,8 @@ public:
 
   // SymbolTable
   //StatName encode(absl::string_view sv) { return table_.encode(sv); }
-  const SymbolTable* symbolTable() const override { return &table_; }
+  const SymbolTable& symbolTable() const override { return table_; }
+  SymbolTable& symbolTable() override { return table_; }
 
   int64_t bytesSaved() const { return bytes_saved_; }
 
@@ -81,7 +85,7 @@ private:
   // A locally held symbol table which encodes stat names as StatNamePtrs and decodes StatNamePtrs
   // back into strings. This does not get guarded by mutex_, since it has its own internal mutex to
   // guarantee thread safety.
-  SymbolTable table_;
+  SymbolTable& table_;
   // A mutex is needed here to protect both the stats_ object from both
   // alloc() and free() operations. Although alloc() operations are called under existing locking,
   // free() operations are made from the destructors of the individual stat objects, which are not

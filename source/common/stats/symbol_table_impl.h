@@ -140,17 +140,20 @@ private:
 class StatName {
 public:
   explicit StatName(const uint8_t* symbol_array) : symbol_array_(symbol_array) {}
-  StatName(const SymbolVec& symbol_vec, uint8_t* symbol_array) : symbol_array_(symbol_array) {
+  StatName() : symbol_array_(nullptr) {}
+
+  size_t init(const SymbolVec& symbol_vec, uint8_t* symbol_array) {
+    symbol_array_ = symbol_array;
     size_t size = symbol_vec.size();
     ASSERT(size < 65536);
     //symbol_array_ = new uint8_t[symbol_vec.size() + 2];
     symbol_array[0] = size & 0xff;
     symbol_array[1] = size >> 8;
     memcpy(symbol_array + 2, symbol_vec.data(), size * sizeof(uint8_t));
+    return size;
   }
 
   static size_t size(const SymbolVec& symbol_vec) { return symbol_vec.size() + 2;}
-
 
 
   /*  ~StatName() {
@@ -183,12 +186,27 @@ public:
   }
   bool operator!=(const StatName& rhs) const { return !(*this == rhs); }
 
-private:
+protected:
   friend SymbolTable;
 
   friend class StatNameTest;
   const uint8_t* symbol_array_;
 };
+
+/*
+class StatNameWithStorage : public StatName {
+ public:
+  StatNameWithStorage(absl::string_view name, SymbolTable& table)
+      : StatName(table_.encode(stat_name), new uint8_t[StatName::size(symbol_vec)]) {}
+  ~StatNameWithStorage() { ASSERT(symbol_array_ == nullptr); }
+
+  void free(SymbolTable& symbol_table) {
+    StatName::free(symbol_table);
+    delete [] const_cast<uint8_t*>(symbol_array_);
+    symbol_array_ = nullptr;
+  }
+};
+*/
 
 struct StatNamePtrHash {
   size_t operator()(const StatName* a) const { return a->hash(); }

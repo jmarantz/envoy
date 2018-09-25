@@ -386,7 +386,8 @@ namespace Stats {
  */
 class TestAllocator : public RawStatDataAllocator {
 public:
-  TestAllocator(const StatsOptions& stats_options) : stats_options_(stats_options) {}
+  TestAllocator(const StatsOptions& stats_options, SymbolTable& symbol_table)
+      : RawStatDataAllocator(symbol_table), stats_options_(stats_options) {}
   ~TestAllocator() { EXPECT_TRUE(stats_.empty()); }
 
   RawStatData* alloc(absl::string_view name) override {
@@ -420,7 +421,7 @@ private:
 
 class MockedTestAllocator : public RawStatDataAllocator {
 public:
-  MockedTestAllocator(const StatsOptions& stats_options);
+  MockedTestAllocator(const StatsOptions& stats_options, SymbolTable& symbol_table);
   virtual ~MockedTestAllocator();
 
   MOCK_METHOD1(alloc, RawStatData*(absl::string_view name));

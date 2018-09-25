@@ -323,19 +323,21 @@ void HystrixSink::flush(Stats::Source& source) {
   incCounter();
   std::stringstream ss;
   Upstream::ClusterManager::ClusterInfoMap clusters = server_.clusterManager().clusters();
+  Stats::SymbolTable& symbol_table = server_.hotRestart().statsAllocator().symbolTable();
 
   // Save a map of the relevant histograms per cluster in a convenient format.
   std::unordered_map<std::string, QuantileLatencyMap> time_histograms;
   for (const Stats::ParentHistogramSharedPtr& histogram : source.cachedHistograms()) {
-    if (histogram->tagExtractedName() == "cluster.upstream_rq_time") {
+    if (histogram->tagExtractedName(symbol_table) == "cluster.upstream_rq_time") {
       // TODO(mrice32): add an Envoy utility function to look up and return a tag for a metric.
-      auto it = std::find_if(histogram->tags().begin(), histogram->tags().end(),
+      std::vector<Stats::Tag> tags = histogram->tags(symbol_table);
+      auto it = std::find_if(tags.begin(), tags.end(),
                              [](const Stats::Tag& tag) {
                                return (tag.name_ == Config::TagNames::get().CLUSTER_NAME);
                              });
 
       // Make sure we found the cluster name tag
-      ASSERT(it != histogram->tags().end());
+      ASSERT(it != tags.end());
       auto it_bool_pair = time_histograms.emplace(std::make_pair(it->value_, QuantileLatencyMap()));
       // Make sure histogram with this name was not already added
       ASSERT(it_bool_pair.second);

@@ -13,7 +13,8 @@ namespace Stats {
 // No truncation occurs in the implementation of HeapStatData.
 TEST(HeapStatDataTest, HeapNoTruncate) {
   StatsOptionsImpl stats_options;
-  HeapStatDataAllocator alloc;
+  SymbolTable symbol_table;
+  HeapStatDataAllocator alloc(symbol_table);
   const std::string long_string(stats_options.maxNameLength() + 1, 'A');
   HeapStatData* stat{};
   EXPECT_NO_LOGS(stat = alloc.alloc(long_string));
@@ -23,7 +24,8 @@ TEST(HeapStatDataTest, HeapNoTruncate) {
 
 // Note: a similar test using RawStatData* is in test/server/hot_restart_impl_test.cc.
 TEST(HeapStatDataTest, HeapAlloc) {
-  HeapStatDataAllocator alloc;
+  SymbolTable symbol_table;
+  HeapStatDataAllocator alloc(symbol_table);
   HeapStatData* stat_1 = alloc.alloc("ref_name");
   ASSERT_NE(stat_1, nullptr);
   HeapStatData* stat_2 = alloc.alloc("ref_name");
