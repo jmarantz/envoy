@@ -1059,8 +1059,8 @@ TEST_P(XfccIntegrationTest, TagExtractedNameGenerationTest) {
   }
 
   auto test_name_against_mapping =
-      [](const std::unordered_map<std::string, std::string>& extracted_name_map,
-         const Stats::Metric& metric) {
+      [this](const std::unordered_map<std::string, std::string>& extracted_name_map,
+             const Stats::Metric& metric) {
         auto it = extracted_name_map.find(metric.name());
         // Ignore any metrics that are not found in the map for ease of addition
         if (it != extracted_name_map.end()) {

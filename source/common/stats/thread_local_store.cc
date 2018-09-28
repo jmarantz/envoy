@@ -20,6 +20,8 @@
 
 #include "absl/strings/str_join.h"
 
+#define ENABLE_TLS_CACHE false
+
 namespace Envoy {
 namespace Stats {
 
@@ -278,12 +280,14 @@ Counter& ThreadLocalStoreImpl::ScopeImpl::counter(const std::string& name) {
   // is no cache entry.
   //CounterSharedPtr* tls_ref = nullptr;
   StatMap<CounterSharedPtr>* tls_cache = nullptr;
+#if ENABLE_TLS_CACHE
   Thread::ReleasableLockGuard lock(parent_.lock_);
   //StatNamePtr stat_name_ptr = parent_.heap_allocator_.encode(final_name);
   if (!parent_.shutting_down_ && parent_.tls_) {
     tls_cache = &parent_.tls_->getTyped<TlsCache>().scopeCache(this->scope_id_).counters_;
   }
   lock.release();
+#endif
 
   return *safeMakeStat<CounterSharedPtr>(
       final_name, central_cache_.counters_,
@@ -317,12 +321,14 @@ Gauge& ThreadLocalStoreImpl::ScopeImpl::gauge(const std::string& name) {
   std::string final_name = prefix_ + name;
   //GaugeSharedPtr* tls_ref = nullptr;
   StatMap<GaugeSharedPtr>* tls_cache = nullptr;
+#if ENABLE_TLS_CACHE
   Thread::ReleasableLockGuard lock(parent_.lock_);
   //StatNamePtr stat_name_ptr = parent_.heap_allocator_.encode(final_name);
   if (!parent_.shutting_down_ && parent_.tls_) {
     tls_cache = &parent_.tls_->getTyped<TlsCache>().scopeCache(this->scope_id_).gauges_;
   }
   lock.release();
+#endif
 
   return *safeMakeStat<GaugeSharedPtr>(
       final_name, central_cache_.gauges_,
@@ -345,6 +351,7 @@ Histogram& ThreadLocalStoreImpl::ScopeImpl::histogram(const std::string& name) {
     symbol_table = parent_.heap_allocator_.symbolTable();
     }
     StatName stat_name = symbol_table->encode(final_name);*/
+#if ENABLE_TLS_CACHE
   if (!parent_.shutting_down_ && parent_.tls_) {
     tls_ref = &parent_.tls_->getTyped<TlsCache>()
               .scopeCache(this->scope_id_)
@@ -353,7 +360,8 @@ Histogram& ThreadLocalStoreImpl::ScopeImpl::histogram(const std::string& name) {
       //stat_name.free(symbol_table);
       return **tls_ref;
     }
-  }
+    }
+#endif
 
   ParentHistogramImplSharedPtr& central_ref =
       central_cache_.histograms_[name];
@@ -381,6 +389,7 @@ Histogram& ThreadLocalStoreImpl::ScopeImpl::tlsHistogram(const std::string& name
   TlsHistogramSharedPtr* tls_ref = nullptr;
   //Thread::LockGuard lock(parent_.lock_);
   //StatName stat_name = parent_.heap_allocator_.encode(name);
+#if ENABLE_TLS_CACHE
   if (!parent_.shutting_down_ && parent_.tls_) {
     tls_ref = &parent_.tls_->getTyped<TlsCache>()
               .scopeCache(this->scope_id_)
@@ -389,7 +398,8 @@ Histogram& ThreadLocalStoreImpl::ScopeImpl::tlsHistogram(const std::string& name
 
   if (tls_ref && *tls_ref) {
     return **tls_ref;
-  }
+    }
+#endif
 
   std::vector<Tag> tags;
   std::string tag_extracted_name = parent_.getTagsForName(name, tags);
