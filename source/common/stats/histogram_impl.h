@@ -52,8 +52,8 @@ public:
 
   // Stats:;Metric
   const std::string name() const override { return name_; }
-  StatNamePtr nameRef() const override {
-    return std::make_unique<StringViewStatNameRef>(absl::string_view(name_));
+  StatNameRef nameRef() const override {
+    return StatNameRef(name_);
   }
 
   // Stats::Histogram

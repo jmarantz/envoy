@@ -70,7 +70,7 @@ public:
 
   // Stats::Metric
   const std::string name() const override { return data_.name(alloc_.symbolTable()); }
-  StatNamePtr nameRef() const override { return data_.nameRef(); }
+  StatNameRef nameRef() const override { return data_.nameRef(); }
 
   // Stats::Counter
   void add(uint64_t amount) override {
@@ -103,7 +103,7 @@ public:
 
   // Stats::Metric
   const std::string name() const override { return data_.name(alloc_.symbolTable()); }
-  StatNamePtr nameRef() const override { return data_.nameRef(); }
+  StatNameRef nameRef() const override { return data_.nameRef(); }
 
   // Stats::Gauge
   virtual void add(uint64_t amount) override {

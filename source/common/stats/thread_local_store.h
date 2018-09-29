@@ -5,8 +5,6 @@
 #include <cstdint>
 #include <list>
 #include <string>
-#include <unordered_map>
-#include <unordered_set>
 
 #include "envoy/thread_local/thread_local.h"
 
@@ -19,6 +17,19 @@
 #include "common/stats/utility.h"
 
 #include "circllhist.h"
+
+#define FLAT_HASH 1
+#if FLAT_HASH
+
+#include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
+
+#else
+
+#include <unordered_map>
+#include <unordered_set>
+
+#endif
 
 namespace Envoy {
 namespace Stats {
@@ -52,8 +63,8 @@ public:
 
   // Stats::Metric
   const std::string name() const override { return name_; }
-  StatNamePtr nameRef() const override {
-    return std::make_unique<StringViewStatNameRef>(absl::string_view(name_));
+  StatNameRef nameRef() const override {
+    return StatNameRef(name_);
   }
 
 private:
@@ -99,8 +110,8 @@ public:
 
   // Stats::Metric
   const std::string name() const override { return name_; }
-  StatNamePtr nameRef() const override {
-    return std::make_unique<StringViewStatNameRef>(absl::string_view(name_));
+  StatNameRef nameRef() const override {
+    return StatNameRef(name_);
   }
 
 private:
@@ -227,35 +238,53 @@ private:
 
   template<class Stat>
   //using StatMap = std::unordered_map<StatNamePtr, Stat, StatNameUniquePtrHash>;
-  using StatMap = std::unordered_map<StatNameRefPtr, Stat, StatNameRefPtrHash,
-                                     StatNameRefPtrCompare>;
+
+#if FLAT_HASH
+  using StatMap = absl::flat_hash_map<StatNameRef, Stat, StatNameRefHash,
+                                      StatNameRefCompare>;
+  using StatRefSet = absl::flat_hash_set<const StatNameRef*, StatNameRefStarHash, StatNameRefStarCompare>;
+#else
+  using StatMap = std::unordered_map<StatNameRef, Stat, StatNameRefHash,
+                                     StatNameRefCompare>;
+  using StatRefSet = std::unordered_set<const StatNameRef*, StatNameRefStarHash, StatNameRefStarCompare>;
+#endif
 
   static size_t defaultBucketCount() {
-    std::unordered_map<int, int> map;
-    return map.bucket_count();
+    return 0;
+    // absl::flat_hash_map<int, int> map;
+    // return map.bucket_count();
   }
 
   struct TlsCacheEntry {
     explicit TlsCacheEntry(const SymbolTable& symbol_table)
-        : counters_(defaultBucketCount(), StatNameRefPtrHash(symbol_table),
-                    StatNameRefPtrCompare(symbol_table)),
-          gauges_(defaultBucketCount(), StatNameRefPtrHash(symbol_table),
-                  StatNameRefPtrCompare(symbol_table)) {}
+        : counters_(defaultBucketCount(), StatNameRefHash(symbol_table),
+                    StatNameRefCompare(symbol_table)),
+          gauges_(defaultBucketCount(), StatNameRefHash(symbol_table),
+                  StatNameRefCompare(symbol_table)) {}
     StatMap<CounterSharedPtr> counters_;
     StatMap<GaugeSharedPtr> gauges_;
+#if FLAT_HASH
+    absl::flat_hash_map<std::string, TlsHistogramSharedPtr> histograms_;
+    absl::flat_hash_map<std::string, ParentHistogramSharedPtr> parent_histograms_;
+#else
     std::unordered_map<std::string, TlsHistogramSharedPtr> histograms_;
     std::unordered_map<std::string, ParentHistogramSharedPtr> parent_histograms_;
+#endif
   };
 
   struct CentralCacheEntry {
     explicit CentralCacheEntry(const SymbolTable& symbol_table)
-        : counters_(defaultBucketCount(), StatNameRefPtrHash(symbol_table),
-                    StatNameRefPtrCompare(symbol_table)),
-          gauges_(defaultBucketCount(), StatNameRefPtrHash(symbol_table),
-                  StatNameRefPtrCompare(symbol_table)) {}
+        : counters_(defaultBucketCount(), StatNameRefHash(symbol_table),
+                    StatNameRefCompare(symbol_table)),
+          gauges_(defaultBucketCount(), StatNameRefHash(symbol_table),
+                  StatNameRefCompare(symbol_table)) {}
     StatMap<CounterSharedPtr> counters_;
     StatMap<GaugeSharedPtr> gauges_;
+#if FLAT_HASH
+    absl::flat_hash_map<std::string, ParentHistogramImplSharedPtr> histograms_;
+#else
     std::unordered_map<std::string, ParentHistogramImplSharedPtr> histograms_;
+#endif
   };
 
   struct ScopeImpl : public TlsScope {
@@ -312,6 +341,7 @@ private:
   struct TlsCache : public ThreadLocal::ThreadLocalObject {
     explicit TlsCache(const SymbolTable& symbol_table) : symbol_table_(symbol_table) {}
 
+#if 0
     TlsCacheEntry& scopeCache(uint64_t id) {
       auto pos = scope_cache_.find(id);
       if (pos != scope_cache_.end()) {
@@ -320,7 +350,15 @@ private:
       auto emplacement = scope_cache_.emplace(std::make_pair(id, TlsCacheEntry(symbol_table_)));
       return emplacement.first->second;
     }
-
+#else
+    TlsCacheEntry& scopeCache(uint64_t id) {
+      std::unique_ptr<TlsCacheEntry>& entry = scope_cache_[id];
+      if (entry.get() == nullptr) {
+        entry = std::make_unique<TlsCacheEntry>(symbol_table_);
+      }
+      return *entry;
+    }
+#endif
     const SymbolTable& symbol_table_;
 
     // The TLS scope cache is keyed by scope ID. This is used to avoid complex circular references
@@ -330,7 +368,11 @@ private:
     // to reference the cache, and then subsequently cache flushed, leaving nothing in the central
     // store. See the overview for more information. This complexity is required for lockless
     // operation in the fast path.
-    using ScopeCacheMap = std::unordered_map<uint64_t, TlsCacheEntry>;
+#if FLAT_HASH
+    using ScopeCacheMap = absl::flat_hash_map<uint64_t, std::unique_ptr<TlsCacheEntry>>;
+#else
+    using ScopeCacheMap = std::unordered_map<uint64_t, std::unique_ptr<TlsCacheEntry>>;
+#endif
     ScopeCacheMap scope_cache_;
   };
 
@@ -347,7 +389,11 @@ private:
   SymbolTable& symbol_table_;
   HeapStatDataAllocator heap_allocator_ GUARDED_BY(lock_);
   ThreadLocal::SlotPtr tls_;
+#if FLAT_HASH
+  absl::flat_hash_set<ScopeImpl*> scopes_ GUARDED_BY(lock_);
+#else
   std::unordered_set<ScopeImpl*> scopes_ GUARDED_BY(lock_);
+#endif
   ScopePtr default_scope_;
   std::list<std::reference_wrapper<Sink>> timer_sinks_;
   TagProducerPtr tag_producer_;
@@ -359,3 +405,5 @@ private:
 
 } // namespace Stats
 } // namespace Envoy
+
+#undef FLAT_HASH

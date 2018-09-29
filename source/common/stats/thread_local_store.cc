@@ -20,7 +20,7 @@
 
 #include "absl/strings/str_join.h"
 
-#define ENABLE_TLS_CACHE false
+#define ENABLE_TLS_CACHE true
 
 namespace Envoy {
 namespace Stats {
@@ -43,13 +43,13 @@ std::vector<CounterSharedPtr> ThreadLocalStoreImpl::counters() const {
   // Handle de-dup due to overlapping scopes.
   std::vector<CounterSharedPtr> ret;
   Thread::LockGuard lock(lock_);
-  std::unordered_set<StatNameRef*, StatNameRefStarHash, StatNameRefStarCompare> names(
-      defaultBucketCount(), StatNameRefStarHash(symbol_table_),
-      StatNameRefStarCompare(symbol_table_));
+  StatRefSet names(defaultBucketCount(), StatNameRefStarHash(symbol_table_),
+                   StatNameRefStarCompare(symbol_table_));
   //StatSet<CounterSharedPtr> names;
   for (ScopeImpl* scope : scopes_) {
     for (auto& counter : scope->central_cache_.counters_) {
-      if (names.insert(counter.first.get()).second) {
+      const StatNameRef& name_ref = counter.first;
+      if (names.insert(&name_ref).second) {
         ret.push_back(counter.second);
       }
       // if (names.insert(counter).second) {
@@ -72,13 +72,13 @@ std::vector<GaugeSharedPtr> ThreadLocalStoreImpl::gauges() const {
   // Handle de-dup due to overlapping scopes.
   std::vector<GaugeSharedPtr> ret;
   Thread::LockGuard lock(lock_);
-  std::unordered_set<StatNameRef*, StatNameRefStarHash, StatNameRefStarCompare> names(
-      defaultBucketCount(), StatNameRefStarHash(symbol_table_),
-      StatNameRefStarCompare(symbol_table_));
+  StatRefSet names(defaultBucketCount(), StatNameRefStarHash(symbol_table_),
+                   StatNameRefStarCompare(symbol_table_));
   //StatSet<GaugeSharedPtr> names;
   for (ScopeImpl* scope : scopes_) {
     for (auto& gauge : scope->central_cache_.gauges_) {
-      if (names.insert(gauge.first.get()).second) {
+      const StatNameRef& name_ref = gauge.first;
+      if (names.insert(&name_ref).second) {
         ret.push_back(gauge.second);
       }
       //      if (names.insert(gauge).second) {
@@ -129,7 +129,7 @@ void ThreadLocalStoreImpl::mergeHistograms(PostMergeCb merge_complete_cb) {
     tls_->runOnAllThreads(
         [this]() -> void {
           for (const auto& scope : tls_->getTyped<TlsCache>().scope_cache_) {
-            const TlsCacheEntry& tls_cache_entry = scope.second;
+            const TlsCacheEntry& tls_cache_entry = *scope.second;
             for (const auto& name_histogram_pair : tls_cache_entry.histograms_) {
               const TlsHistogramSharedPtr& tls_hist = name_histogram_pair.second;
               tls_hist->beginMerge();
@@ -220,7 +220,7 @@ StatType& ThreadLocalStoreImpl::ScopeImpl::safeMakeStat(
   }
   */
   //SymbolTable& table = *parent_.heap_allocator_.symbolTable();
-  std::unique_ptr<StatNameRef> stat_name(new StringViewStatNameRef(name));
+  StatNameRef stat_name(name);
   //StatNameRefPtr stat_name = table.encode(name);
   if (tls_cache) {
     auto pos = tls_cache->find(stat_name);

@@ -16,6 +16,8 @@
 #include "common/stats/symbol_table_impl.h"
 #include "common/stats/utility.h"
 
+#include "absl/container/flat_hash_map.h"
+
 namespace Envoy {
 namespace Stats {
 
@@ -28,13 +30,13 @@ public:
 
   IsolatedStatsCache(Allocator alloc, HeapStatDataAllocator& heap_alloc)
       : alloc_(alloc), heap_alloc_(heap_alloc), stats_(
-            defaultBucketCount(), StatNameRefPtrHash(heap_alloc.symbolTable()),
-            StatNameRefPtrCompare(heap_alloc.symbolTable()))
+            defaultBucketCount(), StatNameRefHash(heap_alloc.symbolTable()),
+            StatNameRefCompare(heap_alloc.symbolTable()))
   {}
 
   Base& get(const std::string& name) {
-    std::unique_ptr<StatNameRef> stat_name(new StringViewStatNameRef(name));
-    auto stat = stats_.find(stat_name);
+    StatNameRef name_ref(name);
+    auto stat = stats_.find(name_ref);
     if (stat != stats_.end()) {
       return *stat->second;
     }
@@ -55,13 +57,14 @@ public:
   }
 
   static size_t defaultBucketCount() {
-    std::unordered_map<int, int> map;
-    return map.bucket_count();
+    // absl::flat_hash_map<int, int> map;
+    // return map.bucket_count();
+    return 0;
   }
 
 private:
-  using StatMap = std::unordered_map<StatNameRefPtr, std::shared_ptr<Base>, StatNameRefPtrHash,
-                                     StatNameRefPtrCompare>;
+  using StatMap = absl::flat_hash_map<StatNameRef, std::shared_ptr<Base>, StatNameRefHash,
+                                      StatNameRefCompare>;
   Allocator alloc_;
   HeapStatDataAllocator& heap_alloc_;
   StatMap stats_;

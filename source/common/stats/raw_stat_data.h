@@ -81,8 +81,8 @@ struct RawStatData {
    * Returns the name as a std::string.
    */
   std::string name(const SymbolTable&) const { return std::string(name_); }
-  StatNamePtr nameRef() const {
-    return std::make_unique<StringViewStatNameRef>(absl::string_view(name_));
+  StatNameRef nameRef() const {
+    return StatNameRef(name_);
   }
 
   std::atomic<uint64_t> value_;

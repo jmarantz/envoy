@@ -170,6 +170,7 @@ public:
 
   // Returns the number of bytes in the representation.
   size_t sizeBytes() const { return size() + 2; }
+  const uint8_t* rawData() const { return symbol_array_; }
 
   const uint8_t* data() const { return symbol_array_ + 2; }
 

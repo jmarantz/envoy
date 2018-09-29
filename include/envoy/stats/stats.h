@@ -15,7 +15,7 @@ namespace Envoy {
 namespace Stats {
 
 class StatNameRef;
-using StatNamePtr = std::unique_ptr<StatNameRef>;
+//using StatNamePtr = std::unique_ptr<StatNameRef>;
 class SymbolTable;
 struct Tag;
 
@@ -33,7 +33,7 @@ public:
   /**
    * Returns a reference to the name of the stat.
    */
-  virtual StatNamePtr nameRef() const PURE;
+  virtual StatNameRef nameRef() const PURE;
 
   /**
    * Returns a vector of configurable tags to identify this Metric.

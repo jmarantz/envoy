@@ -13,6 +13,17 @@
 #include "common/stats/stat_data_allocator_impl.h"
 #include "common/stats/symbol_table_impl.h"
 
+#define FLAT_HASH 1
+#if FLAT_HASH
+
+#include "absl/container/flat_hash_set.h"
+
+#else
+
+#include <unordered_set>
+
+#endif
+
 namespace Envoy {
 namespace Stats {
 
@@ -32,7 +43,7 @@ struct HeapStatData {
    * @returns std::string the name as a std::string with no truncation.
    */
   std::string name(const SymbolTable& symbol_table) const;
-  StatNamePtr nameRef() const { return std::make_unique<SymbolStatNameRef>(StatName(name_)); }
+  StatNameRef nameRef() const { return StatNameRef(StatName(name_)); }
 
   bool operator==(const HeapStatData& rhs) const { return StatName(name_) == StatName(rhs.name_); }
 
@@ -76,7 +87,11 @@ private:
     bool operator()(const HeapStatData* a, const HeapStatData* b) const { return *a == *b; }
   };
 
+#if FLAT_HASH
+  typedef absl::flat_hash_set<HeapStatData*, HeapStatHash, HeapStatCompare> StatSet;
+#else
   typedef std::unordered_set<HeapStatData*, HeapStatHash, HeapStatCompare> StatSet;
+#endif
 
   // An unordered set of HeapStatData pointers which keys off the key()
   // field in each object. This necessitates a custom comparator and hasher, which key off of the
@@ -96,3 +111,5 @@ private:
 
 } // namespace Stats
 } // namespace Envoy
+
+#undef FLAT_HASH
