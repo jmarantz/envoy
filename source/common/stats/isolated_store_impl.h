@@ -84,13 +84,25 @@ public:
     return histogram;
   }
   const Stats::StatsOptions& statsOptions() const override { return stats_options_; }
+
   const SymbolTable& symbolTable() const { return symbol_table_; }
+  SymbolTable& symbolTable() { return symbol_table_; }
 
   // Stats::Store
   std::vector<CounterSharedPtr> counters() const override { return counters_.toVector(); }
   std::vector<GaugeSharedPtr> gauges() const override { return gauges_.toVector(); }
   std::vector<ParentHistogramSharedPtr> histograms() const override {
     return std::vector<ParentHistogramSharedPtr>{};
+  }
+
+  Counter& getCounter(uint32_t index) override {
+    return counter(symbol_table_.counterPatterns().pattern(index));
+  }
+  Gauge& getGauge(uint32_t index) override {
+    return gauge(symbol_table_.gaugePatterns().pattern(index));
+  }
+  Histogram& getHistogram(uint32_t index) override {
+    return histogram(symbol_table_.histogramPatterns().pattern(index));
   }
 
 private:

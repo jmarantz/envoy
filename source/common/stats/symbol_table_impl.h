@@ -57,6 +57,26 @@ public:
   uint64_t hash(const StatName& stat_name) const;
   bool compareString(const StatName& stat_name, const absl::string_view str) const;
 
+  class Patterns {
+   public:
+    uint32_t add(absl::string_view pattern) {
+      uint32_t index = patterns_.size();
+      patterns_.emplace_back(std::string(pattern));
+      return index;
+    }
+    uint32_t size() const { return patterns_.size(); }
+    std::string pattern(uint32_t index) { return patterns_[index]; }
+   private:
+    std::vector<std::string> patterns_;  // TODO(jmarantz): use a StatName here, duh.
+  };
+
+  Patterns& counterPatterns() { return counter_patterns_; }
+  const Patterns& counterPatterns() const { return counter_patterns_; }
+  Patterns& gaugePatterns() { return gauge_patterns_; }
+  const Patterns& gaugePatterns() const { return gauge_patterns_; }
+  Patterns& histogramPatterns() { return histogram_patterns_; }
+  const Patterns& histogramPatterns() const { return histogram_patterns_; }
+
 private:
   friend class StatName;
   friend class StatNameTest;
@@ -131,6 +151,10 @@ private:
   // TODO(ambuc): There might be an optimization here relating to storing ranges of freed symbols
   // using an Envoy::IntervalSet.
   std::stack<Symbol> pool_ GUARDED_BY(lock_);
+
+  Patterns counter_patterns_;
+  Patterns gauge_patterns_;
+  Patterns histogram_patterns_;
 };
 
 /**

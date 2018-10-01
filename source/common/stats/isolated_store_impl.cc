@@ -37,7 +37,10 @@ IsolatedStoreImpl::IsolatedStoreImpl()
 
 struct IsolatedScopeImpl : public Scope {
   IsolatedScopeImpl(IsolatedStoreImpl& parent, const std::string& prefix)
-      : parent_(parent), prefix_(Utility::sanitizeStatsName(prefix)) {}
+      : parent_(parent), prefix_(Utility::sanitizeStatsName(prefix))/*,
+        counters_(parent.symbolTable().counterPatterns().size()),
+        gauges_(parent.symbolTable().gaugePatterns().size()),
+        histograms_(parent.symbolTable().histogramPatterns().size())*/ {}
 
   // Stats::Scope
   ScopePtr createScope(const std::string& name) override {
@@ -51,8 +54,22 @@ struct IsolatedScopeImpl : public Scope {
   }
   const Stats::StatsOptions& statsOptions() const override { return parent_.statsOptions(); }
 
+  Counter& getCounter(uint32_t index) override {
+    return counter(prefix_ + parent_.symbolTable().counterPatterns().pattern(index));
+  }
+  Gauge& getGauge(uint32_t index) override {
+    return gauge(prefix_ + parent_.symbolTable().gaugePatterns().pattern(index));
+  }
+  Histogram& getHistogram(uint32_t index) override {
+    return histogram(prefix_ + parent_.symbolTable().histogramPatterns().pattern(index));
+  }
+
   IsolatedStoreImpl& parent_;
   const std::string prefix_;
+
+  /*  std::vector<CounterSharedPtr> counters_;
+  std::vector<GaugeSharedPtr> gauges_;
+  std::vector<HistogramSharedPtr> histograms_;*/
 };
 
 ScopePtr IsolatedStoreImpl::createScope(const std::string& name) {

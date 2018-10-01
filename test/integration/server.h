@@ -113,12 +113,14 @@ namespace Stats {
  */
 class TestScopeWrapper : public Scope {
 public:
-  TestScopeWrapper(Thread::MutexBasicLockable& lock, ScopePtr wrapped_scope)
-      : lock_(lock), wrapped_scope_(std::move(wrapped_scope)) {}
+  TestScopeWrapper(Thread::MutexBasicLockable& lock, ScopePtr wrapped_scope,
+                   SymbolTable& symbol_table)
+      : lock_(lock), wrapped_scope_(std::move(wrapped_scope)), symbol_table_(symbol_table) {}
 
   ScopePtr createScope(const std::string& name) override {
     Thread::LockGuard lock(lock_);
-    return ScopePtr{new TestScopeWrapper(lock_, wrapped_scope_->createScope(name))};
+    return std::make_unique<TestScopeWrapper>(
+        lock_, wrapped_scope_->createScope(name), symbol_table_);
   }
 
   void deliverHistogramToSinks(const Histogram& histogram, uint64_t value) override {
@@ -143,10 +145,22 @@ public:
 
   const StatsOptions& statsOptions() const override { return stats_options_; }
 
+  Counter& getCounter(uint32_t index) override {
+    return wrapped_scope_->getCounter(index);
+  }
+  Gauge& getGauge(uint32_t index) override {
+    return wrapped_scope_->getGauge(index);
+  }
+  Histogram& getHistogram(uint32_t index) override {
+    return wrapped_scope_->getHistogram(index);
+  }
+
 private:
   Thread::MutexBasicLockable& lock_;
+  std::string prefix_;
   ScopePtr wrapped_scope_;
   StatsOptionsImpl stats_options_;
+  SymbolTable& symbol_table_;
 };
 
 /**
@@ -163,7 +177,7 @@ public:
   }
   ScopePtr createScope(const std::string& name) override {
     Thread::LockGuard lock(lock_);
-    return ScopePtr{new TestScopeWrapper(lock_, store_.createScope(name))};
+    return ScopePtr{new TestScopeWrapper(lock_, store_.createScope(name), store_.symbolTable())};
   }
   void deliverHistogramToSinks(const Histogram&, uint64_t) override {}
   Gauge& gauge(const std::string& name) override {
@@ -189,6 +203,16 @@ public:
   std::vector<ParentHistogramSharedPtr> histograms() const override {
     Thread::LockGuard lock(lock_);
     return store_.histograms();
+  }
+
+  Counter& getCounter(uint32_t index) override {
+    return store_.getCounter(index);
+  }
+  Gauge& getGauge(uint32_t index) override {
+    return store_.getGauge(index);
+  }
+  Histogram& getHistogram(uint32_t index) override {
+    return store_.getHistogram(index);
   }
 
   // Stats::StoreRoot

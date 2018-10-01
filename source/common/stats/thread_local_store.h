@@ -200,6 +200,8 @@ public:
   ThreadLocalStoreImpl(const Stats::StatsOptions& stats_options, StatDataAllocator& alloc);
   ~ThreadLocalStoreImpl();
 
+  uint32_t registerCounterPattern(const std::string& name);
+
   // Stats::Scope
   Counter& counter(const std::string& name) override { return default_scope_->counter(name); }
   ScopePtr createScope(const std::string& name) override;
@@ -210,6 +212,17 @@ public:
   Histogram& histogram(const std::string& name) override {
     return default_scope_->histogram(name);
   };
+
+  Counter& getCounter(uint32_t index) override {
+    return counter(symbol_table_.counterPatterns().pattern(index));
+  }
+  Gauge& getGauge(uint32_t index) override {
+    return gauge(symbol_table_.gaugePatterns().pattern(index));
+  }
+  Histogram& getHistogram(uint32_t index) override {
+    return histogram(symbol_table_.histogramPatterns().pattern(index));
+  }
+
 
   // Stats::Store
   std::vector<CounterSharedPtr> counters() const override;
@@ -275,7 +288,7 @@ private:
   struct CentralCacheEntry {
     explicit CentralCacheEntry(const SymbolTable& symbol_table)
         : counters_(defaultBucketCount(), StatNameRefHash(symbol_table),
-                    StatNameRefCompare(symbol_table)),
+            StatNameRefCompare(symbol_table)),
           gauges_(defaultBucketCount(), StatNameRefHash(symbol_table),
                   StatNameRefCompare(symbol_table)) {}
     StatMap<CounterSharedPtr> counters_;
@@ -304,6 +317,16 @@ private:
     Histogram& histogram(const std::string& name) override;
     Histogram& tlsHistogram(const std::string& name, ParentHistogramImpl& parent) override;
     const Stats::StatsOptions& statsOptions() const override { return parent_.statsOptions(); }
+
+    Counter& getCounter(uint32_t index) override {
+      return counter(prefix_ + parent_.symbolTable().counterPatterns().pattern(index));
+    }
+    Gauge& getGauge(uint32_t index) override {
+      return gauge(prefix_ + parent_.symbolTable().gaugePatterns().pattern(index));
+    }
+    Histogram& getHistogram(uint32_t index) override {
+      return histogram(prefix_ + parent_.symbolTable().histogramPatterns().pattern(index));
+    }
 
     template <class StatType>
     using MakeStatFn =

@@ -469,7 +469,7 @@ TEST_F(HystrixSinkTest, HistogramTest) {
       cluster1_name_                        // value_
   };
   tags.emplace_back(tag);
-  ON_CALL(*histogram, tags()).WillByDefault(testing::ReturnRef(tags));
+  ON_CALL(*histogram, tags(_)).WillByDefault(testing::Return(tags));
 
   histogram->used_ = true;
 
