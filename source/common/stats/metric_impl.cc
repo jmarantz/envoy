@@ -48,6 +48,7 @@ std::vector<Tag> MetricImpl::tags(const SymbolTable& symbol_table) const {
     StatName value(p);
     tag.value_ = value.toString(symbol_table);
     p += value.sizeBytes();
+    tags.emplace_back(tag);
   }
   return tags;
 }
