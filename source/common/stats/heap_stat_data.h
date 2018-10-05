@@ -43,7 +43,7 @@ struct HeapStatData {
    * @returns std::string the name as a std::string with no truncation.
    */
   std::string name(const SymbolTable& symbol_table) const;
-  StatNameRef nameRef() const { return StatNameRef(StatName(name_)); }
+  StatName statName() const { return StatName(name_); }
 
   bool operator==(const HeapStatData& rhs) const { return StatName(name_) == StatName(rhs.name_); }
 
@@ -69,6 +69,10 @@ public:
 
   // StatDataAllocator
   bool requiresBoundedStatNameSize() const override { return false; }
+  std::string name(const HeapStatData& data) const override {
+    return data.statName().toString(table_);
+  }
+  StatName statName(const HeapStatData& data) const override { return data.statName(); }
 
   // SymbolTable
   //StatName encode(absl::string_view sv) { return table_.encode(sv); }

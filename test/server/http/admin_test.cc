@@ -112,7 +112,12 @@ TEST_P(AdminStatsTest, StatsAsJson) {
 
   EXPECT_CALL(alloc_, free(_));
 
-  std::string actual_json = statsAsJsonHandler(store_->histograms(), false);
+  std::vector<Stats::ParentHistogramSharedPtr> merged = store_->histograms();
+  std::sort(merged.begin(), merged.end(),
+            [](const Stats::ParentHistogramSharedPtr& a, const Stats::ParentHistogramSharedPtr& b) {
+              return a->name() < b->name();
+            });
+  std::string actual_json = statsAsJsonHandler(merged, false);
 
   const std::string expected_json = R"EOF({
     "stats": [
@@ -131,51 +136,6 @@ TEST_P(AdminStatsTest, StatsAsJson) {
                     100.0
                 ],
                 "computed_quantiles": [
-                    {
-                        "name": "h2",
-                        "values": [
-                            {
-                                "interval": null,
-                                "cumulative": 100.0
-                            },
-                            {
-                                "interval": null,
-                                "cumulative": 102.5
-                            },
-                            {
-                                "interval": null,
-                                "cumulative": 105.0
-                            },
-                            {
-                                "interval": null,
-                                "cumulative": 107.5
-                            },
-                            {
-                                "interval": null,
-                                "cumulative": 109.0
-                            },
-                            {
-                                "interval": null,
-                                "cumulative": 109.5
-                            },
-                            {
-                                "interval": null,
-                                "cumulative": 109.9
-                            },
-                            {
-                                "interval": null,
-                                "cumulative": 109.95
-                            },
-                            {
-                                "interval": null,
-                                "cumulative": 109.99
-                            },
-                            {
-                                "interval": null,
-                                "cumulative": 110.0
-                            }
-                        ]
-                    },
                     {
                         "name": "h1",
                         "values": [
@@ -218,6 +178,51 @@ TEST_P(AdminStatsTest, StatsAsJson) {
                             {
                                 "interval": 110.0,
                                 "cumulative": 210.0
+                            }
+                        ]
+                    },
+                    {
+                        "name": "h2",
+                        "values": [
+                            {
+                                "interval": null,
+                                "cumulative": 100.0
+                            },
+                            {
+                                "interval": null,
+                                "cumulative": 102.5
+                            },
+                            {
+                                "interval": null,
+                                "cumulative": 105.0
+                            },
+                            {
+                                "interval": null,
+                                "cumulative": 107.5
+                            },
+                            {
+                                "interval": null,
+                                "cumulative": 109.0
+                            },
+                            {
+                                "interval": null,
+                                "cumulative": 109.5
+                            },
+                            {
+                                "interval": null,
+                                "cumulative": 109.9
+                            },
+                            {
+                                "interval": null,
+                                "cumulative": 109.95
+                            },
+                            {
+                                "interval": null,
+                                "cumulative": 109.99
+                            },
+                            {
+                                "interval": null,
+                                "cumulative": 110.0
                             }
                         ]
                     }

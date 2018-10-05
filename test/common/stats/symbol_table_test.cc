@@ -12,38 +12,52 @@ namespace Stats {
 
 class StatNameTest : public testing::Test {
 protected:
+  ~StatNameTest() { clearStorage(); }
+
+  void clearStorage() {
+    for (auto& stat_name_storage : stat_name_storage_) {
+      stat_name_storage->free(table_);
+    }
+    stat_name_storage_.clear();
+    EXPECT_EQ(0, table_.size());
+  }
+
   //SymbolVec getSymbols(StatName& stat_name) { return stat_name.symbolVec(); }
   //std::string decodeSymbolVec(const SymbolVec& symbol_vec) { return table_.decode(symbol_vec); }
   Symbol monotonicCounter() { return table_.monotonicCounter(); }
-  std::string EncodeDecode(absl::string_view stat_name) {
+  std::string encodeDecode(absl::string_view stat_name) {
     return makeStat(stat_name).toString(table_);
   }
 
+  StatNameStoragePtr makeStatStorage(absl::string_view name) {
+    return std::make_unique<StatNameStorage>(name, table_);
+  }
+
   StatName makeStat(absl::string_view name) {
-    SymbolVec symbol_vec = table_.encode(name);
-    uint8_t* buffer = new uint8_t[StatName::size(symbol_vec)];
-    stat_name_buffers_.emplace_back(std::unique_ptr<uint8_t[]>(buffer));
-    StatName stat_name;
-    stat_name.init(symbol_vec, buffer);
-    return stat_name;
+    stat_name_storage_.emplace_back(makeStatStorage(name));
+    return stat_name_storage_.back()->statName();
   }
 
   SymbolTable table_;
 
-  std::vector<std::unique_ptr<uint8_t[]>> stat_name_buffers_;
+  std::vector<StatNameStoragePtr> stat_name_storage_;
 };
+
+TEST_F(StatNameTest, AllocFree) {
+  encodeDecode("hello.world");
+}
 
 TEST_F(StatNameTest, TestArbitrarySymbolRoundtrip) {
   const std::vector<std::string> stat_names = {"", " ", "  ", ",", "\t", "$", "%", "`", "."};
   for (auto stat_name : stat_names) {
-    EXPECT_EQ(stat_name, EncodeDecode(stat_name));
+    EXPECT_EQ(stat_name, encodeDecode(stat_name));
   }
 }
 
 TEST_F(StatNameTest, TestMillionSymbolsRoundtrip) {
   for (int i = 0; i < 1*1000*1000; ++i) {
     const std::string stat_name = absl::StrCat("symbol_", i);
-    EXPECT_EQ(stat_name, EncodeDecode(stat_name));
+    EXPECT_EQ(stat_name, encodeDecode(stat_name));
   }
 }
 
@@ -51,7 +65,7 @@ TEST_F(StatNameTest, TestUnusualDelimitersRoundtrip) {
   const std::vector<std::string> stat_names = {".",    "..",    "...",    "foo",    "foo.",
                                                ".foo", ".foo.", ".foo..", "..foo.", "..foo.."};
   for (auto stat_name : stat_names) {
-    EXPECT_EQ(stat_name, EncodeDecode(stat_name));
+    EXPECT_EQ(stat_name, encodeDecode(stat_name));
   }
 }
 
@@ -133,18 +147,14 @@ TEST_F(StatNameTest, FreePoolTest) {
   //   coexisting symbols during the life of the table.
 
   {
-    StatName stat_1(makeStat("1a"));
-    StatName stat_2(makeStat("2a"));
-    StatName stat_3(makeStat("3a"));
-    StatName stat_4(makeStat("4a"));
-    StatName stat_5(makeStat("5a"));
+    makeStat("1a");
+    makeStat("2a");
+    makeStat("3a");
+    makeStat("4a");
+    makeStat("5a");
     EXPECT_EQ(monotonicCounter(), 5);
     EXPECT_EQ(table_.size(), 5);
-    stat_1.free(table_);
-    stat_2.free(table_);
-    stat_3.free(table_);
-    stat_4.free(table_);
-    stat_5.free(table_);
+    clearStorage();
   }
   EXPECT_EQ(monotonicCounter(), 5);
   EXPECT_EQ(table_.size(), 0);
@@ -170,41 +180,41 @@ TEST_F(StatNameTest, TestShrinkingExpectation) {
   // ::size() is a public function, but should only be used for testing.
   size_t table_size_0 = table_.size();
 
-  StatName stat_a(makeStat("a"));
+  StatNameStoragePtr stat_a(makeStatStorage("a"));
   size_t table_size_1 = table_.size();
 
-  StatName stat_aa(makeStat("a.a"));
+  StatNameStoragePtr stat_aa(makeStatStorage("a.a"));
   EXPECT_EQ(table_size_1, table_.size());
 
-  StatName stat_ab(makeStat("a.b"));
+  StatNameStoragePtr stat_ab(makeStatStorage("a.b"));
   size_t table_size_2 = table_.size();
 
-  StatName stat_ac(makeStat("a.c"));
+  StatNameStoragePtr stat_ac(makeStatStorage("a.c"));
   size_t table_size_3 = table_.size();
 
-  StatName stat_acd(makeStat("a.c.d"));
+  StatNameStoragePtr stat_acd(makeStatStorage("a.c.d"));
   size_t table_size_4 = table_.size();
 
-  StatName stat_ace(makeStat("a.c.e"));
+  StatNameStoragePtr stat_ace(makeStatStorage("a.c.e"));
   size_t table_size_5 = table_.size();
   EXPECT_GE(table_size_5, table_size_4);
 
-  stat_ace.free(table_);
+  stat_ace->free(table_);
   EXPECT_EQ(table_size_4, table_.size());
 
-  stat_acd.free(table_);
+  stat_acd->free(table_);
   EXPECT_EQ(table_size_3, table_.size());
 
-  stat_ac.free(table_);
+  stat_ac->free(table_);
   EXPECT_EQ(table_size_2, table_.size());
 
-  stat_ab.free(table_);
+  stat_ab->free(table_);
   EXPECT_EQ(table_size_1, table_.size());
 
-  stat_aa.free(table_);
+  stat_aa->free(table_);
   EXPECT_EQ(table_size_1, table_.size());
 
-  stat_a.free(table_);
+  stat_a->free(table_);
   EXPECT_EQ(table_size_0, table_.size());
 }
 

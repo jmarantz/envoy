@@ -199,6 +199,9 @@ public:
     return store_.histograms();
   }
 
+  const SymbolTable& symbolTable() const override { return store_.symbolTable(); }
+  SymbolTable& symbolTable() override { return store_.symbolTable(); }
+
   // Stats::StoreRoot
   void addSink(Sink&) override {}
   void setTagProducer(TagProducerPtr&&) override {}

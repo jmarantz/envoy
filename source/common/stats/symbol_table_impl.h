@@ -79,6 +79,7 @@ public:
 
 private:
   friend class StatName;
+  friend class StatNameStorage;
   friend class StatNameTest;
 
   struct SharedSymbol {
@@ -198,7 +199,7 @@ public:
 
   const uint8_t* data() const { return symbol_array_ + 2; }
 
-  void free(SymbolTable& symbol_table) { symbol_table.free(data(), size()); }
+  void free(SymbolTable& symbol_table) { symbol_table.free(data(), size()); }  // DELETE
   std::string toString(const SymbolTable& table) const { return table.decode(data(), size()); }
 
   // Returns a hash of the underlying symbol vector, since StatNames are uniquely defined by their
@@ -223,21 +224,19 @@ protected:
   const uint8_t* symbol_array_;
 };
 
-/*
-class StatNameWithStorage : public StatName {
+class StatNameStorage {
  public:
-  StatNameWithStorage(absl::string_view name, SymbolTable& table)
-      : StatName(table_.encode(stat_name), new uint8_t[StatName::size(symbol_vec)]) {}
-  ~StatNameWithStorage() { ASSERT(symbol_array_ == nullptr); }
+  StatNameStorage(absl::string_view name, SymbolTable& table);
+  void free(SymbolTable& table) { statName().free(table); }
+  StatName statName() const { return StatName(bytes_.get()); }
 
-  void free(SymbolTable& symbol_table) {
-    StatName::free(symbol_table);
-    delete [] const_cast<uint8_t*>(symbol_array_);
-    symbol_array_ = nullptr;
-  }
+ private:
+  std::unique_ptr<uint8_t[]> bytes_;
 };
-*/
 
+using StatNameStoragePtr = std::unique_ptr<StatNameStorage>;
+
+/*
 struct StatNamePtrHash {
   size_t operator()(const StatName* a) const { return a->hash(); }
 };
@@ -245,6 +244,17 @@ struct StatNamePtrHash {
 struct StatNamePtrCompare {
   bool operator()(const StatName* a, const StatName* b) const {
     return *a == *b;
+  }
+};
+*/
+
+struct StatNameHash {
+  size_t operator()(const StatName& a) const { return a.hash(); }
+};
+
+struct StatNameCompare {
+  bool operator()(const StatName& a, const StatName& b) const {
+    return a == b;
   }
 };
 

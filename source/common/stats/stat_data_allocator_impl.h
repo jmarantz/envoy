@@ -51,6 +51,9 @@ public:
    * @param data the data returned by alloc().
    */
   virtual void free(StatData& data) PURE;
+
+  virtual StatName statName(const StatData& data) const PURE;
+  virtual std::string name(const StatData& data) const PURE;
 };
 
 /**
@@ -69,8 +72,8 @@ public:
   ~CounterImpl() { alloc_.free(data_); }
 
   // Stats::Metric
-  const std::string name() const override { return data_.name(alloc_.symbolTable()); }
-  StatNameRef nameRef() const override { return data_.nameRef(); }
+  std::string name() const override { return alloc_.name(data_); }
+  StatName statName() const override { return alloc_.statName(data_); }
 
   // Stats::Counter
   void add(uint64_t amount) override {
@@ -102,8 +105,8 @@ public:
   ~GaugeImpl() { alloc_.free(data_); }
 
   // Stats::Metric
-  const std::string name() const override { return data_.name(alloc_.symbolTable()); }
-  StatNameRef nameRef() const override { return data_.nameRef(); }
+  std::string name() const override { return alloc_.name(data_); }
+  StatName statName() const override { return alloc_.statName(data_); }
 
   // Stats::Gauge
   virtual void add(uint64_t amount) override {

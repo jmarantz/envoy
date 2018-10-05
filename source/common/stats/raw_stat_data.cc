@@ -41,6 +41,19 @@ void RawStatData::initialize(absl::string_view key, const StatsOptions& stats_op
   name_[key.size()] = '\0';
 }
 
+StatName RawStatDataAllocator::statName(const RawStatData& data) const {
+  Thread::LockGuard lock(map_mutex_);
+  std::unique_ptr<uint8_t[]>& bytes = stat_name_map_[&data];
+  if (bytes.get() == nullptr) {
+    SymbolVec symbol_vec = symbol_table_.encode(data.name_);  // note: takes lock in symbol table.
+    bytes.reset(new uint8_t[StatName::size(symbol_vec)]);
+    StatName stat_name;
+    stat_name.init(symbol_vec, bytes.get());
+    return stat_name;
+  }
+  return StatName(bytes.get());
+}
+
 template class StatDataAllocatorImpl<RawStatData>;
 
 } // namespace Stats

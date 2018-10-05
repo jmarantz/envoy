@@ -512,7 +512,6 @@ TEST_F(StatsThreadLocalStoreTest, ShuttingDown) {
   EXPECT_EQ(3L, TestUtility::findGauge(*store_, "g1").use_count());
   EXPECT_EQ(2L, TestUtility::findCounter(*store_, "c2").use_count());
   EXPECT_EQ(2L, TestUtility::findGauge(*store_, "g2").use_count());
-
   tls_.shutdownThread();
 
   // Includes overflow stat.

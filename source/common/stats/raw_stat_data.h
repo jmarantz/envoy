@@ -13,12 +13,14 @@
 
 #include "envoy/stats/stat_data_allocator.h"
 #include "common/stats/stat_name_ref.h"
+#include "common/common/thread.h"
 #include "envoy/stats/stats_options.h"
 
 #include "common/common/assert.h"
 #include "common/common/hash.h"
 #include "common/stats/stat_data_allocator_impl.h"
 
+#include "absl/container/flat_hash_map.h"
 #include "absl/strings/string_view.h"
 
 namespace Envoy {
@@ -80,9 +82,10 @@ struct RawStatData {
   /**
    * Returns the name as a std::string.
    */
-  std::string name(const SymbolTable&) const { return std::string(name_); }
-  StatNameRef nameRef() const {
-    return StatNameRef(name_);
+  std::string name() const { return std::string(name_); }
+  StatName statName() const {
+    ASSERT(false);
+    return StatName(nullptr); // FIX
   }
 
   std::atomic<uint64_t> value_;
@@ -101,9 +104,14 @@ public:
   bool requiresBoundedStatNameSize() const override { return true; }
   const SymbolTable& symbolTable() const override { return symbol_table_; }
   SymbolTable& symbolTable() override { return symbol_table_; }
+  std::string name(const RawStatData& data) const override { return std::string(data.name_); }
+  StatName statName(const RawStatData& data) const override;
 
  private:
   SymbolTable& symbol_table_;
+  mutable absl::flat_hash_map<const RawStatData*, std::unique_ptr<uint8_t[]>> stat_name_map_
+      GUARDED_BY(map_mutex_);
+  mutable Thread::MutexBasicLockable map_mutex_;
 };
 
 

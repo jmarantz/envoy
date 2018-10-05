@@ -42,7 +42,7 @@ public:
     }
 
     std::shared_ptr<Base> new_stat = alloc_(name);
-    stats_.emplace(new_stat->nameRef(), new_stat);
+    stats_.emplace(new_stat->statName(), new_stat);
     return *new_stat;
   }
 
@@ -85,8 +85,8 @@ public:
   }
   const Stats::StatsOptions& statsOptions() const override { return stats_options_; }
 
-  const SymbolTable& symbolTable() const { return symbol_table_; }
-  SymbolTable& symbolTable() { return symbol_table_; }
+  const SymbolTable& symbolTable() const override { return symbol_table_; }
+  SymbolTable& symbolTable() override { return symbol_table_; }
 
   // Stats::Store
   std::vector<CounterSharedPtr> counters() const override { return counters_.toVector(); }

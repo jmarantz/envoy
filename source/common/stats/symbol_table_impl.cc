@@ -160,5 +160,12 @@ void SymbolTable::newSymbol() EXCLUSIVE_LOCKS_REQUIRED(lock_) {
   ASSERT(monotonic_counter_ != 0);
 }
 
+StatNameStorage::StatNameStorage(absl::string_view name, SymbolTable& table) {
+  SymbolVec symbol_vec = table.encode(name);
+  bytes_.reset(new uint8_t[StatName::size(symbol_vec)]);
+  StatName stat_name;
+  stat_name.init(symbol_vec, bytes_.get());
+}
+
 } // namespace Stats
 } // namespace Envoy

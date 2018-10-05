@@ -43,13 +43,13 @@ std::vector<CounterSharedPtr> ThreadLocalStoreImpl::counters() const {
   // Handle de-dup due to overlapping scopes.
   std::vector<CounterSharedPtr> ret;
   Thread::LockGuard lock(lock_);
-  StatRefSet names(defaultBucketCount(), StatNameRefStarHash(symbol_table_),
-                   StatNameRefStarCompare(symbol_table_));
+  StatSet names;/*(defaultBucketCount(), StatNameRefStarHash(symbol_table_),
+                     StatNameRefStarCompare(symbol_table_));*/
   //StatSet<CounterSharedPtr> names;
   for (ScopeImpl* scope : scopes_) {
     for (auto& counter : scope->central_cache_.counters_) {
-      const StatNameRef& name_ref = counter.first;
-      if (names.insert(&name_ref).second) {
+      StatName stat_name = counter.first;
+      if (names.insert(stat_name).second) {
         ret.push_back(counter.second);
       }
       // if (names.insert(counter).second) {
@@ -72,13 +72,13 @@ std::vector<GaugeSharedPtr> ThreadLocalStoreImpl::gauges() const {
   // Handle de-dup due to overlapping scopes.
   std::vector<GaugeSharedPtr> ret;
   Thread::LockGuard lock(lock_);
-  StatRefSet names(defaultBucketCount(), StatNameRefStarHash(symbol_table_),
-                   StatNameRefStarCompare(symbol_table_));
+  StatSet names;/*(defaultBucketCount(), StatNameRefStarHash(symbol_table_),
+                  StatNameRefStarCompare(symbol_table_));*/
   //StatSet<GaugeSharedPtr> names;
   for (ScopeImpl* scope : scopes_) {
     for (auto& gauge : scope->central_cache_.gauges_) {
-      const StatNameRef& name_ref = gauge.first;
-      if (names.insert(&name_ref).second) {
+      StatName stat_name = gauge.first;
+      if (names.insert(stat_name).second) {
         ret.push_back(gauge.second);
       }
       //      if (names.insert(gauge).second) {
@@ -213,14 +213,17 @@ StatType& ThreadLocalStoreImpl::ScopeImpl::safeMakeStat(
     StatMap<StatType>* tls_cache) {
     //StatType* tls_ref) {
 
+  SymbolVec symbol_vec = parent_.symbol_table_.encode(name);
+  std::unique_ptr<uint8_t[]> bytes(new uint8_t[StatName::size(symbol_vec)]);
+  StatName stat_name;
+  stat_name.init(symbol_vec, bytes.get());
+
   // If we have a valid cache entry, return it.
   /*
   if (tls_ref && *tls_ref) {
     return *tls_ref;
   }
   */
-  //SymbolTable& table = *parent_.heap_allocator_.symbolTable();
-  StatNameRef stat_name(name);
   //StatNameRefPtr stat_name = table.encode(name);
   if (tls_cache) {
     auto pos = tls_cache->find(stat_name);
@@ -253,7 +256,7 @@ StatType& ThreadLocalStoreImpl::ScopeImpl::safeMakeStat(
                        std::move(tags));
       ASSERT(stat != nullptr);
     }
-    auto& central_ref = central_cache_map[stat->nameRef()];
+    auto& central_ref = central_cache_map[stat->statName()];
     central_ref = stat;
     central_stat_ptr = &central_ref;
   }
@@ -264,7 +267,7 @@ StatType& ThreadLocalStoreImpl::ScopeImpl::safeMakeStat(
   //  *tls_ref = central_ref;
   //}
   if (tls_cache) {
-    tls_cache->insert(std::make_pair((*central_stat_ptr)->nameRef(), *central_stat_ptr));
+    tls_cache->insert(std::make_pair((*central_stat_ptr)->statName(), *central_stat_ptr));
   }
 
   // Finally we return the reference.
@@ -419,7 +422,8 @@ ThreadLocalHistogramImpl::ThreadLocalHistogramImpl(const std::string& name,
                                                    std::vector<Tag>&& tags,
                                                    SymbolTable& symbol_table)
     : MetricImpl(std::move(tag_extracted_name), std::move(tags), symbol_table),
-      current_active_(0), flags_(0), created_thread_id_(std::this_thread::get_id()), name_(name) {
+      current_active_(0), flags_(0), created_thread_id_(std::this_thread::get_id()),
+      symbol_table_(symbol_table), stat_name_storage_(name, symbol_table) {
   histograms_[0] = hist_alloc();
   histograms_[1] = hist_alloc();
 }
@@ -447,7 +451,7 @@ ParentHistogramImpl::ParentHistogramImpl(const std::string& name, Store& parent,
     : MetricImpl(std::move(tag_extracted_name), std::move(tags), symbol_table), parent_(parent),
       tls_scope_(tls_scope), interval_histogram_(hist_alloc()), cumulative_histogram_(hist_alloc()),
       interval_statistics_(interval_histogram_), cumulative_statistics_(cumulative_histogram_),
-      merged_(false), name_(name) {}
+      merged_(false), stat_name_storage_(name, symbol_table) {}
 
 ParentHistogramImpl::~ParentHistogramImpl() {
   hist_free(interval_histogram_);

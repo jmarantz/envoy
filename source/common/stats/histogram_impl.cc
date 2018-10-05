@@ -10,6 +10,20 @@
 namespace Envoy {
 namespace Stats {
 
+HistogramImpl::HistogramImpl(const std::string& name, Store& parent,
+                             std::string&& tag_extracted_name,
+                             std::vector<Tag>&& tags, SymbolTable& symbol_table)
+    : MetricImpl(std::move(tag_extracted_name), std::move(tags), symbol_table),
+      parent_(parent),
+      stat_name_storage_(name, symbol_table) {}
+
+HistogramImpl::~HistogramImpl() {
+}
+
+std::string HistogramImpl::name() const {
+  return statName().toString(parent_.symbolTable());
+}
+
 HistogramStatisticsImpl::HistogramStatisticsImpl(const histogram_t* histogram_ptr)
     : computed_quantiles_(supportedQuantiles().size(), 0.0) {
   hist_approx_quantile(histogram_ptr, supportedQuantiles().data(), supportedQuantiles().size(),

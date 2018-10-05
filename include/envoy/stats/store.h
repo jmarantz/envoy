@@ -42,6 +42,9 @@ public:
    * @return a list of all known histograms.
    */
   virtual std::vector<ParentHistogramSharedPtr> histograms() const PURE;
+
+  virtual const SymbolTable& symbolTable() const PURE;
+  virtual SymbolTable& symbolTable() PURE;
 };
 
 typedef std::unique_ptr<Store> StorePtr;

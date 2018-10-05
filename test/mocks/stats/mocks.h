@@ -29,8 +29,8 @@ public:
 
   // Note: cannot be mocked because it is accessed as a Property in a gmock EXPECT_CALL. This
   // creates a deadlock in gmock and is an unintended use of mock functions.
-  const std::string name() const override { return name_; };
-  StatNameRef nameRef() const override { return StatNameRef(name_); }
+  std::string name() const override { return name_; };
+  StatName statName() const override { ASSERT(0); return StatName(nullptr); }
 
   MOCK_METHOD1(add, void(uint64_t amount));
   MOCK_METHOD0(inc, void());
@@ -55,8 +55,8 @@ public:
 
   // Note: cannot be mocked because it is accessed as a Property in a gmock EXPECT_CALL. This
   // creates a deadlock in gmock and is an unintended use of mock functions.
-  const std::string name() const override { return name_; };
-  StatNameRef nameRef() const override { return StatNameRef(name_); }
+  std::string name() const override { return name_; };
+  StatName statName() const override { ASSERT(0); return StatName(nullptr); }
 
   MOCK_METHOD1(add, void(uint64_t amount));
   MOCK_METHOD0(dec, void());
@@ -81,8 +81,8 @@ public:
 
   // Note: cannot be mocked because it is accessed as a Property in a gmock EXPECT_CALL. This
   // creates a deadlock in gmock and is an unintended use of mock functions.
-  const std::string name() const override { return name_; };
-  StatNameRef nameRef() const override { return StatNameRef(name_); }
+  std::string name() const override { return name_; };
+  StatName statName() const override { ASSERT(0); return StatName(nullptr); }
 
   MOCK_CONST_METHOD1(tagExtractedName, std::string(const SymbolTable&));
   MOCK_CONST_METHOD1(tags, std::vector<Tag>(const SymbolTable&));
@@ -101,8 +101,8 @@ public:
 
   // Note: cannot be mocked because it is accessed as a Property in a gmock EXPECT_CALL. This
   // creates a deadlock in gmock and is an unintended use of mock functions.
-  const std::string name() const override { return name_; };
-  StatNameRef nameRef() const override { return StatNameRef(name_); }
+  std::string name() const override { return name_; };
+  StatName statName() const override { ASSERT(0); return StatName(nullptr); }
   void merge() override {}
   const std::string summary() const override { return ""; };
 
@@ -152,6 +152,8 @@ public:
 
   ScopePtr createScope(const std::string& name) override { return ScopePtr{createScope_(name)}; }
 
+  SymbolTable& symbolTable() override { return symbol_table_; }
+  const SymbolTable& symbolTable() const override { return symbol_table_; }
   MOCK_METHOD2(deliverHistogramToSinks, void(const Histogram& histogram, uint64_t value));
   MOCK_METHOD1(counter, Counter&(const std::string&));
   MOCK_CONST_METHOD0(counters, std::vector<CounterSharedPtr>());
@@ -165,6 +167,7 @@ public:
   testing::NiceMock<MockCounter> counter_;
   std::vector<std::unique_ptr<MockHistogram>> histograms_;
   StatsOptionsImpl stats_options_;
+  SymbolTable symbol_table_;
 };
 
 /**

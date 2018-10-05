@@ -10,6 +10,7 @@
 #include "common/common/non_copyable.h"
 #include "common/stats/metric_impl.h"
 #include "common/stats/stat_name_ref.h"
+#include "common/stats/symbol_table_impl.h"
 
 #include "circllhist.h"
 
@@ -30,7 +31,6 @@ public:
   HistogramStatisticsImpl(const histogram_t* histogram_ptr);
 
   void refresh(const histogram_t* new_histogram_ptr);
-
   // HistogramStatistics
   std::string summary() const override;
   const std::vector<double>& supportedQuantiles() const override;
@@ -46,15 +46,12 @@ private:
 class HistogramImpl : public Histogram, public MetricImpl {
 public:
   HistogramImpl(const std::string& name, Store& parent, std::string&& tag_extracted_name,
-                std::vector<Tag>&& tags, SymbolTable& symbol_table)
-      : MetricImpl(std::move(tag_extracted_name), std::move(tags), symbol_table),
-        parent_(parent), name_(name) {}
+                std::vector<Tag>&& tags, SymbolTable& symbol_table);
+  virtual ~HistogramImpl();
 
   // Stats:;Metric
-  const std::string name() const override { return name_; }
-  StatNameRef nameRef() const override {
-    return StatNameRef(name_);
-  }
+  std::string name() const override;
+  StatName statName() const override { return stat_name_storage_.statName(); }
 
   // Stats::Histogram
   void recordValue(uint64_t value) override { parent_.deliverHistogramToSinks(*this, value); }
@@ -65,7 +62,7 @@ private:
   // This is used for delivering the histogram data to sinks.
   Store& parent_;
 
-  const std::string name_;
+  StatNameStorage stat_name_storage_;
 };
 
 } // namespace Stats

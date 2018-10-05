@@ -62,10 +62,8 @@ public:
   bool used() const override { return flags_ & Flags::Used; }
 
   // Stats::Metric
-  const std::string name() const override { return name_; }
-  StatNameRef nameRef() const override {
-    return StatNameRef(name_);
-  }
+  std::string name() const override { return statName().toString(symbol_table_); }
+  StatName statName() const override { return stat_name_storage_.statName(); }
 
 private:
   uint64_t otherHistogramIndex() const { return 1 - current_active_; }
@@ -73,7 +71,8 @@ private:
   histogram_t* histograms_[2];
   std::atomic<uint16_t> flags_;
   std::thread::id created_thread_id_;
-  const std::string name_;
+  SymbolTable& symbol_table_;
+  StatNameStorage stat_name_storage_;
 };
 
 typedef std::shared_ptr<ThreadLocalHistogramImpl> TlsHistogramSharedPtr;
@@ -109,10 +108,8 @@ public:
   const std::string summary() const override;
 
   // Stats::Metric
-  const std::string name() const override { return name_; }
-  StatNameRef nameRef() const override {
-    return StatNameRef(name_);
-  }
+  std::string name() const override { return statName().toString(parent_.symbolTable()); }
+  StatName statName() const override { return stat_name_storage_.statName(); }
 
 private:
   bool usedLockHeld() const EXCLUSIVE_LOCKS_REQUIRED(merge_lock_);
@@ -126,7 +123,7 @@ private:
   mutable Thread::MutexBasicLockable merge_lock_;
   std::list<TlsHistogramSharedPtr> tls_histograms_ GUARDED_BY(merge_lock_);
   bool merged_;
-  const std::string name_;
+  StatNameStorage stat_name_storage_;
 };
 
 typedef std::shared_ptr<ParentHistogramImpl> ParentHistogramImplSharedPtr;
@@ -230,7 +227,8 @@ public:
   void mergeHistograms(PostMergeCb mergeCb) override;
 
   Source& source() override { return source_; }
-  SymbolTable& symbolTable() { return symbol_table_; }
+  SymbolTable& symbolTable() override { return symbol_table_; }
+  const SymbolTable& symbolTable() const override { return symbol_table_; }
 
   const Stats::StatsOptions& statsOptions() const override { return stats_options_; }
 
@@ -242,9 +240,9 @@ private:
   //using StatMap = std::unordered_map<StatNamePtr, Stat, StatNameUniquePtrHash>;
 
 #if FLAT_HASH
-  using StatMap = absl::flat_hash_map<StatNameRef, Stat, StatNameRefHash,
-                                      StatNameRefCompare>;
-  using StatRefSet = absl::flat_hash_set<const StatNameRef*, StatNameRefStarHash, StatNameRefStarCompare>;
+  using StatMap = absl::flat_hash_map<StatName, Stat, StatNameHash,
+                                      StatNameCompare>;
+  using StatSet = absl::flat_hash_set<StatName, StatNameHash, StatNameCompare>;
 #else
   using StatMap = std::unordered_map<StatNameRef, Stat, StatNameRefHash,
                                      StatNameRefCompare>;
@@ -258,11 +256,11 @@ private:
   }
 
   struct TlsCacheEntry {
-    explicit TlsCacheEntry(const SymbolTable& symbol_table)
-        : counters_(defaultBucketCount(), StatNameRefHash(symbol_table),
+    explicit TlsCacheEntry(const SymbolTable&) {}
+    /*        : counters(), StatNameRefHash(symbol_table),
                     StatNameRefCompare(symbol_table)),
           gauges_(defaultBucketCount(), StatNameRefHash(symbol_table),
-                  StatNameRefCompare(symbol_table)) {}
+          StatNameRefCompare(symbol_table)) {}*/
     StatMap<CounterSharedPtr> counters_;
     StatMap<GaugeSharedPtr> gauges_;
 #if FLAT_HASH
@@ -275,11 +273,11 @@ private:
   };
 
   struct CentralCacheEntry {
-    explicit CentralCacheEntry(const SymbolTable& symbol_table)
-        : counters_(defaultBucketCount(), StatNameRefHash(symbol_table),
+    explicit CentralCacheEntry(const SymbolTable&) {}
+    /*: counters_(defaultBucketCount(), StatNameRefHash(symbol_table),
             StatNameRefCompare(symbol_table)),
           gauges_(defaultBucketCount(), StatNameRefHash(symbol_table),
-                  StatNameRefCompare(symbol_table)) {}
+          StatNameRefCompare(symbol_table)) {}*/
     StatMap<CounterSharedPtr> counters_;
     StatMap<GaugeSharedPtr> gauges_;
 #if FLAT_HASH
