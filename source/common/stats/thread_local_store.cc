@@ -20,7 +20,8 @@
 
 #include "absl/strings/str_join.h"
 
-#define ENABLE_TLS_CACHE true
+#define ENABLE_TLS_CACHE false
+#define ENABLE_SCOPE_CACHE true
 
 namespace Envoy {
 namespace Stats {
@@ -208,9 +209,13 @@ ThreadLocalStoreImpl::ScopeImpl::~ScopeImpl() { parent_.releaseScopeCrossThread(
 template <class StatType>
 StatType& ThreadLocalStoreImpl::ScopeImpl::safeMakeStat(
     const std::string& name,
-    StatMap<StatType>& central_cache_map,
-    MakeStatFn<StatType> make_stat,
-    StatMap<StatType>* tls_cache) {
+    StatMap<std::shared_ptr<StatType>>&
+#if ENABLE_SCOPE_CACHE
+    central_cache_map
+#endif
+    ,
+    MakeStatFn<std::shared_ptr<StatType>> make_stat,
+    StatMap<std::shared_ptr<StatType>>* tls_cache) {
     //StatType* tls_ref) {
 
   SymbolVec symbol_vec = parent_.symbol_table_.encode(name);
@@ -229,7 +234,7 @@ StatType& ThreadLocalStoreImpl::ScopeImpl::safeMakeStat(
     auto pos = tls_cache->find(stat_name);
     if (pos != tls_cache->end()) {
       //stat_name.free(table);
-      return pos->second;
+      return *pos->second;
     }
   }
 
@@ -237,18 +242,20 @@ StatType& ThreadLocalStoreImpl::ScopeImpl::safeMakeStat(
   // central store location. It might contain nothing. In this case, we allocate a new stat.
   Thread::LockGuard lock(parent_.lock_);
   //StatType& central_ref = central_cache_map[std::move(stat_name_ptr)];
-  StatType* central_stat_ptr = nullptr;
+#if ENABLE_SCOPE_CACHE
+  std::shared_ptr<StatType>* central_stat_ptr = nullptr;
   auto pos = central_cache_map.find(stat_name);
   if (pos != central_cache_map.end()) {
     central_stat_ptr = &pos->second;
   } else {
+#endif
     std::vector<Tag> tags;
 
     // Tag extraction occurs on the original, untruncated name so the extraction
     // can complete properly, even if the tag values are partially truncated.
     std::string tag_extracted_name = parent_.getTagsForName(name, tags);
     absl::string_view truncated_name = parent_.truncateStatNameIfNeeded(name);
-    StatType stat =
+    std::shared_ptr<StatType> stat =
         make_stat(parent_.alloc_, truncated_name, std::move(tag_extracted_name), std::move(tags));
     if (stat == nullptr) {
       parent_.num_last_resort_stats_.inc();
@@ -256,6 +263,7 @@ StatType& ThreadLocalStoreImpl::ScopeImpl::safeMakeStat(
                        std::move(tags));
       ASSERT(stat != nullptr);
     }
+#if ENABLE_SCOPE_CACHE
     auto& central_ref = central_cache_map[stat->statName()];
     central_ref = stat;
     central_stat_ptr = &central_ref;
@@ -271,7 +279,10 @@ StatType& ThreadLocalStoreImpl::ScopeImpl::safeMakeStat(
   }
 
   // Finally we return the reference.
-  return *central_stat_ptr;
+  return **central_stat_ptr;
+#else
+  return *stat;
+#endif
 }
 
 Counter& ThreadLocalStoreImpl::ScopeImpl::counter(const std::string& name) {
@@ -292,7 +303,7 @@ Counter& ThreadLocalStoreImpl::ScopeImpl::counter(const std::string& name) {
   lock.release();
 #endif
 
-  return *safeMakeStat<CounterSharedPtr>(
+  return safeMakeStat<Counter>(
       final_name, central_cache_.counters_,
       [](StatDataAllocator& allocator, absl::string_view name, std::string&& tag_extracted_name,
          std::vector<Tag>&& tags) -> CounterSharedPtr {
@@ -333,7 +344,7 @@ Gauge& ThreadLocalStoreImpl::ScopeImpl::gauge(const std::string& name) {
   lock.release();
 #endif
 
-  return *safeMakeStat<GaugeSharedPtr>(
+  return safeMakeStat<Gauge>(
       final_name, central_cache_.gauges_,
       [](StatDataAllocator& allocator, absl::string_view name, std::string&& tag_extracted_name,
          std::vector<Tag>&& tags) -> GaugeSharedPtr {

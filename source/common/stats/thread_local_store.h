@@ -325,10 +325,10 @@ private:
     template <class StatType>
     StatType&
     safeMakeStat(const std::string& name,
-                 StatMap<StatType>& central_cache_map,
-                 MakeStatFn<StatType> make_stat,
+                 StatMap<std::shared_ptr<StatType>>& central_cache_map,
+                 MakeStatFn<std::shared_ptr<StatType>> make_stat,
                  //StatType* tls_ref);
-                 StatMap<StatType>* tls_cache);
+                 StatMap<std::shared_ptr<StatType>>* tls_cache);
 
     static std::atomic<uint64_t> next_scope_id_;
 
