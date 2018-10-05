@@ -149,16 +149,6 @@ public:
 
   const StatsOptions& statsOptions() const override { return stats_options_; }
 
-  Counter& getCounter(uint32_t index) override {
-    return wrapped_scope_->getCounter(index);
-  }
-  Gauge& getGauge(uint32_t index) override {
-    return wrapped_scope_->getGauge(index);
-  }
-  Histogram& getHistogram(uint32_t index) override {
-    return wrapped_scope_->getHistogram(index);
-  }
-
 private:
   Thread::MutexBasicLockable& lock_;
   std::string prefix_;
@@ -207,16 +197,6 @@ public:
   std::vector<ParentHistogramSharedPtr> histograms() const override {
     Thread::LockGuard lock(lock_);
     return store_.histograms();
-  }
-
-  Counter& getCounter(uint32_t index) override {
-    return store_.getCounter(index);
-  }
-  Gauge& getGauge(uint32_t index) override {
-    return store_.getGauge(index);
-  }
-  Histogram& getHistogram(uint32_t index) override {
-    return store_.getHistogram(index);
   }
 
   // Stats::StoreRoot

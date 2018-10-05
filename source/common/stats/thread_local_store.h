@@ -213,17 +213,6 @@ public:
     return default_scope_->histogram(name);
   };
 
-  Counter& getCounter(uint32_t index) override {
-    return counter(symbol_table_.counterPatterns().pattern(index));
-  }
-  Gauge& getGauge(uint32_t index) override {
-    return gauge(symbol_table_.gaugePatterns().pattern(index));
-  }
-  Histogram& getHistogram(uint32_t index) override {
-    return histogram(symbol_table_.histogramPatterns().pattern(index));
-  }
-
-
   // Stats::Store
   std::vector<CounterSharedPtr> counters() const override;
   std::vector<GaugeSharedPtr> gauges() const override;
@@ -317,16 +306,6 @@ private:
     Histogram& histogram(const std::string& name) override;
     Histogram& tlsHistogram(const std::string& name, ParentHistogramImpl& parent) override;
     const Stats::StatsOptions& statsOptions() const override { return parent_.statsOptions(); }
-
-    Counter& getCounter(uint32_t index) override {
-      return counter(prefix_ + parent_.symbolTable().counterPatterns().pattern(index));
-    }
-    Gauge& getGauge(uint32_t index) override {
-      return gauge(prefix_ + parent_.symbolTable().gaugePatterns().pattern(index));
-    }
-    Histogram& getHistogram(uint32_t index) override {
-      return histogram(prefix_ + parent_.symbolTable().histogramPatterns().pattern(index));
-    }
 
     template <class StatType>
     using MakeStatFn =

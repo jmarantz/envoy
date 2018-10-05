@@ -54,16 +54,6 @@ struct IsolatedScopeImpl : public Scope {
   }
   const Stats::StatsOptions& statsOptions() const override { return parent_.statsOptions(); }
 
-  Counter& getCounter(uint32_t index) override {
-    return counter(prefix_ + parent_.symbolTable().counterPatterns().pattern(index));
-  }
-  Gauge& getGauge(uint32_t index) override {
-    return gauge(prefix_ + parent_.symbolTable().gaugePatterns().pattern(index));
-  }
-  Histogram& getHistogram(uint32_t index) override {
-    return histogram(prefix_ + parent_.symbolTable().histogramPatterns().pattern(index));
-  }
-
   IsolatedStoreImpl& parent_;
   const std::string prefix_;
 

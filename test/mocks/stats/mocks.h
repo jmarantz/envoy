@@ -162,10 +162,6 @@ public:
   MOCK_CONST_METHOD0(histograms, std::vector<ParentHistogramSharedPtr>());
   MOCK_CONST_METHOD0(statsOptions, const StatsOptions&());
 
-  MOCK_METHOD1(getCounter, Counter&(uint32_t));
-  MOCK_METHOD1(getGauge, Gauge&(uint32_t));
-  MOCK_METHOD1(getHistogram, Histogram&(uint32_t));
-
   testing::NiceMock<MockCounter> counter_;
   std::vector<std::unique_ptr<MockHistogram>> histograms_;
   StatsOptionsImpl stats_options_;

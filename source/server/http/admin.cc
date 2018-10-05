@@ -503,17 +503,19 @@ Http::Code AdminImpl::handlerLogging(absl::string_view url, Http::HeaderMap&,
 }
 
 // TODO(ambuc): Add more tcmalloc stats, export proto details based on allocator.
-Http::Code AdminImpl::handlerMemory(absl::string_view, Http::HeaderMap&, Buffer::Instance& response,
-                                    AdminStream&) {
+Http::Code AdminImpl::handlerMemory(absl::string_view path_and_query, Http::HeaderMap&,
+                                    Buffer::Instance& response, AdminStream&) {
   envoy::admin::v2alpha::Memory memory;
   memory.set_allocated(Memory::Stats::totalCurrentlyAllocated());
   memory.set_heap_size(Memory::Stats::totalCurrentlyReserved());
   response.add(MessageUtil::getJsonStringFromMessage(memory, true)); // pretty-print
-  response.add(absl::StrCat("\n  num_symbols=", symbolTable().size(), "\n"));
-  response.add(absl::StrCat(
-      "\n  bytes_saved=",
-      dynamic_cast<Stats::HeapStatDataAllocator&>(
-          server_.hotRestart().statsAllocator()).bytesSaved(), "\n"));
+  if (path_and_query.find("?symtab") != absl::string_view::npos) {
+    response.add(absl::StrCat("\n  num_symbols=", symbolTable().size(), "\n"));
+    response.add(absl::StrCat(
+        "\n  bytes_saved=",
+        dynamic_cast<Stats::HeapStatDataAllocator&>(
+            server_.hotRestart().statsAllocator()).bytesSaved(), "\n"));
+  }
   return Http::Code::OK;
 }
 

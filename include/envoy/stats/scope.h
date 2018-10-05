@@ -61,10 +61,6 @@ public:
    * maximum allowable object name length and stat suffix length.
    */
   virtual const Stats::StatsOptions& statsOptions() const PURE;
-
-  virtual Counter& getCounter(uint32_t index) PURE;
-  virtual Gauge& getGauge(uint32_t index) PURE;
-  virtual Histogram& getHistogram(uint32_t index) PURE;
 };
 
 } // namespace Stats

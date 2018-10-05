@@ -95,16 +95,6 @@ public:
     return std::vector<ParentHistogramSharedPtr>{};
   }
 
-  Counter& getCounter(uint32_t index) override {
-    return counter(symbol_table_.counterPatterns().pattern(index));
-  }
-  Gauge& getGauge(uint32_t index) override {
-    return gauge(symbol_table_.gaugePatterns().pattern(index));
-  }
-  Histogram& getHistogram(uint32_t index) override {
-    return histogram(symbol_table_.histogramPatterns().pattern(index));
-  }
-
 private:
   SymbolTable symbol_table_;
   HeapStatDataAllocator alloc_;
