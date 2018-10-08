@@ -163,6 +163,26 @@ TEST_F(UdpStatsdSinkTest, CheckActualStats) {
   tls_.shutdownThread();
 }
 
+TEST_F(UdpStatsdSinkTest, CheckActualStatsWithCustomPrefix) {
+  NiceMock<Stats::MockSource> source;
+  auto writer_ptr = std::make_shared<NiceMock<MockWriter>>();
+  NiceMock<ThreadLocal::MockInstance> tls_;
+  UdpStatsdSink sink(tls_, writer_ptr, false, symbol_table_, "test_prefix");
+
+  auto counter = std::make_shared<NiceMock<Stats::MockCounter>>();
+  counter->name_ = "test_counter";
+  counter->used_ = true;
+  counter->latch_ = 1;
+  source.counters_.push_back(counter);
+
+  EXPECT_CALL(*std::dynamic_pointer_cast<NiceMock<MockWriter>>(writer_ptr),
+              write("test_prefix.test_counter:1|c"));
+  sink.flush(source);
+  counter->used_ = false;
+
+  tls_.shutdownThread();
+}
+
 TEST_F(UdpStatsdSinkWithTagsTest, CheckActualStats) {
   NiceMock<Stats::MockSource> source;
   auto writer_ptr = std::make_shared<NiceMock<MockWriter>>();

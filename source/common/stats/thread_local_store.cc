@@ -20,7 +20,7 @@
 
 #include "absl/strings/str_join.h"
 
-#define ENABLE_TLS_CACHE false
+#define ENABLE_TLS_CACHE true
 #define ENABLE_SCOPE_CACHE true
 
 namespace Envoy {
