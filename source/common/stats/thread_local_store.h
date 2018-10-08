@@ -220,6 +220,9 @@ public:
   void setTagProducer(TagProducerPtr&& tag_producer) override {
     tag_producer_ = std::move(tag_producer);
   }
+  void setStatsMatcher(StatsMatcherPtr&& stats_matcher) override {
+    stats_matcher_ = std::move(stats_matcher);
+  }
   void initializeThreading(Event::Dispatcher& main_thread_dispatcher,
                            ThreadLocal::Instance& tls) override;
   void shutdownThreading() override;
@@ -336,6 +339,10 @@ private:
     ThreadLocalStoreImpl& parent_;
     const std::string prefix_;
     CentralCacheEntry central_cache_;
+
+    NullCounterImpl null_counter_;
+    NullGaugeImpl null_gauge_;
+    NullHistogramImpl null_histogram_;
   };
 
   struct TlsCache : public ThreadLocal::ThreadLocalObject {
@@ -397,6 +404,7 @@ private:
   ScopePtr default_scope_;
   std::list<std::reference_wrapper<Sink>> timer_sinks_;
   TagProducerPtr tag_producer_;
+  StatsMatcherPtr stats_matcher_;
   std::atomic<bool> shutting_down_{};
   std::atomic<bool> merge_in_progress_{};
   Counter& num_last_resort_stats_;

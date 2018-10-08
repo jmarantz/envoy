@@ -94,6 +94,26 @@ private:
 };
 
 /**
+ * Null counter implementation.
+ * No-ops on all calls and requires no underlying metric or data.
+ */
+class NullCounterImpl : public Counter {
+public:
+  NullCounterImpl() {}
+  ~NullCounterImpl() {}
+  std::string name() const override { return ""; }
+  StatName statName() const override { return StatName(); }
+  std::string tagExtractedName(const SymbolTable&) const override { return ""; }
+  std::vector<Tag> tags(const SymbolTable&) const override { return std::vector<Tag>(); }
+  void add(uint64_t) override {}
+  void inc() override {}
+  uint64_t latch() override { return 0; }
+  void reset() override {}
+  bool used() const override { return false; }
+  uint64_t value() const override { return 0; }
+};
+
+/**
  * Gauge implementation that wraps a StatData.
  */
 template <class StatData> class GaugeImpl : public Gauge, public MetricImpl {
@@ -130,6 +150,27 @@ public:
 private:
   StatData& data_;
   StatDataAllocatorImpl<StatData>& alloc_;
+};
+
+/**
+ * Null gauge implementation.
+ * No-ops on all calls and requires no underlying metric or data.
+ */
+class NullGaugeImpl : public Gauge {
+public:
+  NullGaugeImpl() {}
+  ~NullGaugeImpl() {}
+  std::string name() const override { return ""; }
+  StatName statName() const override { return StatName(); }
+  std::string tagExtractedName(const SymbolTable&) const override { return ""; }
+  std::vector<Tag> tags(const SymbolTable&) const override { return std::vector<Tag>(); }
+  void add(uint64_t) override {}
+  void inc() override {}
+  void dec() override {}
+  void set(uint64_t) override {}
+  void sub(uint64_t) override {}
+  bool used() const override { return false; }
+  uint64_t value() const override { return 0; }
 };
 
 template <class StatData>

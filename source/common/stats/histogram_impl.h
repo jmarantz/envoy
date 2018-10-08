@@ -65,5 +65,21 @@ private:
   StatNameStorage stat_name_storage_;
 };
 
+/**
+ * Null histogram implementation.
+ * No-ops on all calls and requires no underlying metric or data.
+ */
+class NullHistogramImpl : public Histogram {
+public:
+  NullHistogramImpl() {}
+  ~NullHistogramImpl() {}
+  std::string name() const override { return ""; }
+  StatName statName() const override { return StatName(); }
+  std::string tagExtractedName(const SymbolTable&) const override { return ""; }
+  std::vector<Tag> tags(const SymbolTable&) const override { return std::vector<Tag>(); }
+  void recordValue(uint64_t) override {}
+  bool used() const override { return false; }
+};
+
 } // namespace Stats
 } // namespace Envoy

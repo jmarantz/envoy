@@ -16,6 +16,7 @@
 #include "envoy/stats/stats_options.h"
 
 #include "common/common/lock_guard.h"
+#include "common/stats/stats_matcher_impl.h"
 #include "common/stats/tag_producer_impl.h"
 
 #include "absl/strings/str_join.h"
@@ -31,8 +32,8 @@ ThreadLocalStoreImpl::ThreadLocalStoreImpl(const StatsOptions& stats_options,
     : stats_options_(stats_options), alloc_(alloc), symbol_table_(alloc.symbolTable()),
       heap_allocator_(symbol_table_), default_scope_(createScope("")),
       tag_producer_(std::make_unique<TagProducerImpl>()),
-      num_last_resort_stats_(default_scope_->counter("stats.overflow")), source_(*this) {
-}
+      stats_matcher_(std::make_unique<StatsMatcherImpl>()),
+      num_last_resort_stats_(default_scope_->counter("stats.overflow")), source_(*this) {}
 
 ThreadLocalStoreImpl::~ThreadLocalStoreImpl() {
   ASSERT(shutting_down_);
@@ -289,6 +290,12 @@ Counter& ThreadLocalStoreImpl::ScopeImpl::counter(const std::string& name) {
   // Determine the final name based on the prefix and the passed name.
   std::string final_name = prefix_ + name;
 
+  // TODO(ambuc): If stats_matcher_ depends on regexes, this operation (on the hot path) could
+  // become prohibitively expensive. Revisit this usage in the future.
+  if (parent_.stats_matcher_->rejects(final_name)) {
+    return null_counter_;
+  }
+
   // We now try to acquire a *reference* to the TLS cache shared pointer. This might remain null
   // if we don't have TLS initialized currently. The de-referenced pointer might be null if there
   // is no cache entry.
@@ -333,6 +340,12 @@ Gauge& ThreadLocalStoreImpl::ScopeImpl::gauge(const std::string& name) {
   // See comments in counter(). There is no super clean way (via templates or otherwise) to
   // share this code so I'm leaving it largely duplicated for now.
   std::string final_name = prefix_ + name;
+
+  // See warning/comments in counter().
+  if (parent_.stats_matcher_->rejects(final_name)) {
+    return null_gauge_;
+  }
+
   //GaugeSharedPtr* tls_ref = nullptr;
   StatMap<GaugeSharedPtr>* tls_cache = nullptr;
 #if ENABLE_TLS_CACHE
@@ -358,6 +371,12 @@ Histogram& ThreadLocalStoreImpl::ScopeImpl::histogram(const std::string& name) {
   // See comments in counter(). There is no super clean way (via templates or otherwise) to
   // share this code so I'm leaving it largely duplicated for now.
   std::string final_name = prefix_ + name;
+
+  // See warning/comments in counter().
+  if (parent_.stats_matcher_->rejects(final_name)) {
+    return null_histogram_;
+  }
+
   ParentHistogramSharedPtr* tls_ref = nullptr;
   /*  SymbolTable* symbol_table;
   {
@@ -396,6 +415,10 @@ Histogram& ThreadLocalStoreImpl::ScopeImpl::histogram(const std::string& name) {
 
 Histogram& ThreadLocalStoreImpl::ScopeImpl::tlsHistogram(const std::string& name,
                                                          ParentHistogramImpl& parent) {
+  if (parent_.stats_matcher_->rejects(name)) {
+    return null_histogram_;
+  }
+
   // See comments in counter() which explains the logic here.
 
   // Here prefix will not be considered because, by the time ParentHistogram calls this method
