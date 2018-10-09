@@ -212,6 +212,8 @@ public:
 
   const Stats::StatsOptions& statsOptions() const override { return stats_options_; }
 
+  void setDataPlaneActive(bool x) override { data_plane_active_ = x; }
+
 private:
   struct TlsCacheEntry {
     std::unordered_map<std::string, CounterSharedPtr> counters_;
@@ -302,6 +304,7 @@ private:
   TagProducerPtr tag_producer_;
   std::atomic<bool> shutting_down_{};
   std::atomic<bool> merge_in_progress_{};
+  std::atomic<bool> data_plane_active_{};
   Counter& num_last_resort_stats_;
   HeapStatDataAllocator heap_allocator_;
   SourceImpl source_;

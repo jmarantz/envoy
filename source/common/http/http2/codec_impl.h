@@ -38,21 +38,21 @@ const std::string CLIENT_MAGIC_PREFIX = "PRI * HTTP/2";
  * All stats for the HTTP/2 codec. @see stats_macros.h
  */
 // clang-format off
-#define ALL_HTTP2_CODEC_STATS(COUNTER)                                                             \
-  COUNTER(header_overflow)                                                                         \
-  COUNTER(headers_cb_no_stream)                                                                    \
-  COUNTER(rx_messaging_error)                                                                      \
-  COUNTER(rx_reset)                                                                                \
-  COUNTER(too_many_header_frames)                                                                  \
-  COUNTER(trailers)                                                                                \
-  COUNTER(tx_reset)
+#define ALL_HTTP2_CODEC_STATS(FAST_COUNTER)                                                        \
+  FAST_COUNTER(header_overflow)                                                                    \
+  FAST_COUNTER(headers_cb_no_stream)                                                               \
+  FAST_COUNTER(rx_messaging_error)                                                                 \
+  FAST_COUNTER(rx_reset)                                                                           \
+  FAST_COUNTER(too_many_header_frames)                                                             \
+  FAST_COUNTER(trailers)                                                                           \
+  FAST_COUNTER(tx_reset)
 // clang-format on
 
 /**
  * Wrapper struct for the HTTP/2 codec stats. @see stats_macros.h
  */
 struct CodecStats {
-  ALL_HTTP2_CODEC_STATS(GENERATE_COUNTER_STRUCT)
+  ALL_HTTP2_CODEC_STATS(GENERATE_FAST_COUNTER_STRUCT)
 };
 
 class Utility {
@@ -75,7 +75,7 @@ class ConnectionImpl : public virtual Connection, protected Logger::Loggable<Log
 public:
   ConnectionImpl(Network::Connection& connection, Stats::Scope& stats,
                  const Http2Settings& http2_settings)
-      : stats_{ALL_HTTP2_CODEC_STATS(POOL_COUNTER_PREFIX(stats, "http2."))},
+      : stats_{ALL_HTTP2_CODEC_STATS(POOL_FAST_COUNTER_PREFIX(stats, "http2."))},
         connection_(connection),
         per_stream_buffer_limit_(http2_settings.initial_stream_window_size_), dispatching_(false),
         raised_goaway_(false), pending_deferred_reset_(false) {}

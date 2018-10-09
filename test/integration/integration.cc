@@ -284,6 +284,7 @@ void BaseIntegrationTest::createEnvoy() {
     named_ports.push_back(static_resources.listeners(i).name());
   }
   createGeneratedApiTestServer(bootstrap_path, named_ports);
+  test_server_->server().stats().setDataPlaneActive(true);
 }
 
 void BaseIntegrationTest::setUpstreamProtocol(FakeHttpConnection::Type protocol) {
@@ -367,6 +368,7 @@ void BaseIntegrationTest::createApiTestServer(const ApiFilesystemConfig& api_fil
                                    {{"cds_json_path", cds_path}, {"lds_json_path", lds_path}},
                                    port_map_, version_),
                                port_names);
+  test_server_->server().stats().setDataPlaneActive(true);
 }
 
 void BaseIntegrationTest::createTestServer(const std::string& json_path,

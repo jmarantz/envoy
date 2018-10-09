@@ -231,6 +231,9 @@ StatType& ThreadLocalStoreImpl::ScopeImpl::safeMakeStat(
 
 Counter& ThreadLocalStoreImpl::ScopeImpl::counterHelper(const std::string& name,
                                                         bool data_path_critical) {
+  RELEASE_ASSERT(!parent_.data_plane_active_ || data_path_critical,
+                 fmt::format("ThreadLocalStoreImpl::counterHelper(\"{}\", false", name));
+
   // Determine the final name based on the prefix and the passed name.
   std::string final_name = prefix_ + name;
 

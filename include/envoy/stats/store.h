@@ -42,6 +42,8 @@ public:
    * @return a list of all known histograms.
    */
   virtual std::vector<ParentHistogramSharedPtr> histograms() const PURE;
+
+  virtual void setDataPlaneActive(bool) {}
 };
 
 typedef std::unique_ptr<Store> StorePtr;
