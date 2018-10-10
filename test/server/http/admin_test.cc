@@ -52,7 +52,7 @@ public:
   }
 
   static std::string
-  statsAsJsonHandler(std::map<std::string, uint64_t>& all_stats,
+  statsAsJsonHandler(const AdminImpl::StatValueVector& all_stats,
                      const std::vector<Stats::ParentHistogramSharedPtr>& all_histograms,
                      const bool used_only, const absl::optional<std::regex> regex = absl::nullopt) {
     return AdminImpl::statsAsJson(all_stats, all_histograms, used_only, regex,
@@ -111,7 +111,7 @@ TEST_P(AdminStatsTest, StatsAsJson) {
 
   EXPECT_CALL(alloc_, free(_));
 
-  std::map<std::string, uint64_t> all_stats;
+  AdminImpl::StatValueVector all_stats;
 
   std::string actual_json = statsAsJsonHandler(all_stats, store_->histograms(), false);
 
@@ -256,7 +256,7 @@ TEST_P(AdminStatsTest, UsedOnlyStatsAsJson) {
 
   EXPECT_CALL(alloc_, free(_));
 
-  std::map<std::string, uint64_t> all_stats;
+  AdminImpl::StatValueVector all_stats;
 
   std::string actual_json = statsAsJsonHandler(all_stats, store_->histograms(), true);
 
@@ -357,7 +357,7 @@ TEST_P(AdminStatsTest, StatsAsJsonFilterString) {
 
   EXPECT_CALL(alloc_, free(_));
 
-  std::map<std::string, uint64_t> all_stats;
+  AdminImpl::StatValueVector all_stats;
 
   std::string actual_json = statsAsJsonHandler(all_stats, store_->histograms(), false,
                                                absl::optional<std::regex>{std::regex("[a-z]1")});
@@ -466,7 +466,7 @@ TEST_P(AdminStatsTest, UsedOnlyStatsAsJsonFilterString) {
 
   EXPECT_CALL(alloc_, free(_));
 
-  std::map<std::string, uint64_t> all_stats;
+  AdminImpl::StatValueVector all_stats;
 
   std::string actual_json = statsAsJsonHandler(all_stats, store_->histograms(), true,
                                                absl::optional<std::regex>{std::regex("h[12]")});
@@ -1074,6 +1074,15 @@ TEST_P(AdminInstanceTest, GetRequestJson) {
   EXPECT_THAT(std::string(response_headers.ContentType()->value().getStringView()),
               HasSubstr("application/json"));
 }
+
+/*TEST_P(AdminInstanceTest, GetStats) {
+  Http::HeaderMapImpl response_headers;
+  std::string body;
+  EXPECT_EQ(Http::Code::OK, admin_.request("/stats", "GET", response_headers, body));
+  EXPECT_THAT(body, HasSubstr("{\"stats\":["));
+  EXPECT_THAT(std::string(response_headers.ContentType()->value().getStringView()),
+              HasSubstr("application/json"));
+              }*/
 
 TEST_P(AdminInstanceTest, PostRequest) {
   Http::HeaderMapImpl response_headers;

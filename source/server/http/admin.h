@@ -50,6 +50,9 @@ class AdminImpl : public Admin,
                   public Http::ConnectionManagerConfig,
                   Logger::Loggable<Logger::Id::admin> {
 public:
+  using StatValue = std::pair<const Stats::Metric*, uint64_t>;
+  using StatValueVector = std::vector<StatValue>;
+
   AdminImpl(const std::string& access_log_path, const std::string& profile_path,
             Server::Instance& server);
 
@@ -158,6 +161,8 @@ private:
 
   friend class AdminStatsTest;
 
+  void sortStatValues(StatValueVector& stats);
+
   /**
    * Attempt to change the log level of a logger or all loggers
    * @param params supplies the incoming endpoint query params.
@@ -181,7 +186,7 @@ private:
     return ((!used_only || metric->used()) &&
             (!regex.has_value() || std::regex_search(metric->name(), regex.value())));
   }
-  static std::string statsAsJson(const std::map<std::string, uint64_t>& all_stats,
+  static std::string statsAsJson(const StatValueVector& all_stats,
                                  const std::vector<Stats::ParentHistogramSharedPtr>& all_histograms,
                                  bool used_only,
                                  const absl::optional<std::regex> regex = absl::nullopt,
