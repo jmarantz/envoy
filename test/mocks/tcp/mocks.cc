@@ -25,7 +25,8 @@ MockConnectionData::~MockConnectionData() {
   }
 }
 
-MockInstance::MockInstance() {
+MockInstance::MockInstance(Stats::Store& stats_store) :
+    host_(std::make_shared<NiceMock<Upstream::MockHostDescription>>(stats_store)) {
   ON_CALL(*this, newConnection(_)).WillByDefault(Invoke([&](Callbacks& cb) -> Cancellable* {
     return newConnectionImpl(cb);
   }));

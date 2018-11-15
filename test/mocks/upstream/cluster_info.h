@@ -41,7 +41,7 @@ public:
 
 class MockClusterInfo : public ClusterInfo {
 public:
-  MockClusterInfo();
+  MockClusterInfo(Stats::Store& stats_store);
   ~MockClusterInfo();
 
   void resetResourceManager(uint64_t cx, uint64_t rq_pending, uint64_t rq, uint64_t rq_retry) {
@@ -84,10 +84,11 @@ public:
   Http::Http2Settings http2_settings_{};
   ProtocolOptionsConfigConstSharedPtr extension_protocol_options_;
   uint64_t max_requests_per_connection_{};
-  NiceMock<Stats::MockIsolatedStatsStore> stats_store_;
+  Stats::Store& stats_store_;
+  //NiceMock<Stats::MockIsolatedStatsStore> stats_store_;
   ClusterStats stats_;
   Network::TransportSocketFactoryPtr transport_socket_factory_;
-  NiceMock<Stats::MockIsolatedStatsStore> load_report_stats_store_;
+  //NiceMock<Stats::MockIsolatedStatsStore> load_report_stats_store_;
   ClusterLoadReportStats load_report_stats_;
   ClusterCircuitBreakersStats circuit_breakers_stats_;
   NiceMock<Runtime::MockLoader> runtime_;
@@ -104,7 +105,7 @@ public:
 
 class MockIdleTimeEnabledClusterInfo : public MockClusterInfo {
 public:
-  MockIdleTimeEnabledClusterInfo();
+  MockIdleTimeEnabledClusterInfo(Stats::Store& stats_store);
   ~MockIdleTimeEnabledClusterInfo();
 };
 

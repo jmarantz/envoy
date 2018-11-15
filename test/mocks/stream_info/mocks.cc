@@ -14,8 +14,9 @@ using testing::ReturnRef;
 namespace Envoy {
 namespace StreamInfo {
 
-MockStreamInfo::MockStreamInfo()
-    : downstream_local_address_(new Network::Address::Ipv4Instance("127.0.0.2")),
+MockStreamInfo::MockStreamInfo(Stats::Store& stats_store)
+    : host_(std::make_shared<NiceMock<Upstream::MockHostDescription>>(stats_store)),
+      downstream_local_address_(new Network::Address::Ipv4Instance("127.0.0.2")),
       downstream_remote_address_(new Network::Address::Ipv4Instance("127.0.0.1")) {
   ON_CALL(*this, upstreamHost()).WillByDefault(ReturnPointee(&host_));
   ON_CALL(*this, startTime()).WillByDefault(ReturnPointee(&start_time_));
@@ -71,7 +72,6 @@ MockStreamInfo::MockStreamInfo()
       }));
   ON_CALL(*this, requestedServerName()).WillByDefault(ReturnRef(requested_server_name_));
 }
-
 MockStreamInfo::~MockStreamInfo() {}
 
 } // namespace StreamInfo

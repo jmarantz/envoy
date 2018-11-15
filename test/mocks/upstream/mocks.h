@@ -135,7 +135,7 @@ private:
 
 class MockCluster : public Cluster {
 public:
-  MockCluster();
+  MockCluster(Stats::Store& stats_store);
   ~MockCluster();
 
   // Upstream::Cluster
@@ -149,7 +149,7 @@ public:
   MOCK_METHOD0(prioritySet, MockPrioritySet&());
   MOCK_CONST_METHOD0(prioritySet, const PrioritySet&());
 
-  std::shared_ptr<MockClusterInfo> info_{new NiceMock<MockClusterInfo>()};
+  std::shared_ptr<MockClusterInfo> info_;
   std::function<void()> initialize_callback_;
   Network::Address::InstanceConstSharedPtr source_address_;
   NiceMock<MockPrioritySet> priority_set_;
@@ -182,7 +182,7 @@ public:
 
 class MockThreadLocalCluster : public ThreadLocalCluster {
 public:
-  MockThreadLocalCluster();
+  MockThreadLocalCluster(Stats::Store& stats_store);
   ~MockThreadLocalCluster();
 
   // Upstream::ThreadLocalCluster

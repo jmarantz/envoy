@@ -37,6 +37,8 @@ public:
 
 class MockConnectionBase {
 public:
+  MockConnectionBase(Stats::Store& stat_store);
+
   void raiseEvent(Network::ConnectionEvent event);
   void raiseBytesSentCallbacks(uint64_t num_bytes);
   void runHighWatermarkCallbacks();
@@ -57,7 +59,7 @@ public:
 
 class MockConnection : public Connection, public MockConnectionBase {
 public:
-  MockConnection();
+  MockConnection(Stats::Store& store);
   ~MockConnection();
 
   // Network::Connection
@@ -106,7 +108,7 @@ private:
  */
 class MockClientConnection : public ClientConnection, public MockConnectionBase {
 public:
-  MockClientConnection();
+  MockClientConnection(Stats::Store& store);
   ~MockClientConnection();
 
   // Network::Connection
@@ -181,7 +183,7 @@ public:
 
 class MockReadFilterCallbacks : public ReadFilterCallbacks {
 public:
-  MockReadFilterCallbacks();
+  MockReadFilterCallbacks(Stats::Store& stats_store);
   ~MockReadFilterCallbacks();
 
   MOCK_METHOD0(connection, Connection&());
@@ -476,7 +478,7 @@ public:
 
 class MockTransportSocketCallbacks : public TransportSocketCallbacks {
 public:
-  MockTransportSocketCallbacks();
+  MockTransportSocketCallbacks(Stats::Store& stats_store);
   ~MockTransportSocketCallbacks();
 
   MOCK_CONST_METHOD0(fd, int());

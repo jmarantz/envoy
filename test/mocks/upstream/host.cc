@@ -30,8 +30,9 @@ MockDetector::~MockDetector() {}
 MockHealthCheckHostMonitor::MockHealthCheckHostMonitor() {}
 MockHealthCheckHostMonitor::~MockHealthCheckHostMonitor() {}
 
-MockHostDescription::MockHostDescription()
-    : address_(Network::Utility::resolveUrl("tcp://10.0.0.1:443")) {
+MockHostDescription::MockHostDescription(Stats::Store& stats_store)
+    : address_(Network::Utility::resolveUrl("tcp://10.0.0.1:443")),
+      cluster_(stats_store) {
   ON_CALL(*this, hostname()).WillByDefault(ReturnRef(hostname_));
   ON_CALL(*this, address()).WillByDefault(Return(address_));
   ON_CALL(*this, outlierDetector()).WillByDefault(ReturnRef(outlier_detector_));
@@ -42,7 +43,7 @@ MockHostDescription::MockHostDescription()
 
 MockHostDescription::~MockHostDescription() {}
 
-MockHost::MockHost() {
+MockHost::MockHost(Stats::Store& stats_store) : stats_store_(stats_store), cluster_(stats_store) {
   ON_CALL(*this, cluster()).WillByDefault(ReturnRef(cluster_));
   ON_CALL(*this, outlierDetector()).WillByDefault(ReturnRef(outlier_detector_));
   ON_CALL(*this, stats()).WillByDefault(ReturnRef(stats_));

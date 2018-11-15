@@ -143,7 +143,6 @@ public:
   virtual OverloadManager& overloadManager() PURE;
 
   /**
-   *
    * @return Http::CodeStats& a reference to the code stats.
    */
   virtual Http::CodeStats& codeStats() PURE;

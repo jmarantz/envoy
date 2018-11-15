@@ -22,16 +22,18 @@ MockLoadBalancerSubsetInfo::MockLoadBalancerSubsetInfo() {
 
 MockLoadBalancerSubsetInfo::~MockLoadBalancerSubsetInfo() {}
 
-MockIdleTimeEnabledClusterInfo::MockIdleTimeEnabledClusterInfo() {
+MockIdleTimeEnabledClusterInfo::MockIdleTimeEnabledClusterInfo(Stats::Store& stats_store)
+    : MockClusterInfo(stats_store) {
   ON_CALL(*this, idleTimeout()).WillByDefault(Return(std::chrono::milliseconds(1000)));
 }
 
 MockIdleTimeEnabledClusterInfo::~MockIdleTimeEnabledClusterInfo() {}
 
-MockClusterInfo::MockClusterInfo()
-    : stats_(ClusterInfoImpl::generateStats(stats_store_)),
+MockClusterInfo::MockClusterInfo(Stats::Store& stats_store)
+    : stats_store_(stats_store),
+      stats_(ClusterInfoImpl::generateStats(stats_store_)),
       transport_socket_factory_(new Network::RawBufferSocketFactory),
-      load_report_stats_(ClusterInfoImpl::generateLoadReportStats(load_report_stats_store_)),
+      load_report_stats_(ClusterInfoImpl::generateLoadReportStats(/*load_report_*/stats_store_)),
       circuit_breakers_stats_(
           ClusterInfoImpl::generateCircuitBreakersStats(stats_store_, "default")),
       resource_manager_(new Upstream::ResourceManagerImpl(runtime_, "fake_key", 1, 1024, 1024, 1,

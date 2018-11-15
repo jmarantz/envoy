@@ -38,7 +38,9 @@ namespace RateLimitFilter {
 
 class HttpRateLimitFilterTest : public testing::Test {
 public:
-  HttpRateLimitFilterTest() : code_stats_(stats_store_.symbolTable()) {
+  HttpRateLimitFilterTest()
+      : stats_scope_(filter_callbacks_.clusterInfo()->statsScope()),
+        code_stats_(stats_scope_.symbolTable()) {
     ON_CALL(runtime_.snapshot_, featureEnabled("ratelimit.http_filter_enabled", 100))
         .WillByDefault(Return(true));
     ON_CALL(runtime_.snapshot_, featureEnabled("ratelimit.http_filter_enforcing", 100))
@@ -51,7 +53,7 @@ public:
     envoy::config::filter::http::rate_limit::v2::RateLimit proto_config{};
     MessageUtil::loadFromYaml(yaml, proto_config);
 
-    config_.reset(new FilterConfig(proto_config, local_info_, stats_store_, runtime_, code_stats_));
+    config_.reset(new FilterConfig(proto_config, local_info_, stats_scope_, runtime_, code_stats_));
 
     client_ = new RateLimit::MockClient();
     filter_ = std::make_unique<Filter>(config_, RateLimit::ClientPtr{client_});
@@ -83,7 +85,7 @@ public:
   Http::TestHeaderMapImpl response_headers_;
   Buffer::OwnedImpl data_;
   Buffer::OwnedImpl response_data_;
-  NiceMock<Stats::MockIsolatedStatsStore> stats_store_;
+  Stats::Scope& stats_scope_;
   NiceMock<Runtime::MockLoader> runtime_;
   NiceMock<Router::MockRateLimitPolicyEntry> route_rate_limit_;
   NiceMock<Router::MockRateLimitPolicyEntry> vh_rate_limit_;

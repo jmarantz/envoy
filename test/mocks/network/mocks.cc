@@ -37,6 +37,8 @@ MockConnectionCallbacks::~MockConnectionCallbacks() {}
 
 uint64_t MockConnectionBase::next_id_;
 
+MockConnectionBase::MockConnectionBase(Stats::Store& stat_store) : stream_info_(stat_store) {}
+
 void MockConnectionBase::raiseEvent(Network::ConnectionEvent event) {
   if (event == Network::ConnectionEvent::RemoteClose ||
       event == Network::ConnectionEvent::LocalClose) {
@@ -98,13 +100,15 @@ template <class T> static void initializeMockConnection(T& connection) {
   ON_CALL(Const(connection), streamInfo()).WillByDefault(ReturnRef(connection.stream_info_));
 }
 
-MockConnection::MockConnection() {
+MockConnection::MockConnection(Stats::Store& stat_store)
+    : MockConnectionBase(stat_store) {
   remote_address_ = Utility::resolveUrl("tcp://10.0.0.3:50000");
   initializeMockConnection(*this);
 }
 MockConnection::~MockConnection() {}
 
-MockClientConnection::MockClientConnection() {
+MockClientConnection::MockClientConnection(Stats::Store& store)
+    : MockConnectionBase(store) {
   remote_address_ = Utility::resolveUrl("tcp://10.0.0.1:443");
   local_address_ = Utility::resolveUrl("tcp://10.0.0.2:40000");
   initializeMockConnection(*this);
@@ -127,7 +131,8 @@ MockAddressResolver::MockAddressResolver() {
 
 MockAddressResolver::~MockAddressResolver() {}
 
-MockReadFilterCallbacks::MockReadFilterCallbacks() {
+MockReadFilterCallbacks::MockReadFilterCallbacks(Stats::Store& stat_store)
+    : connection_(stat_store) {
   ON_CALL(*this, connection()).WillByDefault(ReturnRef(connection_));
   ON_CALL(*this, upstreamHost()).WillByDefault(ReturnPointee(&host_));
   ON_CALL(*this, upstreamHost(_)).WillByDefault(SaveArg<0>(&host_));
@@ -221,7 +226,8 @@ MockTransportSocket::~MockTransportSocket() {}
 MockTransportSocketFactory::MockTransportSocketFactory() {}
 MockTransportSocketFactory::~MockTransportSocketFactory() {}
 
-MockTransportSocketCallbacks::MockTransportSocketCallbacks() {
+MockTransportSocketCallbacks::MockTransportSocketCallbacks(Stats::Store& stats_store)
+    : connection_(stats_store) {
   ON_CALL(*this, connection()).WillByDefault(ReturnRef(connection_));
 }
 MockTransportSocketCallbacks::~MockTransportSocketCallbacks() {}

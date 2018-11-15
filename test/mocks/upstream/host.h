@@ -70,7 +70,7 @@ public:
 
 class MockHostDescription : public HostDescription {
 public:
-  MockHostDescription();
+  MockHostDescription(Stats::Store& stats_store);
   ~MockHostDescription();
 
   MOCK_CONST_METHOD0(address, Network::Address::InstanceConstSharedPtr());
@@ -105,7 +105,7 @@ public:
     HostDescriptionConstSharedPtr host_description_{};
   };
 
-  MockHost();
+  MockHost(Stats::Store& stats_store);
   ~MockHost();
 
   CreateConnectionData
@@ -162,9 +162,10 @@ public:
   MOCK_CONST_METHOD0(priority, uint32_t());
   MOCK_METHOD1(priority, void(uint32_t));
 
+  Stats::Store& stats_store_;
   testing::NiceMock<MockClusterInfo> cluster_;
   testing::NiceMock<Outlier::MockDetectorHostMonitor> outlier_detector_;
-  NiceMock<Stats::MockIsolatedStatsStore> stats_store_;
+  //NiceMock<Stats::MockIsolatedStatsStore> stats_store_;
   HostStats stats_{ALL_HOST_STATS(POOL_COUNTER(stats_store_), POOL_GAUGE(stats_store_))};
 };
 

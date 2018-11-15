@@ -179,6 +179,8 @@ public:
 
 class MockStreamFilterCallbacksBase {
 public:
+  MockStreamFilterCallbacksBase(Stats::Store& stats_store);
+
   Event::MockDispatcher dispatcher_;
   testing::NiceMock<StreamInfo::MockStreamInfo> stream_info_;
   std::shared_ptr<Router::MockRoute> route_;
@@ -188,7 +190,7 @@ public:
 class MockStreamDecoderFilterCallbacks : public StreamDecoderFilterCallbacks,
                                          public MockStreamFilterCallbacksBase {
 public:
-  MockStreamDecoderFilterCallbacks();
+  MockStreamDecoderFilterCallbacks(Stats::Store& stats_store);
   ~MockStreamDecoderFilterCallbacks();
 
   // Http::StreamFilterCallbacks
@@ -253,7 +255,7 @@ public:
 class MockStreamEncoderFilterCallbacks : public StreamEncoderFilterCallbacks,
                                          public MockStreamFilterCallbacksBase {
 public:
-  MockStreamEncoderFilterCallbacks();
+  MockStreamEncoderFilterCallbacks(Stats::Store& stats_store);
   ~MockStreamEncoderFilterCallbacks();
 
   // Http::StreamFilterCallbacks
@@ -450,7 +452,7 @@ public:
 
 class MockInstance : public Instance {
 public:
-  MockInstance();
+  MockInstance(Stats::Store& stats_store);
   ~MockInstance();
 
   // Http::ConnectionPool::Instance
@@ -460,8 +462,7 @@ public:
   MOCK_METHOD2(newStream, Cancellable*(Http::StreamDecoder& response_decoder,
                                        Http::ConnectionPool::Callbacks& callbacks));
 
-  std::shared_ptr<testing::NiceMock<Upstream::MockHostDescription>> host_{
-      new testing::NiceMock<Upstream::MockHostDescription>()};
+  std::shared_ptr<testing::NiceMock<Upstream::MockHostDescription>> host_;
 };
 
 } // namespace ConnectionPool

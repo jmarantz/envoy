@@ -67,8 +67,12 @@ MockClientConnection::~MockClientConnection() {}
 MockFilterChainFactory::MockFilterChainFactory() {}
 MockFilterChainFactory::~MockFilterChainFactory() {}
 
-template <class T> static void initializeMockStreamFilterCallbacks(T& callbacks) {
-  callbacks.cluster_info_.reset(new NiceMock<Upstream::MockClusterInfo>());
+MockStreamFilterCallbacksBase::MockStreamFilterCallbacksBase(Stats::Store& stats_store)
+    : stream_info_(stats_store) {}
+
+template <class T> static void initializeMockStreamFilterCallbacks(T& callbacks,
+                                                                   Stats::Store& stats_store) {
+  callbacks.cluster_info_.reset(new NiceMock<Upstream::MockClusterInfo>(stats_store));
   callbacks.route_.reset(new NiceMock<Router::MockRoute>());
   ON_CALL(callbacks, dispatcher()).WillByDefault(ReturnRef(callbacks.dispatcher_));
   ON_CALL(callbacks, streamInfo()).WillByDefault(ReturnRef(callbacks.stream_info_));
@@ -76,8 +80,9 @@ template <class T> static void initializeMockStreamFilterCallbacks(T& callbacks)
   ON_CALL(callbacks, route()).WillByDefault(Return(callbacks.route_));
 }
 
-MockStreamDecoderFilterCallbacks::MockStreamDecoderFilterCallbacks() {
-  initializeMockStreamFilterCallbacks(*this);
+MockStreamDecoderFilterCallbacks::MockStreamDecoderFilterCallbacks(Stats::Store& stats_store)
+    : MockStreamFilterCallbacksBase(stats_store) {
+  initializeMockStreamFilterCallbacks(*this, stats_store);
   ON_CALL(*this, decodingBuffer()).WillByDefault(Invoke(&buffer_, &Buffer::InstancePtr::get));
 
   ON_CALL(*this, addDownstreamWatermarkCallbacks(_))
@@ -96,8 +101,9 @@ MockStreamDecoderFilterCallbacks::MockStreamDecoderFilterCallbacks() {
 
 MockStreamDecoderFilterCallbacks::~MockStreamDecoderFilterCallbacks() {}
 
-MockStreamEncoderFilterCallbacks::MockStreamEncoderFilterCallbacks() {
-  initializeMockStreamFilterCallbacks(*this);
+MockStreamEncoderFilterCallbacks::MockStreamEncoderFilterCallbacks(Stats::Store& stats_store)
+    : MockStreamFilterCallbacksBase(stats_store) {
+  initializeMockStreamFilterCallbacks(*this, stats_store);
   ON_CALL(*this, encodingBuffer()).WillByDefault(Invoke(&buffer_, &Buffer::InstancePtr::get));
   ON_CALL(*this, activeSpan()).WillByDefault(ReturnRef(active_span_));
   ON_CALL(*this, tracingConfig()).WillByDefault(ReturnRef(tracing_config_));
@@ -162,7 +168,8 @@ namespace ConnectionPool {
 MockCancellable::MockCancellable() {}
 MockCancellable::~MockCancellable() {}
 
-MockInstance::MockInstance() {}
+MockInstance::MockInstance(Stats::Store& stats_store)
+    : host_(std::make_shared<NiceMock<Upstream::MockHostDescription>>(stats_store)) {}
 MockInstance::~MockInstance() {}
 
 } // namespace ConnectionPool

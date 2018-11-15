@@ -68,7 +68,8 @@ void MockPrioritySet::runUpdateCallbacks(uint32_t priority, const HostVector& ho
 
 MockRetryPriority::~MockRetryPriority() = default;
 
-MockCluster::MockCluster() {
+MockCluster::MockCluster(Stats::Store& stats_store)
+    : info_(std::make_shared<NiceMock<MockClusterInfo>>(stats_store)) {
   ON_CALL(*this, prioritySet()).WillByDefault(ReturnRef(priority_set_));
   ON_CALL(testing::Const(*this), prioritySet()).WillByDefault(ReturnRef(priority_set_));
   ON_CALL(*this, info()).WillByDefault(Return(info_));
@@ -89,7 +90,7 @@ MockLoadBalancer::MockLoadBalancer() { ON_CALL(*this, chooseHost(_)).WillByDefau
 
 MockLoadBalancer::~MockLoadBalancer() = default;
 
-MockThreadLocalCluster::MockThreadLocalCluster() {
+MockThreadLocalCluster::MockThreadLocalCluster(Stats::Store& stats_store) : cluster_(stats_store) {
   ON_CALL(*this, prioritySet()).WillByDefault(ReturnRef(cluster_.priority_set_));
   ON_CALL(*this, info()).WillByDefault(Return(cluster_.info_));
   ON_CALL(*this, loadBalancer()).WillByDefault(ReturnRef(lb_));

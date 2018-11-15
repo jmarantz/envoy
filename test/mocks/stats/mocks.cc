@@ -173,7 +173,8 @@ void MockSymbolTable::debugPrint() const {}
 #endif
 
 MockIsolatedStatsStore::MockIsolatedStatsStore()
-    : IsolatedStoreImpl(std::make_unique<MockSymbolTable>()) {}
+    /*: IsolatedStoreImpl(std::make_unique<MockSymbolTable>()) */ {}
+
 MockIsolatedStatsStore::~MockIsolatedStatsStore() {}
 
 } // namespace Stats

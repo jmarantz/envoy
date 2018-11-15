@@ -13,7 +13,7 @@ namespace StreamInfo {
 
 class MockStreamInfo : public StreamInfo {
 public:
-  MockStreamInfo();
+  MockStreamInfo(Stats::Store& stats_store);
   ~MockStreamInfo();
 
   // StreamInfo::StreamInfo
@@ -67,8 +67,7 @@ public:
   MOCK_METHOD1(setRequestedServerName, void(const absl::string_view));
   MOCK_CONST_METHOD0(requestedServerName, const std::string&());
 
-  std::shared_ptr<testing::NiceMock<Upstream::MockHostDescription>> host_{
-      new testing::NiceMock<Upstream::MockHostDescription>()};
+  std::shared_ptr<testing::NiceMock<Upstream::MockHostDescription>> host_;
   SystemTime start_time_;
   MonotonicTime start_time_monotonic_;
   absl::optional<std::chrono::nanoseconds> last_downstream_rx_byte_received_;

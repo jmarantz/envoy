@@ -56,7 +56,7 @@ public:
 
 class MockInstance : public Instance {
 public:
-  MockInstance();
+  MockInstance(Stats::Store& stat_store);
   ~MockInstance();
 
   // Tcp::ConnectionPool::Instance
@@ -74,8 +74,7 @@ public:
   std::list<NiceMock<MockCancellable>> handles_;
   std::list<Callbacks*> callbacks_;
 
-  std::shared_ptr<NiceMock<Upstream::MockHostDescription>> host_{
-      new NiceMock<Upstream::MockHostDescription>()};
+  std::shared_ptr<NiceMock<Upstream::MockHostDescription>> host_;
   std::unique_ptr<NiceMock<MockConnectionData>> connection_data_{
       new NiceMock<MockConnectionData>()};
 };
