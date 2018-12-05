@@ -260,8 +260,9 @@ def fixInlineVirtualDestructor(line, file_path, namespace_stack):
   # The line we are provided looks like "    virtual ~Foo() {}". If there is
   # actually a body in the destructor, then we will not be able to rewrite it
   # here since we are only looking at one line.
-  if not line.endswith("() {}\n"):
-    print "// WARNING: could not fix %s, line %s, the destructor body is non-empty" % (
+  if not line.endswith("() {}\n") and not line.endswith("() = default;\n") and \
+     not line.endswith("(){}\n") and not line.endswith("(){};\n"):
+    print "// WARNING: could not fix %s, the destructor body is non-empty: %s" % (
         file_path, line)
     return line
 
@@ -269,13 +270,13 @@ def fixInlineVirtualDestructor(line, file_path, namespace_stack):
   indent = line[0:tilde]
   parens = line.find("()")
   if tilde == -1 or parens == -1 or parens - tilde <= 1:
-    print "// WARNING: could not fix %s, line %s, destructor declaration not well formed" % (
+    print "// WARNING: could not fix %s, destructor declaration not well formed: %s" % (
         file_path, line)
     return line
 
   slash = file_path.rfind("/")
   if slash == -1:
-    print "// WARNING: could not fix %s, line %s, could not find last slash in filename" % (
+    print "// WARNING: could not fix %s, could not find last slash in filename: %s" % (
         file_path, line)
     return line
 
@@ -304,16 +305,18 @@ def fixInlineVirtualDestructor(line, file_path, namespace_stack):
           build_out += '    srcs = ["%scc"],\n' % header_leaf[0:-1]
         build_out += (line + "\n")
     if not found_header_declaration:
-      print "// WARNING: could not fix %s, line %s, could not find header declaration in BUILD" % (
+      print "// WARNING: could not fix %s, could not find header declaration in BUILD: %s" % (
           file_path, line)
       return line
     with open(build_file, "w") as f:
       f.write(build_out)
 
-  with open(cc_file, "a" if os.path.exists(cc_file) else "w") as f:
+  with open(cc_file, mode) as f:
+    if mode == "w":
+      f.write('#include "%s"\n\n' % file_path.replace("./include/", "").replace("./source/", ""))
     for namespace in namespace_stack:
       f.write("namespace %s {\n" % namespace)
-    f.write("%s::~%s() {}\n" % (class_name, class_name))
+    f.write("%s::~%s() = default\n" % (class_name, class_name))
     for i in range(len(namespace_stack) - 1, -1, -1):
       f.write("} // namespace %s\n" % namespace_stack[i])
 
@@ -421,12 +424,21 @@ def fixSourcePath(file_path):
   # Keep a stack of namespaces in case we need to inject an outline destructor.
   namespace_stack = []
 
-  for line in fileinput.input(file_path, inplace=True):
-    sys.stdout.write(fixSourceLine(line, file_path, namespace_stack))
+  replacement_text = ""
+  has_diffs = False
+  for line in fileinput.input(file_path):
+    replacement_line = fixSourceLine(line, file_path, namespace_stack)
+    if line != replacement_line:
+      has_diffs = True
+    replacement_text += replacement_line
     if line.startswith('namespace ') and line.endswith(' {\n'):
       namespace_stack.append(line[10:-3])
     elif len(namespace_stack) > 0 and line == ('} // %s\n' % namespace_stack[-1]):
       namespace_stack = namespace_stack[0:-1]
+
+  if has_diffs:
+    with open(file_path, "w") as f:
+      f.write(replacement_text)
 
   error_messages = []
   if not file_path.endswith(DOCS_SUFFIX):
