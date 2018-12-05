@@ -206,13 +206,16 @@ def checkFileContents(file_path, checker):
 DOT_MULTI_SPACE_REGEX = re.compile('\\. +')
 
 
-def fixSourceLine(line):
+def fixSourceLine(line, file_path, namespace_stack):
   # Strip double space after '.'  This may prove overenthusiastic and need to
   # be restricted to comments and metadata files but works for now.
   line = re.sub(DOT_MULTI_SPACE_REGEX, '. ', line)
 
   if hasInvalidAngleBracketDirectory(line):
     line = line.replace('<', '"').replace(">", '"')
+
+  if hasInlineVirtualDestructor(line, file_path):
+    line = fixInlineVirtualDestructor(line, file_path, namespace_stack)
 
   # Fix incorrect protobuf namespace references.
   for invalid_construct, valid_construct in PROTOBUF_TYPE_ERRORS.items():
@@ -236,6 +239,79 @@ def hasCondVarWaitFor(line):
     return False
   return True
 
+
+def hasInlineVirtualDestructor(line, file_path):
+  return file_path.endswith('.h') and ' virtual ~' in line and not '();' in line
+
+
+# Attempts to fix an inline virtual destructor by adding an outlined destructor
+# to the .cc file, creating the cc file if necessary and adding the cc file to
+# the BUILD file. If all that can be correctly done, we can fix the inlined
+# virtual destructor. If there are any issues, we can write a warning message
+# for debugging, but leave the line undisturbed. Note that after a
+# 'check_format fix', a check is run, so that check will ultimately fail as
+# well.
+def fixInlineVirtualDestructor(line, file_path, namespace_stack):
+  if len(namespace_stack) == 0:
+    print "WARNING: could not fix %s, line %s, as there was no namespace defined" % (
+        file_path, line)
+    return line
+
+  # The line we are provided looks like "    virtual ~Foo() {}". If there is
+  # actually a body in the destructor, then we will not be able to rewrite it
+  # here since we are only looking at one line.
+  if not line.endswith("() {}"):
+    print "WARNING: could not fix %s, line %s, the destructor body is non-empty" % (
+        file_path, line)
+    return line
+
+  tilde = line.find("~")
+  parens = line.fine("()")
+  if tilde == -1 or parens == -1 or parens - tilde <= 1:
+    print "WARNING: could not fix %s, line %s, destructor declaration not well formed" % (
+        file_path, line)
+    return line
+
+  slash = file_path.rfind("/")
+  if slash == -1:
+    print "WARNING: could not fix %s, line %s, could not find last slash in filename" % (
+        file_path, line)
+    return line
+
+  class_name = line[tilde + 1, parens]
+
+  # file_path ends in '.h' -- make a version with .cc'
+  cc_file = file_path[0:-1] + "cc"
+
+  # For now, just append the full namespace stack in the file, then the
+  # destructor impl.
+  mode = "a"
+
+  # If the .cc file didn't exist, add it to the BUILD rule that mentions the header.
+  if not os.path.exists(cc_file):
+    header_leaf = file_path[slash + 1:]
+    headers_declaration = 'hdrs = ["%s"],' % header_leaf
+    mode = "w"
+    build_file = file_path[0:slash] + "/BUILD"
+    build_out = ""
+    with open(build_file, "r") as f:
+      text = f.read()
+      for line in text.splitlines():
+        if headers_declaration in line:
+          build_out += '    srcs = ["%scc"]' % header_leaf[0:-1]
+        build_out += line
+    with open(build_file, "w") as f:
+      f.write(build_out)
+
+  with open(cc_file, "a" if os.path.exists(cc_file) else "w") as f:
+    for i in range(len(namespace_stack) - 1, -1, -1):
+      f.write("namespace %s {\n" % namespace_stack[i])
+    f.write("%s::~%s() {}\n", class_name, class_name)
+    for namespace in namespace_stack:
+      f.write("} // %s{\n" % namespace)
+
+  # Success! Rewrite the line.
+  return line.replace("() {}", "();")
 
 def checkSourceLine(line, file_path, reportError):
   # Check fixable errors. These may have been fixed already.
@@ -288,6 +364,8 @@ def checkSourceLine(line, file_path, reportError):
     reportError("Don't use the '?:' operator, it is a non-standard GCC extension")
   if line.startswith('using testing::Test;'):
     reportError("Don't use 'using testing::Test;, elaborate the type instead")
+  if hasInlineVirtualDestructor(line, file_path):
+    reportError("Don't inline virtual destructors; see #5182 for details")
 
 
 def checkBuildLine(line, file_path, reportError):
@@ -332,8 +410,15 @@ def checkBuildPath(file_path):
 
 
 def fixSourcePath(file_path):
+  # Keep a stack of namespaces in case we need to inject an outline destructor.
+  namespace_stack = []
+
   for line in fileinput.input(file_path, inplace=True):
-    sys.stdout.write(fixSourceLine(line))
+    sys.stdout.write(fixSourceLine(line, file_path, namespace_stack))
+    if line.startswith('namespace ') and line.endswith('{'):
+      namespace_stack += line[10:-1]
+    elif len(namespace_stack) > 0 and line.startswith('} // ' + namespace_stack[-1]):
+      namespace_stack = namespace_stack[0:-1]
 
   error_messages = []
   if not file_path.endswith(DOCS_SUFFIX):
