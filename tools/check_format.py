@@ -253,32 +253,33 @@ def hasInlineVirtualDestructor(line, file_path):
 # well.
 def fixInlineVirtualDestructor(line, file_path, namespace_stack):
   if len(namespace_stack) == 0:
-    print "WARNING: could not fix %s, line %s, as there was no namespace defined" % (
+    print "// WARNING: could not fix %s, line %s, as there was no namespace defined" % (
         file_path, line)
     return line
 
   # The line we are provided looks like "    virtual ~Foo() {}". If there is
   # actually a body in the destructor, then we will not be able to rewrite it
   # here since we are only looking at one line.
-  if not line.endswith("() {}"):
-    print "WARNING: could not fix %s, line %s, the destructor body is non-empty" % (
+  if not line.endswith("() {}\n"):
+    print "// WARNING: could not fix %s, line %s, the destructor body is non-empty" % (
         file_path, line)
     return line
 
   tilde = line.find("~")
-  parens = line.fine("()")
+  indent = line[0:tilde]
+  parens = line.find("()")
   if tilde == -1 or parens == -1 or parens - tilde <= 1:
-    print "WARNING: could not fix %s, line %s, destructor declaration not well formed" % (
+    print "// WARNING: could not fix %s, line %s, destructor declaration not well formed" % (
         file_path, line)
     return line
 
   slash = file_path.rfind("/")
   if slash == -1:
-    print "WARNING: could not fix %s, line %s, could not find last slash in filename" % (
+    print "// WARNING: could not fix %s, line %s, could not find last slash in filename" % (
         file_path, line)
     return line
 
-  class_name = line[tilde + 1, parens]
+  class_name = line[tilde + 1:parens]
 
   # file_path ends in '.h' -- make a version with .cc'
   cc_file = file_path[0:-1] + "cc"
@@ -294,24 +295,31 @@ def fixInlineVirtualDestructor(line, file_path, namespace_stack):
     mode = "w"
     build_file = file_path[0:slash] + "/BUILD"
     build_out = ""
+    found_header_declaration = False
     with open(build_file, "r") as f:
       text = f.read()
       for line in text.splitlines():
         if headers_declaration in line:
-          build_out += '    srcs = ["%scc"]' % header_leaf[0:-1]
-        build_out += line
+          found_header_declaration = True
+          build_out += '    srcs = ["%scc"],\n' % header_leaf[0:-1]
+        build_out += (line + "\n")
+    if not found_header_declaration:
+      print "// WARNING: could not fix %s, line %s, could not find header declaration in BUILD" % (
+          file_path, line)
+      return line
     with open(build_file, "w") as f:
       f.write(build_out)
 
   with open(cc_file, "a" if os.path.exists(cc_file) else "w") as f:
-    for i in range(len(namespace_stack) - 1, -1, -1):
-      f.write("namespace %s {\n" % namespace_stack[i])
-    f.write("%s::~%s() {}\n", class_name, class_name)
     for namespace in namespace_stack:
-      f.write("} // %s{\n" % namespace)
+      f.write("namespace %s {\n" % namespace)
+    f.write("%s::~%s() {}\n" % (class_name, class_name))
+    for i in range(len(namespace_stack) - 1, -1, -1):
+      f.write("} // namespace %s\n" % namespace_stack[i])
 
   # Success! Rewrite the line.
-  return line.replace("() {}", "();")
+  # return line.replace("() {}", "();")
+  return "%s~%s();" % (indent, class_name)
 
 def checkSourceLine(line, file_path, reportError):
   # Check fixable errors. These may have been fixed already.
@@ -415,9 +423,9 @@ def fixSourcePath(file_path):
 
   for line in fileinput.input(file_path, inplace=True):
     sys.stdout.write(fixSourceLine(line, file_path, namespace_stack))
-    if line.startswith('namespace ') and line.endswith('{'):
-      namespace_stack += line[10:-1]
-    elif len(namespace_stack) > 0 and line.startswith('} // ' + namespace_stack[-1]):
+    if line.startswith('namespace ') and line.endswith(' {\n'):
+      namespace_stack.append(line[10:-3])
+    elif len(namespace_stack) > 0 and line == ('} // %s\n' % namespace_stack[-1]):
       namespace_stack = namespace_stack[0:-1]
 
   error_messages = []
