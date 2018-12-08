@@ -316,7 +316,7 @@ def fixInlineVirtualDestructor(line, file_path, namespace_stack):
       f.write('#include "%s"\n\n' % file_path.replace("./include/", "").replace("./source/", ""))
     for namespace in namespace_stack:
       f.write("namespace %s {\n" % namespace)
-    f.write("%s::~%s() = default\n" % (class_name, class_name))
+    f.write("%s::~%s() = default;\n" % (class_name, class_name))
     for i in range(len(namespace_stack) - 1, -1, -1):
       f.write("} // namespace %s\n" % namespace_stack[i])
 
@@ -433,7 +433,7 @@ def fixSourcePath(file_path):
     replacement_text += replacement_line
     if line.startswith('namespace ') and line.endswith(' {\n'):
       namespace_stack.append(line[10:-3])
-    elif len(namespace_stack) > 0 and line == ('} // %s\n' % namespace_stack[-1]):
+    elif len(namespace_stack) > 0 and line == ('} // namespace %s\n' % namespace_stack[-1]):
       namespace_stack = namespace_stack[0:-1]
 
   if has_diffs:
