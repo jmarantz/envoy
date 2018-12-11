@@ -311,11 +311,11 @@ def fixInlineVirtualDestructor(line, file_path, namespace_stack, class_stack, li
     found_header_declaration = False
     with open(build_file, "r") as f:
       text = f.read()
-      for line in text.splitlines():
-        if headers_declaration in line:
+      for build_line in text.splitlines():
+        if headers_declaration in build_line:
           found_header_declaration = True
           build_out += '    srcs = ["%scc"],\n' % header_leaf[0:-1]
-        build_out += (line + "\n")
+        build_out += (build_line + "\n")
     if not found_header_declaration:
       report("could not find header declaration in BUILD")
       return line
