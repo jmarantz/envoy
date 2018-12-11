@@ -259,7 +259,7 @@ def fixInlineVirtualDestructor(line, file_path, namespace_stack, class_name, lin
     report("no namespace defined")
     return line
 
-  if class_name != "":
+  if class_name == "":
     report("not in class definition")
     return line
 
@@ -332,7 +332,7 @@ def fixInlineVirtualDestructor(line, file_path, namespace_stack, class_name, lin
       f.write("} // namespace %s\n" % namespace_stack[i])
 
   # Success! Rewrite the line.
-  return "%s~%s();" % (text_before_tilde, class_name)
+  return "%s~%s();\n" % (text_before_tilde, class_name)
 
 def checkSourceLine(line, file_path, reportError):
   # Check fixable errors. These may have been fixed already.
@@ -446,13 +446,23 @@ def fixSourcePath(file_path):
     replacement_text += replacement_line
     if line.startswith('namespace ') and line.endswith(' {\n'):
       namespace_stack.append(line[10:-3])
-    elif len(namespace_stack) > 0 and line == ('} // namespace %s\n' % namespace_stack[-1]):
+    elif len(namespace_stack) > 0 and (
+        line == ('} // namespace %s\n' % namespace_stack[-1]) or
+        line == '}\n'):
       namespace_stack = namespace_stack[0:-1]
     elif line.startswith('template ') and ' class ' in line:
       class_name = 'template'
-    elif line.startswith('class ') and line[6:].find(' ') != -1:
-      class_name = line[6:line[6:].find(' ')]
-    elif line == ";\n":
+      print 'found template'
+    elif line.startswith('class ') and not line.endswith(';\n'):
+      class_name = line[6:]
+      space = class_name.find(' ')
+      if space == -1:
+        class_name = ''
+      else:
+        class_name = class_name[:space]
+        # print "Found class %s" % class_name
+    elif line == "};\n":
+      # print 'no longer in class %s' % class_name
       class_name = ''
 
   if has_diffs:
