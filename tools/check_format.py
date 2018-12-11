@@ -320,10 +320,10 @@ def fixInlineVirtualDestructor(line, file_path, namespace_stack, class_name, lin
           build_out += '    srcs = ["%scc"],\n' % header_leaf[0:-1]
         build_out += (build_line + "\n")
     if found_header_declaration:
+      report("hacking build_file")
+    else:
       report("could not find header declaration in BUILD")
       return line
-    else:
-      report("hacking build_file")
     with open(build_file, "w") as f:
       f.write(build_out)
 
