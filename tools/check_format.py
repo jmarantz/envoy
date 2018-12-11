@@ -452,7 +452,6 @@ def fixSourcePath(file_path):
       namespace_stack = namespace_stack[0:-1]
     elif line.startswith('template ') and ' class ' in line:
       class_name = 'template'
-      print 'found template'
     elif line.startswith('class ') and not line.endswith(';\n'):
       class_name = line[6:]
       space = class_name.find(' ')
