@@ -251,7 +251,7 @@ def hasInlineVirtualDestructor(line, file_path):
 # for debugging, but leave the line undisturbed. Note that after a
 # 'check_format fix', a check is run, so that check will ultimately fail as
 # well.
-def fixInlineVirtualDestructor(line, file_path, namespace_stack, class_stack, line_index):
+def fixInlineVirtualDestructor(line, file_path, namespace_stack, class_name, line_index):
   def report(message):
     print "%s:%d: %s: %s" % (file_path, line_index, message, line)
 
@@ -259,11 +259,11 @@ def fixInlineVirtualDestructor(line, file_path, namespace_stack, class_stack, li
     report("no namespace defined")
     return line
 
-  if len(class_stack) == 0:
+  if class_name != "":
     report("not in class definition")
     return line
 
-  if class_stack[0] == "template":
+  if class_name == "template":
     report("cannot auto-transform template")
     return line
 
