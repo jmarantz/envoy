@@ -253,7 +253,10 @@ def hasInlineVirtualDestructor(line, file_path):
 # well.
 def fixInlineVirtualDestructor(line, file_path, namespace_stack, class_name, line_index):
   def report(message):
-    print "%s:%d: %s: %s" % (file_path, line_index, message, line)
+    trimmed = line
+    if len(line) > 0 and line[-1] == '\n':
+      trimmed = line[0:-1]
+    print "%s:%d: %s: %s" % (file_path, line_index, message, trimmed)
 
   if len(namespace_stack) == 0:
     report("no namespace defined")
@@ -316,9 +319,11 @@ def fixInlineVirtualDestructor(line, file_path, namespace_stack, class_name, lin
           found_header_declaration = True
           build_out += '    srcs = ["%scc"],\n' % header_leaf[0:-1]
         build_out += (build_line + "\n")
-    if not found_header_declaration:
+    if found_header_declaration:
       report("could not find header declaration in BUILD")
       return line
+    else:
+      report("hacking build_file")
     with open(build_file, "w") as f:
       f.write(build_out)
 
