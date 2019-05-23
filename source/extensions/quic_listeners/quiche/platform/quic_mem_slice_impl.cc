@@ -11,6 +11,25 @@
 namespace quic {
 
 namespace {
+
+// Helper class for allocating classes with inlined storage.
+/*
+class InlineStorage {
+ public:
+  // Custom delete operator to keep C++14 from using the global operator delete(void*, size_t),
+  // which would result in the compiler error:
+  // "exception cleanup for this placement new selects non-placement operator delete"
+  static void operator delete(void* address) {
+    ::operator delete(address);
+  }
+
+ protected:
+  static void* operator new(size_t object_size, size_t data_size) {
+    return ::operator new(object_size + data_size);
+  }
+};
+*/
+
 // Used to align both fragment and buffer at max aligned address.
 struct BufferFragmentBundle : public Envoy::Buffer::BufferFragmentImpl {
   static void releasor(const void*, size_t, const Envoy::Buffer::BufferFragmentImpl* fragment) {
@@ -20,8 +39,10 @@ struct BufferFragmentBundle : public Envoy::Buffer::BufferFragmentImpl {
   explicit BufferFragmentBundle(size_t length)
       : Envoy::Buffer::BufferFragmentImpl(buffer_, length, releasor) {}
 
+  static size_t bytesRequired(size_t length) { return length + sizeof(BufferFragmentBundle); }
+
   // TODO(danzh) this is not aligned in to page boundary.
-  // https://stackoverflow.com/questions/54049474/does-aligning-memory-on-particular-address-boundaries-in-c-c-still-improve-x86/54049733#54049733
+  // https://stackoverflow.com/questions/54049474/does-aligning-memory-on-particular-address-boundaries-in-c-c-still-improve-x86
   // suggests that on some processors, page-boundary alignment may improve performance.
   // Envoy::Buffer::BufferFragmentImpl fragment_;
   char buffer_[];
@@ -30,7 +51,8 @@ struct BufferFragmentBundle : public Envoy::Buffer::BufferFragmentImpl {
 } // namespace
 
 Envoy::Buffer::BufferFragmentImpl& QuicMemSliceImpl::allocateBufferAndFragment(size_t length) {
-  BufferFragmentBundle* bundle = new BufferFragmentBundle(length); // self-frees.
+  void* memory = new char[BufferFragmentBundle::bytesRequired(length)];
+  BufferFragmentBundle* bundle = new (memory) BufferFragmentBundle(length); // self-frees.
   return *bundle;
 }
 
