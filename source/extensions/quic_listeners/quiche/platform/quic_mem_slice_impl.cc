@@ -15,12 +15,12 @@ namespace {
 struct BufferFragmentBundle : public Envoy::Buffer::BufferFragmentImpl {
   static Envoy::Buffer::BufferFragmentImpl::Releasor releasor() {
     return [](const void*, size_t, const Envoy::Buffer::BufferFragmentImpl* fragment) {
-             delete fragment;
-           };
+      delete fragment;
+    };
   }
 
-  explicit BufferFragmentBundle(size_t length) :
-      Envoy::Buffer::BufferFragmentImpl(buffer_, length, releasor()) {}
+  explicit BufferFragmentBundle(size_t length)
+      : Envoy::Buffer::BufferFragmentImpl(buffer_, length, releasor()) {}
 
   // TODO(danzh) this is not aligned in to page boundary.
   // https://stackoverflow.com/questions/54049474/does-aligning-memory-on-particular-address-boundaries-in-c-c-still-improve-x86/54049733#54049733
