@@ -20,13 +20,12 @@ namespace quic {
 // https://quiche.googlesource.com/quiche/+/refs/heads/master/quic/platform/api/quic_mem_slice.h
 class QuicMemSliceImpl {
 public:
-  // Constructs an empty QuicMemSliceImpl.
-  QuicMemSliceImpl() = default;
-
   // Constructs a buffer fragment and the buffer of given length the fragment points to with the
   // guarantee that buffer and fragment are both aligned according to max_align_t.
-  static Envoy::Buffer::BufferFragmentImpl*
-  allocateBufferAndFragment(QuicBufferAllocator* allocator, size_t length);
+  static Envoy::Buffer::BufferFragmentImpl& allocateBufferAndFragment(size_t length);
+
+  // Constructs an empty QuicMemSliceImpl.
+  QuicMemSliceImpl() = default;
 
   // Constructs a QuicMemSliceImpl by let |allocator| allocate a data buffer of
   // |length|.
@@ -60,23 +59,6 @@ public:
   bool empty() const { return length() == 0; }
 
 private:
-  // Used to align both fragment and buffer at max aligned address.
-  struct BufferFragmentBundle {
-    static BufferFragmentBundle* createBundleWithSize(size_t length) {
-      return reinterpret_cast<BufferFragmentBundle*>(
-          new char[sizeof(BufferFragmentBundle) + length]);
-    }
-
-    // TODO(danzh) fragment_ is not aligned in memory. This can cause extra
-    // CPU read when accessing MemSlice::data(). Investigate suggestion
-    // in https://github.com/envoyproxy/envoy/pull/6400/files#r277272709 to
-    // mitigate the extra cost if it stands out.
-    // https://stackoverflow.com/questions/54049474/does-aligning-memory-on-particular-address-boundaries-in-c-c-still-improve-x86/54049733#54049733
-    // suggests that aligning on page boundary also benefits performance.
-    Envoy::Buffer::BufferFragmentImpl fragment_;
-    char buffer_[];
-  };
-
   // Prerequisite: buffer has at least one slice.
   size_t firstSliceLength(Envoy::Buffer::Instance& buffer);
 

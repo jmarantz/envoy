@@ -434,6 +434,8 @@ private:
  */
 class BufferFragmentImpl : NonCopyable, public BufferFragment {
 public:
+  using Releasor = std::function<void(const void*, size_t, const BufferFragmentImpl*)>;
+
   /**
    * Creates a new wrapper around the externally owned <data> of size <size>.
    * The caller must ensure <data> is valid until releasor() is called, or for the lifetime of the
@@ -443,9 +445,7 @@ public:
    * @param size size of data
    * @param releasor a callback function to be called when data is no longer needed.
    */
-  BufferFragmentImpl(
-      const void* data, size_t size,
-      const std::function<void(const void*, size_t, const BufferFragmentImpl*)>& releasor)
+  BufferFragmentImpl(const void* data, size_t size, const Releasor& releasor)
       : data_(data), size_(size), releasor_(releasor) {}
 
   // Buffer::BufferFragment

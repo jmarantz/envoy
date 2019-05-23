@@ -11,7 +11,7 @@
 namespace quic {
 
 QuicMemSliceStorageImpl::QuicMemSliceStorageImpl(const struct iovec* iov, int iov_count,
-                                                 QuicBufferAllocator* allocator,
+                                                 QuicBufferAllocator* /*allocator*/,
                                                  const QuicByteCount max_slice_len) {
   if (iov == nullptr) {
     return;
@@ -23,12 +23,12 @@ QuicMemSliceStorageImpl::QuicMemSliceStorageImpl(const struct iovec* iov, int io
   size_t io_offset = 0;
   while (io_offset < write_len) {
     size_t slice_len = std::min(write_len - io_offset, max_slice_len);
-    Envoy::Buffer::BufferFragmentImpl* fragment =
-        QuicMemSliceImpl::allocateBufferAndFragment(allocator, slice_len);
+    Envoy::Buffer::BufferFragmentImpl& fragment =
+        QuicMemSliceImpl::allocateBufferAndFragment(slice_len);
     QuicUtils::CopyToBuffer(iov, iov_count, io_offset, slice_len,
-                            static_cast<char*>(const_cast<void*>(fragment->data())));
+                            static_cast<char*>(const_cast<void*>(fragment.data())));
     io_offset += slice_len;
-    buffer_.addBufferFragment(*fragment);
+    buffer_.addBufferFragment(fragment);
   }
 }
 

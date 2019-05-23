@@ -10,21 +10,34 @@
 
 namespace quic {
 
-Envoy::Buffer::BufferFragmentImpl*
-QuicMemSliceImpl::allocateBufferAndFragment(QuicBufferAllocator* /*allocator*/, size_t length) {
-  BufferFragmentBundle* bundle = BufferFragmentBundle::createBundleWithSize(length);
-  Envoy::Buffer::BufferFragmentImpl& fragment = bundle->fragment_;
-  return new (&fragment) Envoy::Buffer::BufferFragmentImpl(
-      bundle->buffer_, length,
-      [](const void*, size_t, const Envoy::Buffer::BufferFragmentImpl* frag) {
-        // Delete will deallocate the bundle of fragment and buffer.
-        delete[] const_cast<char*>(reinterpret_cast<const char*>(frag));
-      });
+namespace {
+// Used to align both fragment and buffer at max aligned address.
+struct BufferFragmentBundle : public Envoy::Buffer::BufferFragmentImpl {
+  static Envoy::Buffer::BufferFragmentImpl::Releasor releasor() {
+    return [](const void*, size_t, const Envoy::Buffer::BufferFragmentImpl* fragment) {
+             delete fragment;
+           };
+  }
+
+  explicit BufferFragmentBundle(size_t length) :
+      Envoy::Buffer::BufferFragmentImpl(buffer_, length, releasor()) {}
+
+  // TODO(danzh) this is not aligned in to page boundary.
+  // https://stackoverflow.com/questions/54049474/does-aligning-memory-on-particular-address-boundaries-in-c-c-still-improve-x86/54049733#54049733
+  // suggests that on some processors, page-boundary alignment may improve performance.
+  // Envoy::Buffer::BufferFragmentImpl fragment_;
+  char buffer_[];
+};
+
+} // namespace
+
+Envoy::Buffer::BufferFragmentImpl& QuicMemSliceImpl::allocateBufferAndFragment(size_t length) {
+  BufferFragmentBundle* bundle = new BufferFragmentBundle(length); // self-frees.
+  return *bundle;
 }
 
-QuicMemSliceImpl::QuicMemSliceImpl(QuicBufferAllocator* allocator, size_t length) {
-  Envoy::Buffer::BufferFragmentImpl* fragment = allocateBufferAndFragment(allocator, length);
-  single_slice_buffer_.addBufferFragment(*fragment);
+QuicMemSliceImpl::QuicMemSliceImpl(QuicBufferAllocator* /*allocator*/, size_t length) {
+  single_slice_buffer_.addBufferFragment(allocateBufferAndFragment(length));
 }
 
 QuicMemSliceImpl::QuicMemSliceImpl(Envoy::Buffer::Instance& buffer, size_t length) {
