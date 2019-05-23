@@ -54,8 +54,7 @@ private:
 } // namespace
 
 Envoy::Buffer::BufferFragmentImpl& QuicMemSliceImpl::allocateBufferAndFragment(size_t length) {
-  BufferFragmentBundle* bundle = BufferFragmentBundle::create(length); // self-frees.
-  return *bundle;
+  return *BufferFragmentBundle::create(length); // self-deletes.
 }
 
 QuicMemSliceImpl::QuicMemSliceImpl(QuicBufferAllocator* /*allocator*/, size_t length) {
