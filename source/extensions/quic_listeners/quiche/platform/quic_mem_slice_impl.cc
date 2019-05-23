@@ -13,33 +13,36 @@ namespace quic {
 namespace {
 
 // Helper class for allocating classes with inlined storage.
-/*
+// TODO(jmarantz): move this to as new header in source/common/common and change
+// various other variable-size buffer classes to use it, include stats, symbol tables,
+// and BufferImpl.
 class InlineStorage {
- public:
+public:
   // Custom delete operator to keep C++14 from using the global operator delete(void*, size_t),
   // which would result in the compiler error:
   // "exception cleanup for this placement new selects non-placement operator delete"
-  static void operator delete(void* address) {
-    ::operator delete(address);
-  }
+  static void operator delete(void* address) { ::operator delete(address); }
 
- protected:
+protected:
   static void* operator new(size_t object_size, size_t data_size) {
     return ::operator new(object_size + data_size);
   }
 };
-*/
 
 // Used to align both fragment and buffer at max aligned address.
-struct BufferFragmentBundle : public Envoy::Buffer::BufferFragmentImpl {
+class BufferFragmentBundle : public Envoy::Buffer::BufferFragmentImpl, public InlineStorage {
+public:
+  static BufferFragmentBundle* create(size_t length) {
+    return new (length) BufferFragmentBundle(length);
+  }
+
+private:
   static void releasor(const void*, size_t, const Envoy::Buffer::BufferFragmentImpl* fragment) {
     delete fragment;
   }
 
   explicit BufferFragmentBundle(size_t length)
       : Envoy::Buffer::BufferFragmentImpl(buffer_, length, releasor) {}
-
-  static size_t bytesRequired(size_t length) { return length + sizeof(BufferFragmentBundle); }
 
   // TODO(danzh) this is not aligned in to page boundary.
   // https://stackoverflow.com/questions/54049474/does-aligning-memory-on-particular-address-boundaries-in-c-c-still-improve-x86
@@ -51,8 +54,7 @@ struct BufferFragmentBundle : public Envoy::Buffer::BufferFragmentImpl {
 } // namespace
 
 Envoy::Buffer::BufferFragmentImpl& QuicMemSliceImpl::allocateBufferAndFragment(size_t length) {
-  void* memory = new char[BufferFragmentBundle::bytesRequired(length)];
-  BufferFragmentBundle* bundle = new (memory) BufferFragmentBundle(length); // self-frees.
+  BufferFragmentBundle* bundle = BufferFragmentBundle::create(length); // self-frees.
   return *bundle;
 }
 
