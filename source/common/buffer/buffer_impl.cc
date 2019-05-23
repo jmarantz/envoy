@@ -555,6 +555,29 @@ OwnedImpl::OwnedImpl(const Instance& data) : OwnedImpl() { add(data); }
 
 OwnedImpl::OwnedImpl(const void* data, uint64_t size) : OwnedImpl() { add(data, size); }
 
+OwnedImpl::OwnedImpl(const OwnedImpl& other) : OwnedImpl() { add(other); }
+
+OwnedImpl::OwnedImpl(OwnedImpl&& other)
+    : old_impl_(other.old_impl_), slices_(std::move(other.slices_)), length_(other.length_),
+      buffer_(std::move(other.buffer_)) {}
+
+OwnedImpl& OwnedImpl::operator=(const OwnedImpl& other) {
+  if (this != &other) {
+    add(other);
+  }
+  return *this;
+}
+
+OwnedImpl& OwnedImpl::operator=(OwnedImpl&& other) {
+  if (this != &other) {
+    old_impl_ = other.old_impl_;
+    slices_ = std::move(other.slices_);
+    length_ = other.length_;
+    buffer_ = std::move(other.buffer_);
+  }
+  return *this;
+}
+
 std::string OwnedImpl::toString() const {
   uint64_t num_slices = getRawSlices(nullptr, 0);
   STACK_ARRAY(slices, RawSlice, num_slices);
