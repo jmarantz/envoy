@@ -14,8 +14,8 @@ envoy_cc_test(
     name = "heap_stat_data_test",
     srcs = ["heap_stat_data_test.cc"],
     deps = [
+        "//source/common/stats:fake_symbol_table_lib",
         "//source/common/stats:heap_stat_data_lib",
-        "//source/common/stats:stats_options_lib",
         "//test/test_common:logging_lib",
     ],
 )
@@ -29,11 +29,25 @@ envoy_cc_test(
 )
 
 envoy_cc_test(
-    name = "source_impl_test",
-    srcs = ["source_impl_test.cc"],
+    name = "metric_impl_test",
+    srcs = ["metric_impl_test.cc"],
     deps = [
-        "//source/common/stats:source_impl_lib",
-        "//test/mocks/stats:stats_mocks",
+        "//source/common/stats:fake_symbol_table_lib",
+        "//source/common/stats:heap_stat_data_lib",
+        "//source/common/stats:utility_lib",
+        "//test/test_common:logging_lib",
+    ],
+)
+
+envoy_cc_test(
+    name = "stat_merger_test",
+    srcs = ["stat_merger_test.cc"],
+    deps = [
+        "//source/common/stats:fake_symbol_table_lib",
+        "//source/common/stats:isolated_store_lib",
+        "//source/common/stats:stat_merger_lib",
+        "//source/common/stats:thread_local_store_lib",
+        "//test/test_common:utility_lib",
     ],
 )
 
@@ -44,13 +58,17 @@ envoy_cc_test_library(
     external_deps = [
         "abseil_strings",
     ],
-    deps = ["//source/common/memory:stats_lib"],
+    deps = [
+        "//source/common/common:assert_lib",
+        "//source/common/memory:stats_lib",
+    ],
 )
 
 envoy_cc_test(
     name = "stats_matcher_impl_test",
     srcs = ["stats_matcher_impl_test.cc"],
     deps = [
+        "//source/common/memory:stats_lib",
         "//source/common/stats:stats_matcher_lib",
         "//test/test_common:utility_lib",
     ],
@@ -59,6 +77,25 @@ envoy_cc_test(
 envoy_cc_test(
     name = "symbol_table_impl_test",
     srcs = ["symbol_table_impl_test.cc"],
+    deps = [
+        ":stat_test_utility_lib",
+        "//source/common/common:mutex_tracer_lib",
+        "//source/common/memory:stats_lib",
+        "//source/common/stats:fake_symbol_table_lib",
+        "//source/common/stats:symbol_table_lib",
+        "//test/mocks/stats:stats_mocks",
+        "//test/test_common:logging_lib",
+        "//test/test_common:utility_lib",
+    ],
+)
+
+envoy_cc_test_binary(
+    name = "symbol_table_speed_test",
+    srcs = ["symbol_table_speed_test.cc"],
+    external_deps = [
+        "abseil_strings",
+        "benchmark",
+    ],
     deps = [
         ":stat_test_utility_lib",
         "//source/common/memory:stats_lib",
@@ -121,5 +158,7 @@ envoy_cc_test_binary(
         "//source/common/stats:thread_local_store_lib",
         "//source/common/thread_local:thread_local_lib",
         "//test/test_common:simulated_time_system_lib",
+        "//test/test_common:test_time_lib",
+        "//test/test_common:utility_lib",
     ],
 )

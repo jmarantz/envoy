@@ -22,17 +22,14 @@ following are the command line options that Envoy supports.
 .. option:: --config-yaml <yaml string>
 
   *(optional)* The YAML string for a v2 bootstrap configuration. If :option:`--config-path` is also set,
-   the values in this YAML string will override and merge with the bootstrap loaded from :option:`--config-path`.
-   Because YAML is a superset of JSON, a JSON string may also be passed to :option:`--config-yaml`.
+  the values in this YAML string will override and merge with the bootstrap loaded from :option:`--config-path`.
+  Because YAML is a superset of JSON, a JSON string may also be passed to :option:`--config-yaml`.
 
-   Example overriding the node id on the command line:
+  Example overriding the node id on the command line:
+
+    .. code-block:: console
 
       ./envoy -c bootstrap.yaml --config-yaml "node: {id: 'node1'}"
-
-.. option:: --v2-config-only
-
-  *(deprecated)* This flag used to allow opting into only using a
-  :ref:`v2 bootstrap configuration file <config_overview_v2_bootstrap>`. This is now set by default.
 
 .. option:: --mode <string>
 
@@ -77,7 +74,15 @@ following are the command line options that Envoy supports.
   *(optional)* The comma separated list of logging level per component. Non developers should generally 
   never set this option. For example, if you want `upstream` component to run at `debug` level and 
   `connection` component to run at `trace` level, you should pass ``upstream:debug,connection:trace`` to 
-  this flag.
+  this flag. See ``ALL_LOGGER_IDS`` in :repo:`/source/common/common/logger.h` for a list of components.
+
+.. option:: --cpuset-threads
+
+   *(optional)* This flag is used to control the number of worker threads if :option:`--concurrency` is
+   not set. If enabled, the assigned cpuset size is used to determine the number of worker threads on
+   Linux-based systems. Otherwise the number of worker threads is set to the number of hardware threads
+   on the machine. You can read more about cpusets in the
+   `kernel documentation <https://www.kernel.org/doc/Documentation/cgroup-v1/cpusets.txt>`_.
 
 .. option:: --log-path <path string>
 
@@ -209,24 +214,6 @@ following are the command line options that Envoy supports.
   during a hot restart. See the :ref:`hot restart overview <arch_overview_hot_restart>` for more
   information. Defaults to 900 seconds (15 minutes).
 
-.. option:: --max-obj-name-len <uint64_t>
-
-  *(optional)* The maximum name length (in bytes) of the name field in a cluster/route_config/listener.
-  This setting is typically used in scenarios where the cluster names are auto generated, and often exceed
-  the built-in limit of 60 characters. Defaults to 60, and it's not valid to set to less than 60.
-
-  .. attention::
-
-    This setting affects the output of :option:`--hot-restart-version`. If you started envoy with this
-    option set to a non default value, you should use the same option (and same value) for subsequent hot
-    restarts.
-
-.. option:: --max-stats <uint64_t>
-
-  *(optional)* The maximum number of stats that can be shared between hot-restarts. This setting
-  affects the output of :option:`--hot-restart-version`; the same value must be used to hot
-  restart. Defaults to 16384. It's not valid to set this larger than 100 million.
-
 .. option:: --disable-hot-restart
 
   *(optional)* This flag disables Envoy hot restart for builds that have it enabled. By default, hot
@@ -245,3 +232,20 @@ following are the command line options that Envoy supports.
   validation is enabled. For most deployments, the default should be used which ensures configuration errors
   are caught upfront and Envoy is configured as intended. However in cases where Envoy needs to accept configuration 
   produced by newer control planes, effectively ignoring new features it does not know about yet, this can be disabled.
+
+.. option:: --version
+
+  *(optional)* This flag is used to display Envoy version and build information, e.g.
+  ``c93f9f6c1e5adddd10a3e3646c7e049c649ae177/1.9.0-dev/Clean/RELEASE/BoringSSL-FIPS``.
+
+  It consists of five slash-separated fields:
+
+  * source revision - git commit from which Envoy was built,
+
+  * release number - either release (e.g. ``1.9.0``) or a development build (e.g. ``1.9.0-dev``),
+
+  * status of the source tree at the build time - either ``Clean`` or ``Modified``,
+
+  * build mode - either ``RELEASE`` or ``DEBUG``,
+
+  * TLS library - either ``BoringSSL`` or ``BoringSSL-FIPS``.

@@ -11,17 +11,15 @@
 #include "envoy/network/connection.h"
 #include "envoy/stats/scope.h"
 
-//#include "envoy/stats/stats_macros.h"
-
 #include "common/buffer/buffer_impl.h"
 #include "common/buffer/watermark_buffer.h"
 #include "common/common/linked_object.h"
 #include "common/common/logger.h"
 #include "common/http/codec_helper.h"
 #include "common/http/header_map_impl.h"
-#include "common/http/utility.h"
 #include "common/http/http2/metadata_decoder.h"
 #include "common/http/http2/metadata_encoder.h"
+#include "common/http/utility.h"
 
 #include "absl/types/optional.h"
 #include "nghttp2/nghttp2.h"
@@ -76,9 +74,9 @@ public:
 class ConnectionImpl : public virtual Connection, protected Logger::Loggable<Logger::Id::http2> {
 public:
   ConnectionImpl(Network::Connection& connection, Stats::Scope& stats,
-                 const Http2Settings& http2_settings)
+                 const Http2Settings& http2_settings, const uint32_t max_request_headers_kb)
       : stats_{ALL_HTTP2_CODEC_STATS(POOL_COUNTER_PREFIX(stats, "http2."))},
-        connection_(connection),
+        connection_(connection), max_request_headers_kb_(max_request_headers_kb),
         per_stream_buffer_limit_(http2_settings.initial_stream_window_size_), dispatching_(false),
         raised_goaway_(false), pending_deferred_reset_(false) {}
 
@@ -164,14 +162,14 @@ protected:
     void encodeData(Buffer::Instance& data, bool end_stream) override;
     void encodeTrailers(const HeaderMap& trailers) override;
     Stream& getStream() override { return *this; }
-    void encodeMetadata(const MetadataMap& metadata_map) override;
+    void encodeMetadata(const MetadataMapVector& metadata_map_vector) override;
 
     // Http::Stream
     void addCallbacks(StreamCallbacks& callbacks) override { addCallbacks_(callbacks); }
     void removeCallbacks(StreamCallbacks& callbacks) override { removeCallbacks_(callbacks); }
     void resetStream(StreamResetReason reason) override;
-    virtual void readDisable(bool disable) override;
-    virtual uint32_t bufferLimit() override { return pending_recv_data_.highWatermark(); }
+    void readDisable(bool disable) override;
+    uint32_t bufferLimit() override { return pending_recv_data_.highWatermark(); }
 
     void setWriteBufferWatermarks(uint32_t low_watermark, uint32_t high_watermark) {
       pending_recv_data_.setWatermarks(low_watermark, high_watermark);
@@ -187,11 +185,6 @@ protected:
     void pendingSendBufferHighWatermark();
     void pendingSendBufferLowWatermark();
 
-    // Max header size of 63K. This is arbitrary but makes it easier to test since nghttp2 doesn't
-    // appear to transmit headers greater than approximtely 64K (NGHTTP2_MAX_HEADERSLEN) for reasons
-    // I don't fully understand.
-    static const uint64_t MAX_HEADER_SIZE = 63 * 1024;
-
     // Does any necessary WebSocket/Upgrade conversion, then passes the headers
     // to the decoder_.
     void decodeHeaders();
@@ -201,7 +194,7 @@ protected:
     // Get MetadataDecoder for this stream.
     MetadataDecoder& getMetadataDecoder();
     // Callback function for MetadataDecoder.
-    void onMetadataDecoded(std::unique_ptr<MetadataMap> metadata_map);
+    void onMetadataDecoded(MetadataMapPtr&& metadata_map_ptr);
 
     virtual void transformUpgradeFromH1toH2(HeaderMap& headers) PURE;
     virtual void maybeTransformUpgradeFromH2ToH1() PURE;
@@ -234,7 +227,7 @@ protected:
     bool reset_due_to_messaging_error_ : 1;
   };
 
-  typedef std::unique_ptr<StreamImpl> StreamImplPtr;
+  using StreamImplPtr = std::unique_ptr<StreamImpl>;
 
   /**
    * Client side stream (request).
@@ -246,7 +239,7 @@ protected:
     void submitHeaders(const std::vector<nghttp2_nv>& final_headers,
                        nghttp2_data_provider* provider) override;
     void transformUpgradeFromH1toH2(HeaderMap& headers) override {
-      upgrade_type_ = headers.Upgrade()->value().c_str();
+      upgrade_type_ = std::string(headers.Upgrade()->value().getStringView());
       Http::Utility::transformUpgradeRequestFromH1toH2(headers);
     }
     void maybeTransformUpgradeFromH2ToH1() override {
@@ -293,6 +286,7 @@ protected:
   nghttp2_session* session_{};
   CodecStats stats_;
   Network::Connection& connection_;
+  const uint32_t max_request_headers_kb_;
   uint32_t per_stream_buffer_limit_;
   bool allow_metadata_;
 
@@ -321,7 +315,8 @@ private:
 class ClientConnectionImpl : public ClientConnection, public ConnectionImpl {
 public:
   ClientConnectionImpl(Network::Connection& connection, ConnectionCallbacks& callbacks,
-                       Stats::Scope& stats, const Http2Settings& http2_settings);
+                       Stats::Scope& stats, const Http2Settings& http2_settings,
+                       const uint32_t max_request_headers_kb);
 
   // Http::ClientConnection
   Http::StreamEncoder& newStream(StreamDecoder& response_decoder) override;
@@ -341,7 +336,8 @@ private:
 class ServerConnectionImpl : public ServerConnection, public ConnectionImpl {
 public:
   ServerConnectionImpl(Network::Connection& connection, ServerConnectionCallbacks& callbacks,
-                       Stats::Scope& scope, const Http2Settings& http2_settings);
+                       Stats::Scope& scope, const Http2Settings& http2_settings,
+                       const uint32_t max_request_headers_kb);
 
 private:
   // ConnectionImpl

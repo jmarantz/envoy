@@ -14,7 +14,6 @@
 #include "common/common/logger.h"
 #include "common/event/libevent.h"
 #include "common/network/filter_manager_impl.h"
-#include "common/ssl/ssl_socket.h"
 #include "common/stream_info/stream_info_impl.h"
 
 #include "absl/types/optional.h"
@@ -45,17 +44,16 @@ public:
 };
 
 /**
- * Implementation of Network::Connection.
+ * Implementation of Network::Connection and Network::FilterManagerConnection.
  */
-class ConnectionImpl : public virtual Connection,
-                       public BufferSource,
+class ConnectionImpl : public FilterManagerConnection,
                        public TransportSocketCallbacks,
                        protected Logger::Loggable<Logger::Id::connection> {
 public:
   ConnectionImpl(Event::Dispatcher& dispatcher, ConnectionSocketPtr&& socket,
                  TransportSocketPtr&& transport_socket, bool connected);
 
-  ~ConnectionImpl();
+  ~ConnectionImpl() override;
 
   // Network::FilterManager
   void addWriteFilter(WriteFilterSharedPtr filter) override;
@@ -81,8 +79,9 @@ public:
   const Address::InstanceConstSharedPtr& localAddress() const override {
     return socket_->localAddress();
   }
+  absl::optional<UnixDomainSocketPeerCredentials> unixSocketPeerCredentials() const override;
   void setConnectionStats(const ConnectionStats& stats) override;
-  const Ssl::Connection* ssl() const override { return transport_socket_->ssl(); }
+  const Ssl::ConnectionInfo* ssl() const override { return transport_socket_->ssl(); }
   State state() const override;
   void write(Buffer::Instance& data, bool end_stream) override;
   void setBufferLimits(uint32_t limit) override;
@@ -95,17 +94,21 @@ public:
   absl::string_view requestedServerName() const override { return socket_->requestedServerName(); }
   StreamInfo::StreamInfo& streamInfo() override { return stream_info_; }
   const StreamInfo::StreamInfo& streamInfo() const override { return stream_info_; }
-  void setWriteFilterOrder(bool reversed) override { reverse_write_filter_order_ = reversed; }
-  bool reverseWriteFilterOrder() const override { return reverse_write_filter_order_; }
+  absl::string_view transportFailureReason() const override;
 
-  // Network::BufferSource
-  BufferSource::StreamBuffer getReadBuffer() override { return {read_buffer_, read_end_stream_}; }
-  BufferSource::StreamBuffer getWriteBuffer() override {
+  // Network::FilterManagerConnection
+  void rawWrite(Buffer::Instance& data, bool end_stream) override;
+
+  // Network::ReadBufferSource
+  StreamBuffer getReadBuffer() override { return {read_buffer_, read_end_stream_}; }
+  // Network::WriteBufferSource
+  StreamBuffer getWriteBuffer() override {
     return {*current_write_buffer_, current_write_end_stream_};
   }
 
   // Network::TransportSocketCallbacks
-  int fd() const override { return socket_->fd(); }
+  IoHandle& ioHandle() override { return socket_->ioHandle(); }
+  const IoHandle& ioHandle() const override { return socket_->ioHandle(); }
   Connection& connection() override { return *this; }
   void raiseEvent(ConnectionEvent event) override;
   // Should the read buffer be drained?
@@ -123,6 +126,8 @@ public:
   static uint64_t nextGlobalIdForTest() { return next_global_id_; }
 
   void setDelayedCloseTimeout(std::chrono::milliseconds timeout) override {
+    // Validate that this is only called prior to issuing a close() or closeSocket().
+    ASSERT(delayed_close_timer_ == nullptr && ioHandle().isOpen());
     delayed_close_timeout_ = timeout;
   }
   std::chrono::milliseconds delayedCloseTimeout() const override { return delayed_close_timeout_; }
@@ -134,8 +139,8 @@ protected:
   void onHighWatermark();
 
   TransportSocketPtr transport_socket_;
-  FilterManagerImpl filter_manager_;
   ConnectionSocketPtr socket_;
+  FilterManagerImpl filter_manager_;
   StreamInfo::StreamInfoImpl stream_info_;
 
   Buffer::OwnedImpl read_buffer_;
@@ -162,13 +167,34 @@ private:
   void updateReadBufferStats(uint64_t num_read, uint64_t new_size);
   void updateWriteBufferStats(uint64_t num_written, uint64_t new_size);
 
+  // Write data to the connection bypassing filter chain (optionally).
+  void write(Buffer::Instance& data, bool end_stream, bool through_filter_chain);
+
   // Returns true iff end of stream has been both written and read.
   bool bothSidesHalfClosed();
 
   // Callback issued when a delayed close timeout triggers.
   void onDelayedCloseTimeout();
 
+  void initializeDelayedCloseTimer();
+  bool inDelayedClose() const { return delayed_close_state_ != DelayedCloseState::None; }
+
   static std::atomic<uint64_t> next_global_id_;
+
+  // States associated with delayed closing of the connection (i.e., when the underlying socket is
+  // not immediately close()d as a result of a ConnectionImpl::close()).
+  enum class DelayedCloseState {
+    None,
+    // The socket will be closed immediately after the buffer is flushed _or_ if a period of
+    // inactivity after the last write event greater than or equal to delayed_close_timeout_ has
+    // elapsed.
+    CloseAfterFlush,
+    // The socket will be closed after a grace period of delayed_close_timeout_ has elapsed after
+    // the socket is flushed _or_ if a period of inactivity after the last write event greater than
+    // or equal to delayed_close_timeout_ has elapsed.
+    CloseAfterFlushAndWait
+  };
+  DelayedCloseState delayed_close_state_{DelayedCloseState::None};
 
   Event::Dispatcher& dispatcher_;
   const uint64_t id_;
@@ -176,8 +202,6 @@ private:
   std::list<ConnectionCallbacks*> callbacks_;
   std::list<BytesSentCb> bytes_sent_callbacks_;
   bool read_enabled_{true};
-  bool close_after_flush_{false};
-  bool delayed_close_{false};
   bool above_high_watermark_{false};
   bool detect_early_close_{true};
   bool enable_half_close_{false};
@@ -193,7 +217,6 @@ private:
   // readDisabled(true) this allows the connection to only resume reads when readDisabled(false)
   // has been called N times.
   uint32_t read_disable_count_{0};
-  bool reverse_write_filter_order_{false};
 };
 
 /**

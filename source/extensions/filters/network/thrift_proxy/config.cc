@@ -25,9 +25,8 @@ namespace NetworkFilters {
 namespace ThriftProxy {
 namespace {
 
-typedef std::map<envoy::config::filter::network::thrift_proxy::v2alpha1::TransportType,
-                 TransportType>
-    TransportTypeMap;
+using TransportTypeMap =
+    std::map<envoy::config::filter::network::thrift_proxy::v2alpha1::TransportType, TransportType>;
 
 static const TransportTypeMap& transportTypeMap() {
   CONSTRUCT_ON_FIRST_USE(
@@ -44,8 +43,8 @@ static const TransportTypeMap& transportTypeMap() {
       });
 }
 
-typedef std::map<envoy::config::filter::network::thrift_proxy::v2alpha1::ProtocolType, ProtocolType>
-    ProtocolTypeMap;
+using ProtocolTypeMap =
+    std::map<envoy::config::filter::network::thrift_proxy::v2alpha1::ProtocolType, ProtocolType>;
 
 static const ProtocolTypeMap& protocolTypeMap() {
   CONSTRUCT_ON_FIRST_USE(
@@ -109,16 +108,15 @@ Network::FilterFactoryCb ThriftProxyFilterConfigFactory::createFilterFactoryFrom
 
   return [filter_config, &context](Network::FilterManager& filter_manager) -> void {
     filter_manager.addReadFilter(std::make_shared<ConnectionManager>(
-        *filter_config, context.random(), context.dispatcher().timeSystem()));
+        *filter_config, context.random(), context.dispatcher().timeSource()));
   };
 }
 
 /**
  * Static registration for the thrift filter. @see RegisterFactory.
  */
-static Registry::RegisterFactory<ThriftProxyFilterConfigFactory,
-                                 Server::Configuration::NamedNetworkFilterConfigFactory>
-    registered_;
+REGISTER_FACTORY(ThriftProxyFilterConfigFactory,
+                 Server::Configuration::NamedNetworkFilterConfigFactory);
 
 ConfigImpl::ConfigImpl(
     const envoy::config::filter::network::thrift_proxy::v2alpha1::ThriftProxy& config,
@@ -157,7 +155,7 @@ ProtocolPtr ConfigImpl::createProtocol() {
 
 void ConfigImpl::processFilter(
     const envoy::config::filter::network::thrift_proxy::v2alpha1::ThriftFilter& proto_config) {
-  const ProtobufTypes::String& string_name = proto_config.name();
+  const std::string& string_name = proto_config.name();
 
   ENVOY_LOG(debug, "    thrift filter #{}", filter_factories_.size());
   ENVOY_LOG(debug, "      name: {}", string_name);
@@ -170,8 +168,8 @@ void ConfigImpl::processFilter(
       Envoy::Config::Utility::getAndCheckFactory<ThriftFilters::NamedThriftFilterConfigFactory>(
           string_name);
 
-  ProtobufTypes::MessagePtr message =
-      Envoy::Config::Utility::translateToFactoryConfig(proto_config, factory);
+  ProtobufTypes::MessagePtr message = Envoy::Config::Utility::translateToFactoryConfig(
+      proto_config, context_.messageValidationVisitor(), factory);
   ThriftFilters::FilterFactoryCb callback =
       factory.createFilterFactoryFromProto(*message, stats_prefix_, context_);
 

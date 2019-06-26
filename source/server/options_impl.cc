@@ -11,37 +11,23 @@
 #include "common/common/version.h"
 #include "common/protobuf/utility.h"
 
+#include "server/options_impl_platform.h"
+
 #include "absl/strings/str_split.h"
 #include "spdlog/spdlog.h"
 #include "tclap/CmdLine.h"
-
-// Can be overridden at compile time
-#ifndef ENVOY_DEFAULT_MAX_STATS
-#define ENVOY_DEFAULT_MAX_STATS 16384
-#endif
-
-// Can be overridden at compile time
-// See comment in common/stat/stat_impl.h for rationale behind
-// this constant.
-#ifndef ENVOY_DEFAULT_MAX_OBJ_NAME_LENGTH
-#define ENVOY_DEFAULT_MAX_OBJ_NAME_LENGTH 60
-#endif
-
-#if ENVOY_DEFAULT_MAX_OBJ_NAME_LENGTH < 60
-#error "ENVOY_DEFAULT_MAX_OBJ_NAME_LENGTH must be >= 60"
-#endif
 
 namespace Envoy {
 OptionsImpl::OptionsImpl(int argc, const char* const* argv,
                          const HotRestartVersionCb& hot_restart_version_cb,
                          spdlog::level::level_enum default_log_level)
-    : v2_config_only_(true), signal_handling_enabled_(true) {
+    : signal_handling_enabled_(true) {
   std::string log_levels_string = "Log levels: ";
-  for (size_t i = 0; i < ARRAY_SIZE(spdlog::level::level_names); i++) {
-    log_levels_string += fmt::format("[{}]", spdlog::level::level_names[i]);
+  for (size_t i = 0; i < ARRAY_SIZE(spdlog::level::level_string_views); i++) {
+    log_levels_string += fmt::format("[{}]", spdlog::level::level_string_views[i]);
   }
   log_levels_string +=
-      fmt::format("\nDefault is [{}]", spdlog::level::level_names[default_log_level]);
+      fmt::format("\nDefault is [{}]", spdlog::level::level_string_views[default_log_level]);
 
   const std::string component_log_level_string =
       "Comma separated list of component log levels. For example upstream:debug,config:trace";
@@ -63,9 +49,6 @@ OptionsImpl::OptionsImpl(int argc, const char* const* argv,
       "", "config-yaml", "Inline YAML configuration, merges with the contents of --config-path",
       false, "", "string", cmd);
 
-  // Deprecated and unused.
-  TCLAP::SwitchArg v2_config_only("", "v2-config-only", "deprecated", cmd, true);
-
   TCLAP::SwitchArg allow_unknown_fields("", "allow-unknown-fields",
                                         "allow unknown fields in the configuration", cmd, false);
 
@@ -75,9 +58,9 @@ OptionsImpl::OptionsImpl(int argc, const char* const* argv,
                                                         "The local "
                                                         "IP address version (v4 or v6).",
                                                         false, "v4", "string", cmd);
-  TCLAP::ValueArg<std::string> log_level("l", "log-level", log_levels_string, false,
-                                         spdlog::level::level_names[default_log_level], "string",
-                                         cmd);
+  TCLAP::ValueArg<std::string> log_level(
+      "l", "log-level", log_levels_string, false,
+      spdlog::level::level_string_views[default_log_level].data(), "string", cmd);
   TCLAP::ValueArg<std::string> component_log_level(
       "", "component-log-level", component_log_level_string, false, "", "string", cmd);
   TCLAP::ValueArg<std::string> log_format("", "log-format", log_format_string, false,
@@ -107,19 +90,21 @@ OptionsImpl::OptionsImpl(int argc, const char* const* argv,
                                     "traffic normally) or 'validate' (validate configs and exit).",
                                     false, "serve", "string", cmd);
   TCLAP::ValueArg<uint64_t> max_stats("", "max-stats",
-                                      "Maximum number of stats gauges and counters "
-                                      "that can be allocated in shared memory.",
-                                      false, ENVOY_DEFAULT_MAX_STATS, "uint64_t", cmd);
+                                      "Deprecated and unused; please do not specify.", false, 123,
+                                      "uint64_t", cmd);
   TCLAP::ValueArg<uint64_t> max_obj_name_len("", "max-obj-name-len",
-                                             "Maximum name length for a field in the config "
-                                             "(applies to listener name, route config name and"
-                                             " the cluster name)",
-                                             false, ENVOY_DEFAULT_MAX_OBJ_NAME_LENGTH, "uint64_t",
-                                             cmd);
+                                             "Deprecated and unused; please do not specify.", false,
+                                             123, "uint64_t", cmd);
   TCLAP::SwitchArg disable_hot_restart("", "disable-hot-restart",
                                        "Disable hot restart functionality", cmd, false);
   TCLAP::SwitchArg enable_mutex_tracing(
       "", "enable-mutex-tracing", "Enable mutex contention tracing functionality", cmd, false);
+  TCLAP::SwitchArg cpuset_threads(
+      "", "cpuset-threads", "Get the default # of worker threads from cpuset size", cmd, false);
+
+  TCLAP::ValueArg<bool> use_libevent_buffer("", "use-libevent-buffers",
+                                            "Use the original libevent buffer implementation",
+                                            false, true, "bool", cmd);
 
   cmd.setExceptionHandling(false);
   try {
@@ -139,28 +124,16 @@ OptionsImpl::OptionsImpl(int argc, const char* const* argv,
     throw NoServingException();
   }
 
-  auto check_numeric_arg = [](bool is_error, uint64_t value, absl::string_view pattern) {
-    if (is_error) {
-      const std::string message = fmt::format(std::string(pattern), value);
-      std::cerr << message << std::endl;
-      throw MalformedArgvException(message);
-    }
-  };
-  check_numeric_arg(max_obj_name_len.getValue() < 60, max_obj_name_len.getValue(),
-                    "error: the 'max-obj-name-len' value specified ({}) is less than the minimum "
-                    "value of 60");
-  check_numeric_arg(max_stats.getValue() > 100 * 1000 * 1000, max_stats.getValue(),
-                    "error: the 'max-stats' value specified ({}) is more than the maximum value "
-                    "of 100M");
-  // TODO(jmarantz): should we also multiply these to bound the total amount of memory?
-
   hot_restart_disabled_ = disable_hot_restart.getValue();
 
   mutex_tracing_enabled_ = enable_mutex_tracing.getValue();
 
+  libevent_buffer_enabled_ = use_libevent_buffer.getValue();
+  cpuset_threads_ = cpuset_threads.getValue();
+
   log_level_ = default_log_level;
-  for (size_t i = 0; i < ARRAY_SIZE(spdlog::level::level_names); i++) {
-    if (log_level.getValue() == spdlog::level::level_names[i]) {
+  for (size_t i = 0; i < ARRAY_SIZE(spdlog::level::level_string_views); i++) {
+    if (log_level.getValue() == spdlog::level::level_string_views[i]) {
       log_level_ = static_cast<spdlog::level::level_enum>(i);
     }
   }
@@ -177,7 +150,6 @@ OptionsImpl::OptionsImpl(int argc, const char* const* argv,
     mode_ = Server::Mode::InitOnly;
   } else {
     const std::string message = fmt::format("error: unknown mode '{}'", mode.getValue());
-    std::cerr << message << std::endl;
     throw MalformedArgvException(message);
   }
 
@@ -188,19 +160,28 @@ OptionsImpl::OptionsImpl(int argc, const char* const* argv,
   } else {
     const std::string message =
         fmt::format("error: unknown IP address version '{}'", local_address_ip_version.getValue());
-    std::cerr << message << std::endl;
     throw MalformedArgvException(message);
   }
 
   // For base ID, scale what the user inputs by 10 so that we have spread for domain sockets.
   base_id_ = base_id.getValue() * 10;
-  concurrency_ = std::max(1U, concurrency.getValue());
+
+  if (!concurrency.isSet() && cpuset_threads_) {
+    // The 'concurrency' command line option wasn't set but the 'cpuset-threads'
+    // option was set. Use the number of CPUs assigned to the process cpuset, if
+    // that can be known.
+    concurrency_ = OptionsImplPlatform::getCpuCount();
+  } else {
+    if (concurrency.isSet() && cpuset_threads_ && cpuset_threads.isSet()) {
+      ENVOY_LOG(warn, "Both --concurrency and --cpuset-threads options are set; not applying "
+                      "--cpuset-threads.");
+    }
+    concurrency_ = std::max(1U, concurrency.getValue());
+  }
+
   config_path_ = config_path.getValue();
   config_yaml_ = config_yaml.getValue();
   allow_unknown_fields_ = allow_unknown_fields.getValue();
-  if (allow_unknown_fields_) {
-    MessageUtil::proto_unknown_fields = ProtoUnknownFieldsMode::Allow;
-  }
   admin_address_path_ = admin_address_path.getValue();
   log_path_ = log_path.getValue();
   restart_epoch_ = restart_epoch.getValue();
@@ -210,12 +191,9 @@ OptionsImpl::OptionsImpl(int argc, const char* const* argv,
   file_flush_interval_msec_ = std::chrono::milliseconds(file_flush_interval_msec.getValue());
   drain_time_ = std::chrono::seconds(drain_time_s.getValue());
   parent_shutdown_time_ = std::chrono::seconds(parent_shutdown_time_s.getValue());
-  max_stats_ = max_stats.getValue();
-  stats_options_.max_obj_name_length_ = max_obj_name_len.getValue();
 
   if (hot_restart_version_option.getValue()) {
-    std::cerr << hot_restart_version_cb(max_stats.getValue(), stats_options_.maxNameLength(),
-                                        !hot_restart_disabled_);
+    std::cerr << hot_restart_version_cb(!hot_restart_disabled_);
     throw NoServingException();
   }
 }
@@ -234,8 +212,8 @@ void OptionsImpl::parseComponentLogLevels(const std::string& component_log_level
     std::string log_name = log_name_level[0];
     std::string log_level = log_name_level[1];
     size_t level_to_use = std::numeric_limits<size_t>::max();
-    for (size_t i = 0; i < ARRAY_SIZE(spdlog::level::level_names); i++) {
-      if (log_level == spdlog::level::level_names[i]) {
+    for (size_t i = 0; i < ARRAY_SIZE(spdlog::level::level_string_views); i++) {
+      if (log_level == spdlog::level::level_string_views[i]) {
         level_to_use = i;
         break;
       }
@@ -254,10 +232,7 @@ void OptionsImpl::parseComponentLogLevels(const std::string& component_log_level
 
 uint32_t OptionsImpl::count() const { return count_; }
 
-void OptionsImpl::logError(const std::string& error) const {
-  std::cerr << error << std::endl;
-  throw MalformedArgvException(error);
-}
+void OptionsImpl::logError(const std::string& error) const { throw MalformedArgvException(error); }
 
 Server::CommandLineOptionsPtr OptionsImpl::toCommandLineOptions() const {
   Server::CommandLineOptionsPtr command_line_options =
@@ -269,7 +244,8 @@ Server::CommandLineOptionsPtr OptionsImpl::toCommandLineOptions() const {
   command_line_options->set_allow_unknown_fields(allow_unknown_fields_);
   command_line_options->set_admin_address_path(adminAddressPath());
   command_line_options->set_component_log_level(component_log_level_str_);
-  command_line_options->set_log_level(spdlog::level::to_c_str(logLevel()));
+  command_line_options->set_log_level(spdlog::level::to_string_view(logLevel()).data(),
+                                      spdlog::level::to_string_view(logLevel()).size());
   command_line_options->set_log_format(logFormat());
   command_line_options->set_log_path(logPath());
   command_line_options->set_service_cluster(serviceClusterName());
@@ -295,22 +271,21 @@ Server::CommandLineOptionsPtr OptionsImpl::toCommandLineOptions() const {
       Protobuf::util::TimeUtil::SecondsToDuration(parentShutdownTime().count()));
   command_line_options->mutable_drain_time()->MergeFrom(
       Protobuf::util::TimeUtil::SecondsToDuration(drainTime().count()));
-  command_line_options->set_max_stats(maxStats());
-  command_line_options->set_max_obj_name_len(statsOptions().maxObjNameLength());
   command_line_options->set_disable_hot_restart(hotRestartDisabled());
   command_line_options->set_enable_mutex_tracing(mutexTracingEnabled());
+  command_line_options->set_cpuset_threads(cpusetThreadsEnabled());
   command_line_options->set_restart_epoch(restartEpoch());
   return command_line_options;
 }
 
 OptionsImpl::OptionsImpl(const std::string& service_cluster, const std::string& service_node,
                          const std::string& service_zone, spdlog::level::level_enum log_level)
-    : base_id_(0u), concurrency_(1u), config_path_(""), config_yaml_(""), v2_config_only_(true),
+    : base_id_(0u), concurrency_(1u), config_path_(""), config_yaml_(""),
       local_address_ip_version_(Network::Address::IpVersion::v4), log_level_(log_level),
       log_format_(Logger::Logger::DEFAULT_LOG_FORMAT), restart_epoch_(0u),
       service_cluster_(service_cluster), service_node_(service_node), service_zone_(service_zone),
       file_flush_interval_msec_(10000), drain_time_(600), parent_shutdown_time_(900),
-      mode_(Server::Mode::Serve), max_stats_(ENVOY_DEFAULT_MAX_STATS), hot_restart_disabled_(false),
-      signal_handling_enabled_(true), mutex_tracing_enabled_(false) {}
+      mode_(Server::Mode::Serve), hot_restart_disabled_(false), signal_handling_enabled_(true),
+      mutex_tracing_enabled_(false), cpuset_threads_(false), libevent_buffer_enabled_(false) {}
 
 } // namespace Envoy

@@ -13,9 +13,9 @@ Overview
 --------
 
 The HTTP Lua filter allows `Lua <https://www.lua.org/>`_ scripts to be run during both the request
-and response flows. `LuaJIT <http://luajit.org/>`_ is used as the runtime. Because of this, the
+and response flows. `LuaJIT <https://luajit.org/>`_ is used as the runtime. Because of this, the
 supported Lua version is mostly 5.1 with some 5.2 features. See the `LuaJIT documentation
-<http://luajit.org/extensions.html>`_ for more details.
+<https://luajit.org/extensions.html>`_ for more details.
 
 The filter only supports loading Lua code in-line in the configuration. If local filesystem code
 is desired, a trivial in-line script can be used to load the rest of the code from the local
@@ -55,6 +55,7 @@ Configuration
 -------------
 
 * :ref:`v2 API reference <envoy_api_msg_config.filter.http.lua.v2.Lua>`
+* This filter should be configured with the name *envoy.lua*.
 
 Script examples
 ---------------
@@ -73,7 +74,7 @@ more details on the supported API.
 
   -- Called on the response path.
   function envoy_on_response(response_handle)
-    -- Wait for the entire response body and a response header with the the body size.
+    -- Wait for the entire response body and a response header with the body size.
     response_handle:headers():add("response_body_size", response_handle:body():length())
     -- Remove a response header named 'foo'
     response_handle:headers():remove("foo")
@@ -296,7 +297,7 @@ streamInfo()
 
   streamInfo = handle:streamInfo()
 
-Returns :repo:`information <include/stream_info/stream_info.h>` related to the current request.
+Returns :repo:`information <include/envoy/stream_info/stream_info.h>` related to the current request.
 
 Returns a :ref:`stream info object <config_http_filters_lua_stream_info_wrapper>`.
 
@@ -310,6 +311,32 @@ connection()
 Returns the current request's underlying :repo:`connection <include/envoy/network/connection.h>`.
 
 Returns a :ref:`connection object <config_http_filters_lua_connection_wrapper>`.
+
+importPublicKey()
+^^^^^^^^^^^^^^^^^
+
+.. code-block:: lua
+  
+  pubkey = handle:importPublicKey(keyder, keyderLength)
+
+Returns public key which is used by :ref:`verifySignature <verify_signature>` to verify digital signature. 
+
+.. _verify_signature:
+
+verifySignature()
+^^^^^^^^^^^^^^^^^
+
+.. code-block:: lua
+
+  ok, error = verifySignature(hashFunction, pubkey, signature, signatureLength, data, dataLength)
+
+Verify signature using provided parameters. *hashFunction* is the variable for hash function which be used 
+for verifying signature. *SHA1*, *SHA224*, *SHA256*, *SHA384* and *SHA512* are supported. 
+*pubkey* is the public key. *signature* is the signature to be verified. *signatureLength* is 
+the length of the signature. *data* is the content which will be hashed. *dataLength* is the length of data.
+
+The function returns a pair. If the first element is *true*, the second element will be empty
+which means signature is verified; otherwise, the second element will store the error message. 
 
 .. _config_http_filters_lua_header_wrapper:
 

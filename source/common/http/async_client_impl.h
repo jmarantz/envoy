@@ -13,6 +13,7 @@
 #include "envoy/event/dispatcher.h"
 #include "envoy/http/async_client.h"
 #include "envoy/http/codec.h"
+#include "envoy/http/context.h"
 #include "envoy/http/header_map.h"
 #include "envoy/http/message.h"
 #include "envoy/router/router.h"
@@ -42,8 +43,9 @@ public:
   AsyncClientImpl(Upstream::ClusterInfoConstSharedPtr cluster, Stats::Store& stats_store,
                   Event::Dispatcher& dispatcher, const LocalInfo::LocalInfo& local_info,
                   Upstream::ClusterManager& cm, Runtime::Loader& runtime,
-                  Runtime::RandomGenerator& random, Router::ShadowWriterPtr&& shadow_writer);
-  ~AsyncClientImpl();
+                  Runtime::RandomGenerator& random, Router::ShadowWriterPtr&& shadow_writer,
+                  Http::Context& http_context);
+  ~AsyncClientImpl() override;
 
   // Http::AsyncClient
   Request* send(MessagePtr&& request, Callbacks& callbacks,
@@ -88,22 +90,15 @@ protected:
   AsyncClientImpl& parent_;
 
 private:
-  struct NullCorsPolicy : public Router::CorsPolicy {
-    // Router::CorsPolicy
-    const std::list<std::string>& allowOrigins() const override { return allow_origin_; };
-    const std::list<std::regex>& allowOriginRegexes() const override {
-      return allow_origin_regex_;
-    };
-    const std::string& allowMethods() const override { return EMPTY_STRING; };
-    const std::string& allowHeaders() const override { return EMPTY_STRING; };
-    const std::string& exposeHeaders() const override { return EMPTY_STRING; };
-    const std::string& maxAge() const override { return EMPTY_STRING; };
-    const absl::optional<bool>& allowCredentials() const override { return allow_credentials_; };
-    bool enabled() const override { return false; };
+  struct NullHedgePolicy : public Router::HedgePolicy {
+    // Router::HedgePolicy
+    uint32_t initialRequests() const override { return 1; }
+    const envoy::type::FractionalPercent& additionalRequestChance() const override {
+      return additional_request_chance_;
+    }
+    bool hedgeOnPerTryTimeout() const override { return false; }
 
-    static const std::list<std::string> allow_origin_;
-    static const std::list<std::regex> allow_origin_regex_;
-    static const absl::optional<bool> allow_credentials_;
+    const envoy::type::FractionalPercent additional_request_chance_;
   };
 
   struct NullRateLimitPolicy : public Router::RateLimitPolicy {
@@ -134,14 +129,22 @@ private:
     const std::vector<uint32_t>& retriableStatusCodes() const override {
       return retriable_status_codes_;
     }
+    absl::optional<std::chrono::milliseconds> baseInterval() const override {
+      return absl::nullopt;
+    }
+    absl::optional<std::chrono::milliseconds> maxInterval() const override { return absl::nullopt; }
 
-    const std::vector<uint32_t> retriable_status_codes_;
+    const std::vector<uint32_t> retriable_status_codes_{};
   };
 
   struct NullShadowPolicy : public Router::ShadowPolicy {
     // Router::ShadowPolicy
     const std::string& cluster() const override { return EMPTY_STRING; }
     const std::string& runtimeKey() const override { return EMPTY_STRING; }
+    const envoy::type::FractionalPercent& defaultValue() const override { return default_value_; }
+
+  private:
+    envoy::type::FractionalPercent default_value_;
   };
 
   struct NullConfig : public Router::Config {
@@ -154,13 +157,14 @@ private:
     }
 
     const std::string& name() const override { return EMPTY_STRING; }
+    bool usesVhds() const override { return false; }
 
     static const std::list<LowerCaseString> internal_only_headers_;
   };
 
   struct NullVirtualHost : public Router::VirtualHost {
     // Router::VirtualHost
-    const std::string& name() const override { return EMPTY_STRING; }
+    Stats::StatName statName() const override { return {}; }
     const Router::RateLimitPolicy& rateLimitPolicy() const override { return rate_limit_policy_; }
     const Router::CorsPolicy* corsPolicy() const override { return nullptr; }
     const Router::Config& routeConfig() const override { return route_configuration_; }
@@ -193,6 +197,7 @@ private:
                                 bool) const override {}
     void finalizeResponseHeaders(Http::HeaderMap&, const StreamInfo::StreamInfo&) const override {}
     const Router::HashPolicy* hashPolicy() const override { return nullptr; }
+    const Router::HedgePolicy& hedgePolicy() const override { return hedge_policy_; }
     const Router::MetadataMatchCriteria* metadataMatchCriteria() const override { return nullptr; }
     Upstream::ResourcePriority priority() const override {
       return Upstream::ResourcePriority::Default;
@@ -209,6 +214,9 @@ private:
     }
     absl::optional<std::chrono::milliseconds> idleTimeout() const override { return absl::nullopt; }
     absl::optional<std::chrono::milliseconds> maxGrpcTimeout() const override {
+      return absl::nullopt;
+    }
+    absl::optional<std::chrono::milliseconds> grpcTimeoutOffset() const override {
       return absl::nullopt;
     }
     const Router::VirtualCluster* virtualCluster(const Http::HeaderMap&) const override {
@@ -231,7 +239,12 @@ private:
     }
 
     bool includeAttemptCount() const override { return false; }
-
+    const Router::RouteEntry::UpgradeMap& upgradeMap() const override { return upgrade_map_; }
+    Router::InternalRedirectAction internalRedirectAction() const override {
+      return Router::InternalRedirectAction::PassThrough;
+    }
+    const std::string& routeName() const override { return route_name_; }
+    static const NullHedgePolicy hedge_policy_;
     static const NullRateLimitPolicy rate_limit_policy_;
     static const NullRetryPolicy retry_policy_;
     static const NullShadowPolicy shadow_policy_;
@@ -242,8 +255,10 @@ private:
     static const Config::TypedMetadataImpl<Config::TypedMetadataFactory> typed_metadata_;
     static const NullPathMatchCriterion path_match_criterion_;
 
+    Router::RouteEntry::UpgradeMap upgrade_map_;
     const std::string& cluster_name_;
     absl::optional<std::chrono::milliseconds> timeout_;
+    const std::string route_name_;
   };
 
   struct RouteImpl : public Router::Route {
@@ -255,6 +270,7 @@ private:
     const Router::DirectResponseEntry* directResponseEntry() const override { return nullptr; }
     const Router::RouteEntry* routeEntry() const override { return &route_entry_; }
     const Router::Decorator* decorator() const override { return nullptr; }
+    const Router::RouteTracing* tracingConfig() const override { return nullptr; }
     const Router::RouteSpecificFilterConfig* perFilterConfig(const std::string&) const override {
       return nullptr;
     }
@@ -280,11 +296,24 @@ private:
   const Tracing::Config& tracingConfig() override { return tracing_config_; }
   void continueDecoding() override { NOT_IMPLEMENTED_GCOVR_EXCL_LINE; }
   HeaderMap& addDecodedTrailers() override { NOT_IMPLEMENTED_GCOVR_EXCL_LINE; }
-  void addDecodedData(Buffer::Instance&, bool) override { NOT_IMPLEMENTED_GCOVR_EXCL_LINE; }
+  void addDecodedData(Buffer::Instance&, bool) override {
+    // This should only be called if the user has set up buffering. The request is already fully
+    // buffered. Note that this is only called via the async client's internal use of the router
+    // filter which uses this function for buffering.
+    ASSERT(buffered_body_ != nullptr);
+  }
+  void injectDecodedDataToFilterChain(Buffer::Instance&, bool) override {
+    NOT_IMPLEMENTED_GCOVR_EXCL_LINE;
+  }
   const Buffer::Instance* decodingBuffer() override { return buffered_body_.get(); }
-  void sendLocalReply(Code code, const std::string& body,
+  void modifyDecodingBuffer(std::function<void(Buffer::Instance&)>) override {
+    NOT_IMPLEMENTED_GCOVR_EXCL_LINE;
+  }
+  void sendLocalReply(Code code, absl::string_view body,
                       std::function<void(HeaderMap& headers)> modify_headers,
-                      const absl::optional<Grpc::Status::GrpcStatus> grpc_status) override {
+                      const absl::optional<Grpc::Status::GrpcStatus> grpc_status,
+                      absl::string_view details) override {
+    stream_info_.setResponseCodeDetails(details);
     Utility::sendLocalReply(
         is_grpc_request_,
         [this, modify_headers](HeaderMapPtr&& headers, bool end_stream) -> void {
@@ -302,12 +331,16 @@ private:
   void encodeHeaders(HeaderMapPtr&& headers, bool end_stream) override;
   void encodeData(Buffer::Instance& data, bool end_stream) override;
   void encodeTrailers(HeaderMapPtr&& trailers) override;
+  void encodeMetadata(MetadataMapPtr&&) override {}
   void onDecoderFilterAboveWriteBufferHighWatermark() override {}
   void onDecoderFilterBelowWriteBufferLowWatermark() override {}
   void addDownstreamWatermarkCallbacks(DownstreamWatermarkCallbacks&) override {}
   void removeDownstreamWatermarkCallbacks(DownstreamWatermarkCallbacks&) override {}
   void setDecoderBufferLimit(uint32_t) override {}
   uint32_t decoderBufferLimit() override { return 0; }
+  bool recreateStream() override { return false; }
+  void addUpstreamSocketOptions(const Network::Socket::OptionsSharedPtr&) override {}
+  Network::Socket::OptionsSharedPtr getUpstreamSocketOptions() const override { return {}; }
 
   AsyncClient::StreamCallbacks& stream_callbacks_;
   const uint64_t stream_id_;
@@ -322,7 +355,9 @@ private:
   bool is_grpc_request_{};
   bool is_head_request_{false};
   bool send_xff_{true};
+
   friend class AsyncClientImpl;
+  friend class AsyncClientImplRouteTest;
 };
 
 class AsyncRequestImpl final : public AsyncClient::Request,
@@ -333,7 +368,7 @@ public:
                    const AsyncClient::RequestOptions& options);
 
   // AsyncClient::Request
-  virtual void cancel() override;
+  void cancel() override;
 
 private:
   void initialize();
@@ -346,7 +381,14 @@ private:
   void onReset() override;
 
   // Http::StreamDecoderFilterCallbacks
+  void addDecodedData(Buffer::Instance&, bool) override {
+    // The request is already fully buffered. Note that this is only called via the async client's
+    // internal use of the router filter which uses this function for buffering.
+  }
   const Buffer::Instance* decodingBuffer() override { return request_->body().get(); }
+  void modifyDecodingBuffer(std::function<void(Buffer::Instance&)>) override {
+    NOT_IMPLEMENTED_GCOVR_EXCL_LINE;
+  }
 
   MessagePtr request_;
   AsyncClient::Callbacks& callbacks_;

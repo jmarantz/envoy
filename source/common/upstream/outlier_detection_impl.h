@@ -148,21 +148,19 @@ private:
 /**
  * All outlier detection stats. @see stats_macros.h
  */
-// clang-format off
 #define ALL_OUTLIER_DETECTION_STATS(COUNTER, GAUGE)                                                \
-  COUNTER(ejections_total)                                                                         \
-  GAUGE  (ejections_active)                                                                        \
-  COUNTER(ejections_overflow)                                                                      \
   COUNTER(ejections_consecutive_5xx)                                                               \
-  COUNTER(ejections_success_rate)                                                                  \
-  COUNTER(ejections_enforced_total)                                                                \
   COUNTER(ejections_detected_consecutive_5xx)                                                      \
-  COUNTER(ejections_enforced_consecutive_5xx)                                                      \
-  COUNTER(ejections_detected_success_rate)                                                         \
-  COUNTER(ejections_enforced_success_rate)                                                         \
   COUNTER(ejections_detected_consecutive_gateway_failure)                                          \
-  COUNTER(ejections_enforced_consecutive_gateway_failure)
-// clang-format on
+  COUNTER(ejections_detected_success_rate)                                                         \
+  COUNTER(ejections_enforced_consecutive_5xx)                                                      \
+  COUNTER(ejections_enforced_consecutive_gateway_failure)                                          \
+  COUNTER(ejections_enforced_success_rate)                                                         \
+  COUNTER(ejections_enforced_total)                                                                \
+  COUNTER(ejections_overflow)                                                                      \
+  COUNTER(ejections_success_rate)                                                                  \
+  COUNTER(ejections_total)                                                                         \
+  GAUGE(ejections_active, Accumulate)
 
 /**
  * Struct definition for all outlier detection stats. @see stats_macros.h
@@ -235,15 +233,17 @@ private:
   void addHostMonitor(HostSharedPtr host);
   void armIntervalTimer();
   void checkHostForUneject(HostSharedPtr host, DetectorHostMonitorImpl* monitor, MonotonicTime now);
-  void ejectHost(HostSharedPtr host, EjectionType type);
+  void ejectHost(HostSharedPtr host, envoy::data::cluster::v2alpha::OutlierEjectionType type);
   static DetectionStats generateStats(Stats::Scope& scope);
   void initialize(const Cluster& cluster);
-  void onConsecutiveErrorWorker(HostSharedPtr host, EjectionType type);
-  void notifyMainThreadConsecutiveError(HostSharedPtr host, EjectionType type);
+  void onConsecutiveErrorWorker(HostSharedPtr host,
+                                envoy::data::cluster::v2alpha::OutlierEjectionType type);
+  void notifyMainThreadConsecutiveError(HostSharedPtr host,
+                                        envoy::data::cluster::v2alpha::OutlierEjectionType type);
   void onIntervalTimer();
   void runCallbacks(HostSharedPtr host);
-  bool enforceEjection(EjectionType type);
-  void updateEnforcedEjectionStats(EjectionType type);
+  bool enforceEjection(envoy::data::cluster::v2alpha::OutlierEjectionType type);
+  void updateEnforcedEjectionStats(envoy::data::cluster::v2alpha::OutlierEjectionType type);
   void processSuccessRateEjections();
 
   DetectorConfig config_;
@@ -266,15 +266,17 @@ public:
       : file_(log_manager.createAccessLog(file_name)), time_source_(time_source) {}
 
   // Upstream::Outlier::EventLogger
-  void logEject(HostDescriptionConstSharedPtr host, Detector& detector, EjectionType type,
-                bool enforced) override;
-  void logUneject(HostDescriptionConstSharedPtr host) override;
+  void logEject(const HostDescriptionConstSharedPtr& host, Detector& detector,
+                envoy::data::cluster::v2alpha::OutlierEjectionType type, bool enforced) override;
+
+  void logUneject(const HostDescriptionConstSharedPtr& host) override;
 
 private:
-  std::string typeToString(EjectionType type);
-  int secsSinceLastAction(const absl::optional<MonotonicTime>& lastActionTime, MonotonicTime now);
+  void setCommonEventParams(envoy::data::cluster::v2alpha::OutlierDetectionEvent& event,
+                            const HostDescriptionConstSharedPtr& host,
+                            absl::optional<MonotonicTime> time);
 
-  Filesystem::FileSharedPtr file_;
+  AccessLog::AccessLogFileSharedPtr file_;
   TimeSource& time_source_;
 };
 

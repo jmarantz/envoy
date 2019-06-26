@@ -23,14 +23,13 @@
 
 using testing::_;
 using testing::ContainsRegex;
+using testing::Eq;
 using testing::InSequence;
 using testing::Invoke;
 using testing::NiceMock;
 using testing::Ref;
 using testing::Return;
 using testing::ReturnRef;
-using testing::Test;
-using testing::TestWithParam;
 using testing::Values;
 
 namespace Envoy {
@@ -38,7 +37,6 @@ namespace Extensions {
 namespace NetworkFilters {
 namespace ThriftProxy {
 namespace Router {
-
 namespace {
 
 class TestNamedTransportConfigFactory : public NamedTransportConfigFactory {
@@ -330,29 +328,28 @@ public:
   NiceMock<Network::MockClientConnection> upstream_connection_;
 };
 
-class ThriftRouterTest : public ThriftRouterTestBase, public Test {
+class ThriftRouterTest : public testing::Test, public ThriftRouterTestBase {
 public:
-  ThriftRouterTest() {}
 };
 
-class ThriftRouterFieldTypeTest : public ThriftRouterTestBase, public TestWithParam<FieldType> {
+class ThriftRouterFieldTypeTest : public testing::TestWithParam<FieldType>,
+                                  public ThriftRouterTestBase {
 public:
-  ThriftRouterFieldTypeTest() {}
 };
 
-INSTANTIATE_TEST_CASE_P(PrimitiveFieldTypes, ThriftRouterFieldTypeTest,
-                        Values(FieldType::Bool, FieldType::Byte, FieldType::I16, FieldType::I32,
-                               FieldType::I64, FieldType::Double, FieldType::String),
-                        fieldTypeParamToString);
+INSTANTIATE_TEST_SUITE_P(PrimitiveFieldTypes, ThriftRouterFieldTypeTest,
+                         Values(FieldType::Bool, FieldType::Byte, FieldType::I16, FieldType::I32,
+                                FieldType::I64, FieldType::Double, FieldType::String),
+                         fieldTypeParamToString);
 
-class ThriftRouterContainerTest : public ThriftRouterTestBase, public TestWithParam<FieldType> {
+class ThriftRouterContainerTest : public testing::TestWithParam<FieldType>,
+                                  public ThriftRouterTestBase {
 public:
-  ThriftRouterContainerTest() {}
 };
 
-INSTANTIATE_TEST_CASE_P(ContainerFieldTypes, ThriftRouterContainerTest,
-                        Values(FieldType::Map, FieldType::List, FieldType::Set),
-                        fieldTypeParamToString);
+INSTANTIATE_TEST_SUITE_P(ContainerFieldTypes, ThriftRouterContainerTest,
+                         Values(FieldType::Map, FieldType::List, FieldType::Set),
+                         fieldTypeParamToString);
 
 TEST_F(ThriftRouterTest, PoolRemoteConnectionFailure) {
   initializeRouter();
@@ -445,7 +442,7 @@ TEST_F(ThriftRouterTest, NoCluster) {
   EXPECT_CALL(callbacks_, route()).WillOnce(Return(route_ptr_));
   EXPECT_CALL(*route_, routeEntry()).WillOnce(Return(&route_entry_));
   EXPECT_CALL(route_entry_, clusterName()).WillRepeatedly(ReturnRef(cluster_name_));
-  EXPECT_CALL(context_.cluster_manager_, get(cluster_name_)).WillOnce(Return(nullptr));
+  EXPECT_CALL(context_.cluster_manager_, get(Eq(cluster_name_))).WillOnce(Return(nullptr));
   EXPECT_CALL(callbacks_, sendLocalReply(_, _))
       .WillOnce(Invoke([&](const DirectResponse& response, bool end_stream) -> void {
         auto& app_ex = dynamic_cast<const AppException&>(response);
@@ -483,7 +480,7 @@ TEST_F(ThriftRouterTest, NoHealthyHosts) {
   EXPECT_CALL(callbacks_, route()).WillOnce(Return(route_ptr_));
   EXPECT_CALL(*route_, routeEntry()).WillOnce(Return(&route_entry_));
   EXPECT_CALL(route_entry_, clusterName()).WillRepeatedly(ReturnRef(cluster_name_));
-  EXPECT_CALL(context_.cluster_manager_, tcpConnPoolForCluster(cluster_name_, _, _))
+  EXPECT_CALL(context_.cluster_manager_, tcpConnPoolForCluster(cluster_name_, _, _, _))
       .WillOnce(Return(nullptr));
 
   EXPECT_CALL(callbacks_, sendLocalReply(_, _))

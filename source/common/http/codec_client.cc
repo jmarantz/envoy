@@ -36,7 +36,7 @@ CodecClient::CodecClient(Type type, Network::ClientConnectionPtr&& connection,
   connection_->noDelay(true);
 }
 
-CodecClient::~CodecClient() {}
+CodecClient::~CodecClient() = default;
 
 void CodecClient::close() { connection_->close(Network::ConnectionCloseType::NoFlush); }
 
@@ -115,11 +115,11 @@ void CodecClient::onData(Buffer::Instance& data) {
   try {
     codec_->dispatch(data);
   } catch (CodecProtocolException& e) {
-    ENVOY_CONN_LOG(info, "protocol error: {}", *connection_, e.what());
+    ENVOY_CONN_LOG(debug, "protocol error: {}", *connection_, e.what());
     close();
     protocol_error = true;
   } catch (PrematureResponseException& e) {
-    ENVOY_CONN_LOG(info, "premature response", *connection_);
+    ENVOY_CONN_LOG(debug, "premature response", *connection_);
     close();
 
     // Don't count 408 responses where we have no active requests as protocol errors
@@ -145,7 +145,8 @@ CodecClientProd::CodecClientProd(Type type, Network::ClientConnectionPtr&& conne
   }
   case Type::HTTP2: {
     codec_ = std::make_unique<Http2::ClientConnectionImpl>(
-        *connection_, *this, host->cluster().statsScope(), host->cluster().http2Settings());
+        *connection_, *this, host->cluster().statsScope(), host->cluster().http2Settings(),
+        Http::DEFAULT_MAX_REQUEST_HEADERS_KB);
     break;
   }
   }

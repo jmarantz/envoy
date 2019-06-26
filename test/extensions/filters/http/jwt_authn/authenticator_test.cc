@@ -27,11 +27,12 @@ namespace Envoy {
 namespace Extensions {
 namespace HttpFilters {
 namespace JwtAuthn {
+namespace {
 
-class AuthenticatorTest : public ::testing::Test {
+class AuthenticatorTest : public testing::Test {
 public:
-  void SetUp() {
-    MessageUtil::loadFromYaml(ExampleConfig, proto_config_);
+  void SetUp() override {
+    TestUtility::loadFromYaml(ExampleConfig, proto_config_);
     CreateAuthenticator();
   }
 
@@ -41,10 +42,10 @@ public:
     filter_config_ = ::std::make_shared<FilterConfig>(proto_config_, "", mock_factory_ctx_);
     raw_fetcher_ = new MockJwksFetcher;
     fetcher_.reset(raw_fetcher_);
-    auth_ = Authenticator::create(check_audience, provider, !provider,
-                                  filter_config_->getCache().getJwksCache(), filter_config_->cm(),
-                                  [this](Upstream::ClusterManager&) { return std::move(fetcher_); },
-                                  filter_config_->timeSource());
+    auth_ = Authenticator::create(
+        check_audience, provider, !provider, filter_config_->getCache().getJwksCache(),
+        filter_config_->cm(), [this](Upstream::ClusterManager&) { return std::move(fetcher_); },
+        filter_config_->timeSource());
     jwks_ = Jwks::createFrom(PublicKey, Jwks::JWKS);
     EXPECT_TRUE(jwks_->getStatus() == Status::Ok);
   }
@@ -137,7 +138,7 @@ TEST_F(AuthenticatorTest, TestSetPayload) {
   EXPECT_EQ(out_name_, "my_payload");
 
   ProtobufWkt::Struct expected_payload;
-  MessageUtil::loadFromJson(ExpectedPayloadJSON, expected_payload);
+  TestUtility::loadFromJson(ExpectedPayloadJSON, expected_payload);
   EXPECT_TRUE(TestUtility::protoEqual(out_payload_, expected_payload));
 }
 
@@ -259,7 +260,7 @@ TEST_F(AuthenticatorTest, TestPubkeyFetchFail) {
       Http::HeaderMapPtr{new Http::TestHeaderMapImpl{{":status", "401"}}}));
 }
 
-// This test verifies when a Jwks fetching is not completed yet, but onDestory() is called,
+// This test verifies when a Jwks fetching is not completed yet, but onDestroy() is called,
 // onComplete() callback should not be called, but internal request->cancel() should be called.
 // Most importantly, no crash.
 TEST_F(AuthenticatorTest, TestOnDestroy) {
@@ -278,7 +279,7 @@ TEST_F(AuthenticatorTest, TestOnDestroy) {
   auth_->onDestroy();
 }
 
-// This test verifies if "forward_playload_header" is empty, payload is not forwarded.
+// This test verifies if "forward_payload_header" is empty, payload is not forwarded.
 TEST_F(AuthenticatorTest, TestNoForwardPayloadHeader) {
   // In this config, there is no forward_payload_header
   auto& provider0 = (*proto_config_.mutable_providers())[std::string(ProviderName)];
@@ -410,6 +411,7 @@ TEST_F(AuthenticatorTest, TestInvalidPubkeyKey) {
   expectVerifyStatus(Status::JwksPemBadBase64, headers);
 }
 
+} // namespace
 } // namespace JwtAuthn
 } // namespace HttpFilters
 } // namespace Extensions

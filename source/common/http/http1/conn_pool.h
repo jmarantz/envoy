@@ -34,14 +34,16 @@ public:
                Upstream::ResourcePriority priority,
                const Network::ConnectionSocket::OptionsSharedPtr& options);
 
-  ~ConnPoolImpl();
+  ~ConnPoolImpl() override;
 
   // ConnectionPool::Instance
   Http::Protocol protocol() const override { return Http::Protocol::Http11; }
   void addDrainedCallback(DrainedCb cb) override;
   void drainConnections() override;
+  bool hasActiveConnections() const override;
   ConnectionPool::Cancellable* newStream(StreamDecoder& response_decoder,
                                          ConnectionPool::Callbacks& callbacks) override;
+  Upstream::HostDescriptionConstSharedPtr host() const override { return host_; };
 
   // ConnPoolImplBase
   void checkForDrained() override;
@@ -53,7 +55,7 @@ protected:
                          public StreamDecoderWrapper,
                          public StreamCallbacks {
     StreamWrapper(StreamDecoder& response_decoder, ActiveClient& parent);
-    ~StreamWrapper();
+    ~StreamWrapper() override;
 
     // StreamEncoderWrapper
     void onEncodeComplete() override;
@@ -64,23 +66,25 @@ protected:
     void onDecodeComplete() override;
 
     // Http::StreamCallbacks
-    void onResetStream(StreamResetReason) override { parent_.parent_.onDownstreamReset(parent_); }
+    void onResetStream(StreamResetReason, absl::string_view) override {
+      parent_.parent_.onDownstreamReset(parent_);
+    }
     void onAboveWriteBufferHighWatermark() override {}
     void onBelowWriteBufferLowWatermark() override {}
 
     ActiveClient& parent_;
     bool encode_complete_{};
-    bool saw_close_header_{};
+    bool close_connection_{};
     bool decode_complete_{};
   };
 
-  typedef std::unique_ptr<StreamWrapper> StreamWrapperPtr;
+  using StreamWrapperPtr = std::unique_ptr<StreamWrapper>;
 
   struct ActiveClient : LinkedObject<ActiveClient>,
                         public Network::ConnectionCallbacks,
                         public Event::DeferredDeletable {
     ActiveClient(ConnPoolImpl& parent);
-    ~ActiveClient();
+    ~ActiveClient() override;
 
     void onConnectTimeout();
 
@@ -100,7 +104,7 @@ protected:
     uint64_t remaining_requests_;
   };
 
-  typedef std::unique_ptr<ActiveClient> ActiveClientPtr;
+  using ActiveClientPtr = std::unique_ptr<ActiveClient>;
 
   void attachRequestToClient(ActiveClient& client, StreamDecoder& response_decoder,
                              ConnectionPool::Callbacks& callbacks);
@@ -125,9 +129,9 @@ protected:
 /**
  * Production implementation of the ConnPoolImpl.
  */
-class ConnPoolImplProd : public ConnPoolImpl {
+class ProdConnPoolImpl : public ConnPoolImpl {
 public:
-  ConnPoolImplProd(Event::Dispatcher& dispatcher, Upstream::HostConstSharedPtr host,
+  ProdConnPoolImpl(Event::Dispatcher& dispatcher, Upstream::HostConstSharedPtr host,
                    Upstream::ResourcePriority priority,
                    const Network::ConnectionSocket::OptionsSharedPtr& options)
       : ConnPoolImpl(dispatcher, host, priority, options) {}

@@ -37,18 +37,21 @@ public:
   AutonomousHttpConnection(SharedConnectionWrapper& shared_connection, Stats::Store& store,
                            Type type, AutonomousUpstream& upstream);
 
-  Http::StreamDecoder& newStream(Http::StreamEncoder& response_encoder) override;
+  Http::StreamDecoder& newStream(Http::StreamEncoder& response_encoder, bool) override;
 
 private:
   AutonomousUpstream& upstream_;
   std::vector<FakeStreamPtr> streams_;
 };
 
-typedef std::unique_ptr<AutonomousHttpConnection> AutonomousHttpConnectionPtr;
+using AutonomousHttpConnectionPtr = std::unique_ptr<AutonomousHttpConnection>;
 
 // An upstream which creates AutonomousHttpConnection for new incoming connections.
 class AutonomousUpstream : public FakeUpstream {
 public:
+  AutonomousUpstream(const Network::Address::InstanceConstSharedPtr& address,
+                     FakeHttpConnection::Type type, Event::TestTimeSystem& time_system)
+      : FakeUpstream(address, type, time_system) {}
   AutonomousUpstream(uint32_t port, FakeHttpConnection::Type type,
                      Network::Address::IpVersion version, Event::TestTimeSystem& time_system)
       : FakeUpstream(port, type, version, time_system) {}
@@ -57,6 +60,8 @@ public:
   createNetworkFilterChain(Network::Connection& connection,
                            const std::vector<Network::FilterFactoryCb>& filter_factories) override;
   bool createListenerFilterChain(Network::ListenerFilterManager& listener) override;
+  bool createUdpListenerFilterChain(Network::UdpListenerFilterManager& listener,
+                                    Network::UdpReadFilterCallbacks& callbacks) override;
 
   void setLastRequestHeaders(const Http::HeaderMap& headers);
   std::unique_ptr<Http::TestHeaderMapImpl> lastRequestHeaders();

@@ -8,6 +8,7 @@
 
 #include "common/protobuf/utility.h"
 
+#include "extensions/filters/common/ratelimit/ratelimit_impl.h"
 #include "extensions/filters/network/thrift_proxy/filters/ratelimit/ratelimit.h"
 
 namespace Envoy {
@@ -24,20 +25,21 @@ RateLimitFilterConfig::createFilterFactoryFromProtoTyped(
   ASSERT(!proto_config.domain().empty());
   ConfigSharedPtr config(new Config(proto_config, context.localInfo(), context.scope(),
                                     context.runtime(), context.clusterManager()));
-  const uint32_t timeout_ms = PROTOBUF_GET_MS_OR_DEFAULT(proto_config, timeout, 20);
-  return [config, timeout_ms,
-          &context](ThriftProxy::ThriftFilters::FilterChainFactoryCallbacks& callbacks) -> void {
+  const std::chrono::milliseconds timeout =
+      std::chrono::milliseconds(PROTOBUF_GET_MS_OR_DEFAULT(proto_config, timeout, 20));
+
+  return [proto_config, &context, timeout,
+          config](ThriftProxy::ThriftFilters::FilterChainFactoryCallbacks& callbacks) -> void {
     callbacks.addDecoderFilter(std::make_shared<Filter>(
-        config, context.rateLimitClient(std::chrono::milliseconds(timeout_ms))));
+        config, Filters::Common::RateLimit::rateLimitClient(
+                    context, proto_config.rate_limit_service().grpc_service(), timeout)));
   };
 }
 
 /**
  * Static registration for the rate limit filter. @see RegisterFactory.
  */
-static Registry::RegisterFactory<RateLimitFilterConfig,
-                                 ThriftProxy::ThriftFilters::NamedThriftFilterConfigFactory>
-    register_;
+REGISTER_FACTORY(RateLimitFilterConfig, ThriftProxy::ThriftFilters::NamedThriftFilterConfigFactory);
 
 } // namespace RateLimitFilter
 } // namespace ThriftFilters

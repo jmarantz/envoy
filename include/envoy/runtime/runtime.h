@@ -9,9 +9,18 @@
 #include "envoy/common/pure.h"
 #include "envoy/type/percent.pb.h"
 
+#include "common/common/assert.h"
+#include "common/singleton/threadsafe_singleton.h"
+
+#include "absl/container/flat_hash_map.h"
 #include "absl/types/optional.h"
 
 namespace Envoy {
+
+namespace Upstream {
+class ClusterManager;
+}
+
 namespace Runtime {
 
 /**
@@ -19,7 +28,7 @@ namespace Runtime {
  */
 class RandomGenerator {
 public:
-  virtual ~RandomGenerator() {}
+  virtual ~RandomGenerator() = default;
 
   /**
    * @return uint64_t a new random number.
@@ -33,22 +42,23 @@ public:
   virtual std::string uuid() PURE;
 };
 
-typedef std::unique_ptr<RandomGenerator> RandomGeneratorPtr;
+using RandomGeneratorPtr = std::unique_ptr<RandomGenerator>;
 
 /**
  * A snapshot of runtime data.
  */
 class Snapshot {
 public:
-  virtual ~Snapshot() {}
+  virtual ~Snapshot() = default;
 
   struct Entry {
     std::string raw_string_value_;
     absl::optional<uint64_t> uint_value_;
     absl::optional<envoy::type::FractionalPercent> fractional_percent_value_;
+    absl::optional<bool> bool_value_;
   };
 
-  typedef std::unordered_map<std::string, Entry> EntryMap;
+  using EntryMap = absl::flat_hash_map<std::string, Entry>;
 
   /**
    * A provider of runtime values. One or more of these compose the snapshot's source of values,
@@ -56,12 +66,12 @@ public:
    */
   class OverrideLayer {
   public:
-    virtual ~OverrideLayer() {}
+    virtual ~OverrideLayer() = default;
 
     /**
-     * @return const std::unordered_map<std::string, Entry>& the values in this layer.
+     * @return const absl::flat_hash_map<std::string, Entry>& the values in this layer.
      */
-    virtual const std::unordered_map<std::string, Snapshot::Entry>& values() const PURE;
+    virtual const EntryMap& values() const PURE;
 
     /**
      * @return const std::string& a user-friendly alias for this layer, e.g. "admin" or "disk".
@@ -69,7 +79,22 @@ public:
     virtual const std::string& name() const PURE;
   };
 
-  typedef std::unique_ptr<const OverrideLayer> OverrideLayerConstPtr;
+  using OverrideLayerConstPtr = std::unique_ptr<const OverrideLayer>;
+
+  // Returns true if a deprecated feature is allowed.
+  //
+  // Fundamentally, deprecated features are boolean values.
+  // They are allowed by default or with explicit configuration to "true" via runtime configuration.
+  // They can be disallowed either by inclusion in the hard-coded disallowed_features[] list, or by
+  // configuration of "false" in runtime config.
+  virtual bool deprecatedFeatureEnabled(const std::string& key) const PURE;
+
+  // Returns true if a runtime feature is enabled.
+  //
+  // Runtime features are used to easily allow switching between old and new code paths for high
+  // risk changes. The intent is for the old code path to be short lived - the old code path is
+  // deprecated as the feature is defaulted true, and removed with the following Envoy release.
+  virtual bool runtimeFeatureEnabled(absl::string_view key) const PURE;
 
   /**
    * Test if a feature is enabled using the built in random generator. This is done by generating
@@ -184,7 +209,15 @@ public:
  */
 class Loader {
 public:
-  virtual ~Loader() {}
+  virtual ~Loader() = default;
+
+  /**
+   * Post-construction initialization. Runtime will be generally available after
+   * the constructor is finished, with the exception of dynamic RTDS layers,
+   * which require ClusterManager.
+   * @param cm cluster manager reference.
+   */
+  virtual void initialize(Upstream::ClusterManager& cm) PURE;
 
   /**
    * @return Snapshot& the current snapshot. This reference is safe to use for the duration of
@@ -201,7 +234,17 @@ public:
   virtual void mergeValues(const std::unordered_map<std::string, std::string>& values) PURE;
 };
 
-typedef std::unique_ptr<Loader> LoaderPtr;
+using LoaderPtr = std::unique_ptr<Loader>;
+
+// To make the runtime generally accessible, we make use of the dreaded
+// singleton class. For Envoy, the runtime will be created and cleaned up by the
+// Server::InstanceImpl initialize() and destructor, respectively.
+//
+// This makes it possible for call sites to easily make use of runtime values to
+// determine if a given feature is on or off, as well as various deprecated configuration
+// protos being enabled or disabled by default.
+using LoaderSingleton = InjectableSingleton<Loader>;
+using ScopedLoaderSingleton = ScopedInjectableLoader<Loader>;
 
 } // namespace Runtime
 } // namespace Envoy

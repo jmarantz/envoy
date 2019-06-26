@@ -17,6 +17,14 @@ namespace Extensions {
 namespace HttpFilters {
 namespace RateLimitFilter {
 
+struct RcDetailsValues {
+  // This request went above the configured limits for the rate limit filter.
+  const std::string RateLimited = "request_rate_limited";
+  // The rate limiter encountered a failure, and was configured to fail-closed.
+  const std::string RateLimitError = "rate_limiter_error";
+};
+using RcDetails = ConstSingleton<RcDetailsValues>;
+
 void Filter::initiateCall(const Http::HeaderMap& headers) {
   bool is_internal_request =
       headers.EnvoyInternalRequest() && (headers.EnvoyInternalRequest()->value() == "true");
@@ -36,7 +44,7 @@ void Filter::initiateCall(const Http::HeaderMap& headers) {
     return;
   }
 
-  std::vector<RateLimit::Descriptor> descriptors;
+  std::vector<Envoy::RateLimit::Descriptor> descriptors;
 
   const Router::RouteEntry* route_entry = route->routeEntry();
   // Get all applicable rate limit policy entries for the route.
@@ -104,6 +112,10 @@ Http::FilterTrailersStatus Filter::encodeTrailers(Http::HeaderMap&) {
   return Http::FilterTrailersStatus::Continue;
 }
 
+Http::FilterMetadataStatus Filter::encodeMetadata(Http::MetadataMap&) {
+  return Http::FilterMetadataStatus::Continue;
+}
+
 void Filter::setEncoderFilterCallbacks(Http::StreamEncoderFilterCallbacks&) {}
 
 void Filter::onDestroy() {
@@ -113,43 +125,45 @@ void Filter::onDestroy() {
   }
 }
 
-void Filter::complete(RateLimit::LimitStatus status, Http::HeaderMapPtr&& headers) {
+void Filter::complete(Filters::Common::RateLimit::LimitStatus status,
+                      Http::HeaderMapPtr&& headers) {
   state_ = State::Complete;
   headers_to_add_ = std::move(headers);
+  Stats::StatName empty_stat_name;
 
   switch (status) {
-  case RateLimit::LimitStatus::OK:
+  case Filters::Common::RateLimit::LimitStatus::OK:
     cluster_->statsScope().counter("ratelimit.ok").inc();
     break;
-  case RateLimit::LimitStatus::Error:
+  case Filters::Common::RateLimit::LimitStatus::Error:
     cluster_->statsScope().counter("ratelimit.error").inc();
     break;
-  case RateLimit::LimitStatus::OverLimit:
+  case Filters::Common::RateLimit::LimitStatus::OverLimit:
     cluster_->statsScope().counter("ratelimit.over_limit").inc();
-    Http::CodeUtility::ResponseStatInfo info{config_->scope(),
-                                             cluster_->statsScope(),
-                                             EMPTY_STRING,
-                                             enumToInt(Http::Code::TooManyRequests),
-                                             true,
-                                             EMPTY_STRING,
-                                             EMPTY_STRING,
-                                             EMPTY_STRING,
-                                             EMPTY_STRING,
-                                             false};
-    Http::CodeUtility::chargeResponseStat(info);
+    Http::CodeStats::ResponseStatInfo info{config_->scope(),
+                                           cluster_->statsScope(),
+                                           empty_stat_name,
+                                           enumToInt(Http::Code::TooManyRequests),
+                                           true,
+                                           empty_stat_name,
+                                           empty_stat_name,
+                                           empty_stat_name,
+                                           empty_stat_name,
+                                           false};
+    httpContext().codeStats().chargeResponseStat(info);
     headers_to_add_->insertEnvoyRateLimited().value(
         Http::Headers::get().EnvoyRateLimitedValues.True);
     break;
   }
 
-  if (status == RateLimit::LimitStatus::OverLimit &&
+  if (status == Filters::Common::RateLimit::LimitStatus::OverLimit &&
       config_->runtime().snapshot().featureEnabled("ratelimit.http_filter_enforcing", 100)) {
     state_ = State::Responded;
-    callbacks_->sendLocalReply(Http::Code::TooManyRequests, "",
-                               [this](Http::HeaderMap& headers) { addHeaders(headers); },
-                               config_->rateLimitedGrpcStatus());
+    callbacks_->sendLocalReply(
+        Http::Code::TooManyRequests, "", [this](Http::HeaderMap& headers) { addHeaders(headers); },
+        config_->rateLimitedGrpcStatus(), RcDetails::get().RateLimited);
     callbacks_->streamInfo().setResponseFlag(StreamInfo::ResponseFlag::RateLimited);
-  } else if (status == RateLimit::LimitStatus::Error) {
+  } else if (status == Filters::Common::RateLimit::LimitStatus::Error) {
     if (config_->failureModeAllow()) {
       cluster_->statsScope().counter("ratelimit.failure_mode_allowed").inc();
       if (!initiating_call_) {
@@ -157,7 +171,8 @@ void Filter::complete(RateLimit::LimitStatus status, Http::HeaderMapPtr&& header
       }
     } else {
       state_ = State::Responded;
-      callbacks_->sendLocalReply(Http::Code::InternalServerError, "", nullptr, absl::nullopt);
+      callbacks_->sendLocalReply(Http::Code::InternalServerError, "", nullptr, absl::nullopt,
+                                 RcDetails::get().RateLimitError);
       callbacks_->streamInfo().setResponseFlag(StreamInfo::ResponseFlag::RateLimitServiceError);
     }
   } else if (!initiating_call_) {

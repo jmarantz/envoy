@@ -10,7 +10,9 @@ General
 -------
 
 The cluster manager has a statistics tree rooted at *cluster_manager.* with the following
-statistics. Any ``:`` character in the stats name is replaced with ``_``.
+statistics. Any ``:`` character in the stats name is replaced with ``_``. Stats include
+all clusters managed by the cluster manager, including both clusters used for data plane
+upstreams and control plane xDS clusters.
 
 .. csv-table::
   :header: Name, Type, Description
@@ -54,6 +56,7 @@ Every cluster has a statistics tree rooted at *cluster.<name>.* with the followi
   upstream_cx_rx_bytes_buffered, Gauge, Received connection bytes currently buffered
   upstream_cx_tx_bytes_total, Counter, Total sent connection bytes
   upstream_cx_tx_bytes_buffered, Gauge, Send connection bytes currently buffered
+  upstream_cx_pool_overflow, Counter, Total times that the cluster's connection pool circuit breaker overflowed
   upstream_cx_protocol_error, Counter, Total connection protocol errors
   upstream_cx_max_requests, Counter, Total connections closed due to maximum requests
   upstream_cx_none_healthy, Counter, Total times connection not established due to no healthy hosts
@@ -76,8 +79,11 @@ Every cluster has a statistics tree rooted at *cluster.<name>.* with the followi
   upstream_flow_control_resumed_reading_total, Counter, Total number of times flow control resumed reading from upstream
   upstream_flow_control_backed_up_total, Counter, Total number of times the upstream connection backed up and paused reads from downstream
   upstream_flow_control_drained_total, Counter, Total number of times the upstream connection drained and resumed reads from downstream
+  upstream_internal_redirect_failed_total, Counter, Total number of times failed internal redirects resulted in redirects being passed downstream.
+  upstream_internal_redirect_succeed_total, Counter, Total number of times internal redirects resulted in a second upstream request.
   membership_change, Counter, Total cluster membership changes
   membership_healthy, Gauge, Current cluster healthy total (inclusive of both health checking and outlier detection)
+  membership_degraded, Gauge, Current cluster degraded total
   membership_total, Gauge, Current cluster membership total
   retry_or_shadow_abandoned, Counter, Total number of times shadowing or retry buffering was canceled due to buffer limits
   config_reload, Counter, Total API fetches that resulted in a config reload due to a different config
@@ -89,6 +95,8 @@ Every cluster has a statistics tree rooted at *cluster.<name>.* with the followi
   version, Gauge, Hash of the contents from the last successful API fetch
   max_host_weight, Gauge, Maximum weight of any host in the cluster
   bind_errors, Counter, Total errors binding the socket to the configured source address
+  assignment_timeout_received, Counter, Total assignments received with endpoint lease information.
+  assignment_stale, Counter, Number of times the received assignments went stale before new assignments arrived.
 
 Health check statistics
 -----------------------
@@ -144,9 +152,14 @@ Circuit breakers statistics will be rooted at *cluster.<name>.circuit_breakers.<
   :widths: 1, 1, 2
 
   cx_open, Gauge, Whether the connection circuit breaker is closed (0) or open (1)
+  cx_pool_open, Gauge, Whether the connection pool circuit breaker is closed (0) or open (1)
   rq_pending_open, Gauge, Whether the pending requests circuit breaker is closed (0) or open (1)
   rq_open, Gauge, Whether the requests circuit breaker is closed (0) or open (1)
   rq_retry_open, Gauge, Whether the retry circuit breaker is closed (0) or open (1)
+  remaining_cx, Gauge, Number of remaining connections until the circuit breaker opens
+  remaining_pending, Gauge, Number of remaining pending requests until the circuit breaker opens
+  remaining_rq, Gauge, Number of remaining requests until the circuit breaker opens
+  remaining_retries, Gauge, Number of remaining retries until the circuit breaker opens
 
 .. _config_cluster_manager_cluster_stats_dynamic_http:
 
@@ -230,7 +243,7 @@ the following statistics:
 Load balancer subset statistics
 -------------------------------
 
-Statistics for monitoring `load balancer subset <arch_overview_load_balancer_subsets>`
+Statistics for monitoring :ref:`load balancer subset <arch_overview_load_balancer_subsets>`
 decisions. Stats are rooted at *cluster.<name>.* and contain the following statistics:
 
 .. csv-table::
@@ -242,3 +255,37 @@ decisions. Stats are rooted at *cluster.<name>.* and contain the following stati
   lb_subsets_removed, Counter, Number of subsets removed due to no hosts
   lb_subsets_selected, Counter, Number of times any subset was selected for load balancing
   lb_subsets_fallback, Counter, Number of times the fallback policy was invoked
+  lb_subsets_fallback_panic, Counter, Number of times the subset panic mode triggered
+
+.. _config_cluster_manager_cluster_stats_ring_hash_lb:
+
+Ring hash load balancer statistics
+----------------------------------
+
+Statistics for monitoring the size and effective distribution of hashes when using the
+:ref:`ring hash load balancer <arch_overview_load_balancing_types_ring_hash>`. Stats are rooted at
+*cluster.<name>.ring_hash_lb.* and contain the following statistics:
+
+.. csv-table::
+  :header: Name, Type, Description
+  :widths: 1, 1, 2
+
+  size, Gauge, Total number of host hashes on the ring
+  min_hashes_per_host, Gauge, Minimum number of hashes for a single host
+  max_hashes_per_host, Gauge, Maximum number of hashes for a single host
+
+.. _config_cluster_manager_cluster_stats_maglev_lb:
+
+Maglev load balancer statistics
+-------------------------------
+
+Statistics for monitoring effective host weights when using the
+:ref:`Maglev load balancer <arch_overview_load_balancing_types_maglev>`. Stats are rooted at
+*cluster.<name>.maglev_lb.* and contain the following statistics:
+
+.. csv-table::
+  :header: Name, Type, Description
+  :widths: 1, 1, 2
+
+  min_entries_per_host, Gauge, Minimum number of entries for a single host
+  max_entries_per_host, Gauge, Maximum number of entries for a single host

@@ -4,7 +4,6 @@
 
 #include "envoy/config/accesslog/v2/file.pb.h"
 
-#include "common/filesystem/filesystem_impl.h"
 #include "common/http/header_map_impl.h"
 #include "common/protobuf/utility.h"
 
@@ -46,7 +45,7 @@ void WebsocketIntegrationTest::validateUpgradeRequestHeaders(
     const Http::HeaderMap& original_request_headers) {
   Http::TestHeaderMapImpl proxied_request_headers(original_proxied_request_headers);
   if (proxied_request_headers.ForwardedProto()) {
-    ASSERT_STREQ(proxied_request_headers.ForwardedProto()->value().c_str(), "http");
+    ASSERT_EQ(proxied_request_headers.ForwardedProto()->value().getStringView(), "http");
     proxied_request_headers.removeForwardedProto();
   }
 
@@ -56,7 +55,7 @@ void WebsocketIntegrationTest::validateUpgradeRequestHeaders(
   proxied_request_headers.removeEnvoyExpectedRequestTimeoutMs();
 
   if (proxied_request_headers.Scheme()) {
-    ASSERT_STREQ(proxied_request_headers.Scheme()->value().c_str(), "http");
+    ASSERT_EQ(proxied_request_headers.Scheme()->value().getStringView(), "http");
   } else {
     proxied_request_headers.insertScheme().value().append("http", 4);
   }
@@ -75,7 +74,7 @@ void WebsocketIntegrationTest::validateUpgradeResponseHeaders(
   // Check for and remove headers added by default for HTTP responses.
   ASSERT_TRUE(proxied_response_headers.Date() != nullptr);
   ASSERT_TRUE(proxied_response_headers.Server() != nullptr);
-  ASSERT_STREQ(proxied_response_headers.Server()->value().c_str(), "envoy");
+  ASSERT_EQ(proxied_response_headers.Server()->value().getStringView(), "envoy");
   proxied_response_headers.removeDate();
   proxied_response_headers.removeServer();
 
@@ -94,22 +93,22 @@ void WebsocketIntegrationTest::commonValidate(Http::HeaderMap& proxied_headers,
   // If no content length is specified, the HTTP1 codec will add a chunked encoding header.
   if (original_headers.ContentLength() == nullptr &&
       proxied_headers.TransferEncoding() != nullptr) {
-    ASSERT_STREQ(proxied_headers.TransferEncoding()->value().c_str(), "chunked");
+    ASSERT_EQ(proxied_headers.TransferEncoding()->value().getStringView(), "chunked");
     proxied_headers.removeTransferEncoding();
   }
   if (proxied_headers.Connection() != nullptr &&
       proxied_headers.Connection()->value() == "upgrade" &&
       original_headers.Connection() != nullptr &&
       original_headers.Connection()->value() == "keep-alive, upgrade") {
-    // The keep-alive is implicit for HTTP/1.1, so Enovy only sets the upgrade
+    // The keep-alive is implicit for HTTP/1.1, so Envoy only sets the upgrade
     // header when converting from HTTP/1.1 to H2
     proxied_headers.Connection()->value().setCopy("keep-alive, upgrade", 19);
   }
 }
 
-INSTANTIATE_TEST_CASE_P(Protocols, WebsocketIntegrationTest,
-                        testing::ValuesIn(HttpProtocolIntegrationTest::getProtocolTestParams()),
-                        HttpProtocolIntegrationTest::protocolTestParamsToString);
+INSTANTIATE_TEST_SUITE_P(Protocols, WebsocketIntegrationTest,
+                         testing::ValuesIn(HttpProtocolIntegrationTest::getProtocolTestParams()),
+                         HttpProtocolIntegrationTest::protocolTestParamsToString);
 
 ConfigHelper::HttpModifierFunction setRouteUsingWebsocket() {
   return
@@ -282,7 +281,7 @@ TEST_P(WebsocketIntegrationTest, WebSocketConnectionIdleTimeout) {
   ASSERT_TRUE(waitForUpstreamDisconnectOrReset());
 }
 
-// Technically not a websocket tests, but verfies normal upgrades have parity
+// Technically not a websocket tests, but verifies normal upgrades have parity
 // with websocket upgrades
 TEST_P(WebsocketIntegrationTest, NonWebsocketUpgrade) {
   config_helper_.addConfigModifier(
@@ -293,6 +292,36 @@ TEST_P(WebsocketIntegrationTest, NonWebsocketUpgrade) {
       });
 
   config_helper_.addConfigModifier(setRouteUsingWebsocket());
+  initialize();
+
+  performUpgrade(upgradeRequestHeaders("foo", 0), upgradeResponseHeaders("foo"));
+  sendBidirectionalData();
+  codec_client_->sendData(*request_encoder_, "bye!", false);
+  if (downstreamProtocol() == Http::CodecClient::Type::HTTP1) {
+    codec_client_->close();
+  } else {
+    codec_client_->sendReset(*request_encoder_);
+  }
+
+  ASSERT_TRUE(upstream_request_->waitForData(*dispatcher_, "hellobye!"));
+  ASSERT_TRUE(waitForUpstreamDisconnectOrReset());
+
+  auto upgrade_response_headers(upgradeResponseHeaders("foo"));
+  validateUpgradeResponseHeaders(response_->headers(), upgrade_response_headers);
+  codec_client_->close();
+}
+
+TEST_P(WebsocketIntegrationTest, RouteSpecificUpgrade) {
+  config_helper_.addConfigModifier(
+      [&](envoy::config::filter::network::http_connection_manager::v2::HttpConnectionManager& hcm)
+          -> void {
+        auto* foo_upgrade = hcm.add_upgrade_configs();
+        foo_upgrade->set_upgrade_type("foo");
+        foo_upgrade->mutable_enabled()->set_value(false);
+      });
+  auto host = config_helper_.createVirtualHost("host", "/websocket/test");
+  host.mutable_routes(0)->mutable_route()->add_upgrade_configs()->set_upgrade_type("foo");
+  config_helper_.addVirtualHost(host);
   initialize();
 
   performUpgrade(upgradeRequestHeaders("foo", 0), upgradeResponseHeaders("foo"));
@@ -328,7 +357,7 @@ TEST_P(WebsocketIntegrationTest, WebsocketCustomFilterChain) {
         auto* filter_list_back = foo_upgrade->add_filters();
         const std::string json =
             Json::Factory::loadFromYamlString("name: envoy.router")->asJsonString();
-        MessageUtil::loadFromJson(json, *filter_list_back);
+        TestUtility::loadFromJson(json, *filter_list_back);
       });
   initialize();
 
@@ -340,7 +369,7 @@ TEST_P(WebsocketIntegrationTest, WebsocketCustomFilterChain) {
     response_ = std::move(encoder_decoder.second);
     codec_client_->sendData(encoder_decoder.first, large_req_str, false);
     response_->waitForEndStream();
-    EXPECT_STREQ("413", response_->headers().Status()->value().c_str());
+    EXPECT_EQ("413", response_->headers().Status()->value().getStringView());
     waitForClientDisconnectOrReset();
     codec_client_->close();
   }
@@ -357,7 +386,7 @@ TEST_P(WebsocketIntegrationTest, WebsocketCustomFilterChain) {
     response_ = std::move(encoder_decoder.second);
     codec_client_->sendData(encoder_decoder.first, large_req_str, false);
     response_->waitForEndStream();
-    EXPECT_STREQ("413", response_->headers().Status()->value().c_str());
+    EXPECT_EQ("413", response_->headers().Status()->value().getStringView());
     waitForClientDisconnectOrReset();
     codec_client_->close();
   }
@@ -414,7 +443,7 @@ TEST_P(WebsocketIntegrationTest, BidirectionalChunkedData) {
   codec_client_->sendData(*request_encoder_, "FinalClientPayload", false);
   ASSERT_TRUE(upstream_request_->waitForData(*dispatcher_, request_payload + "FinalClientPayload"));
   upstream_request_->encodeData("FinalServerPayload", false);
-  response_->waitForBodyData(5);
+  response_->waitForBodyData(response_->body().size() + 5);
   EXPECT_EQ(response_payload + "FinalServerPayload", response_->body());
 
   // Clean up.

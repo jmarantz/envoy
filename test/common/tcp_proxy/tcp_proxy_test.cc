@@ -7,6 +7,8 @@
 #include "common/buffer/buffer_impl.h"
 #include "common/config/filter_json.h"
 #include "common/network/address_impl.h"
+#include "common/network/transport_socket_options_impl.h"
+#include "common/network/upstream_server_name.h"
 #include "common/router/metadatamatchcriteria_impl.h"
 #include "common/tcp_proxy/tcp_proxy.h"
 #include "common/upstream/upstream_impl.h"
@@ -18,11 +20,13 @@
 #include "test/mocks/network/mocks.h"
 #include "test/mocks/runtime/mocks.h"
 #include "test/mocks/server/mocks.h"
+#include "test/mocks/ssl/mocks.h"
 #include "test/mocks/stream_info/mocks.h"
 #include "test/mocks/tcp/mocks.h"
 #include "test/mocks/upstream/host.h"
 #include "test/mocks/upstream/mocks.h"
 #include "test/test_common/printers.h"
+#include "test/test_common/utility.h"
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -39,6 +43,9 @@ using testing::SaveArg;
 
 namespace Envoy {
 namespace TcpProxy {
+namespace {
+
+using ::Envoy::Network::UpstreamServerName;
 
 namespace {
 Config constructConfigFromJson(const Json::Object& json,
@@ -47,6 +54,7 @@ Config constructConfigFromJson(const Json::Object& json,
   Envoy::Config::FilterJson::translateTcpProxy(json, tcp_proxy);
   return Config(tcp_proxy, context);
 }
+
 } // namespace
 
 TEST(ConfigTest, NoRouteConfig) {
@@ -268,7 +276,7 @@ TEST(ConfigTest, Routes) {
   }
 
   {
-    // hit route with destination_ip (2001:abcd/64")
+    // hit route with destination_ip ("2001:abcd/64")
     NiceMock<Network::MockConnection> connection;
     connection.local_address_ =
         std::make_shared<Network::Address::Ipv6Instance>("2001:abcd:0:0:1::");
@@ -324,7 +332,7 @@ TEST(ConfigTest, AccessLogConfig) {
     file_access_log.set_path("some_path");
     file_access_log.set_format("the format specifier");
     ProtobufWkt::Struct* custom_config = log->mutable_config();
-    MessageUtil::jsonConvert(file_access_log, *custom_config);
+    TestUtility::jsonConvert(file_access_log, *custom_config);
   }
 
   log = config.mutable_access_log()->Add();
@@ -333,7 +341,7 @@ TEST(ConfigTest, AccessLogConfig) {
     envoy::config::accesslog::v2::FileAccessLog file_access_log;
     file_access_log.set_path("another path");
     ProtobufWkt::Struct* custom_config = log->mutable_config();
-    MessageUtil::jsonConvert(file_access_log, *custom_config);
+    TestUtility::jsonConvert(file_access_log, *custom_config);
   }
 
   NiceMock<Server::Configuration::MockFactoryContext> factory_context_;
@@ -378,7 +386,7 @@ public:
     envoy::config::accesslog::v2::FileAccessLog file_access_log;
     file_access_log.set_path("unused");
     file_access_log.set_format(access_log_format);
-    MessageUtil::jsonConvert(file_access_log, *access_log->mutable_config());
+    TestUtility::jsonConvert(file_access_log, *access_log->mutable_config());
 
     return config;
   }
@@ -413,7 +421,8 @@ public:
     {
       testing::InSequence sequence;
       for (uint32_t i = 0; i < connections; i++) {
-        EXPECT_CALL(factory_context_.cluster_manager_, tcpConnPoolForCluster("fake_cluster", _, _))
+        EXPECT_CALL(factory_context_.cluster_manager_,
+                    tcpConnPoolForCluster("fake_cluster", _, _, _))
             .WillOnce(Return(&conn_pool_))
             .RetiresOnSaturation();
         EXPECT_CALL(conn_pool_, newConnection(_))
@@ -424,7 +433,7 @@ public:
                 }))
             .RetiresOnSaturation();
       }
-      EXPECT_CALL(factory_context_.cluster_manager_, tcpConnPoolForCluster("fake_cluster", _, _))
+      EXPECT_CALL(factory_context_.cluster_manager_, tcpConnPoolForCluster("fake_cluster", _, _, _))
           .WillRepeatedly(Return(nullptr));
     }
 
@@ -467,9 +476,10 @@ public:
 
   Event::TestTimeSystem& timeSystem() { return factory_context_.timeSystem(); }
 
-  ConfigSharedPtr config_;
-  NiceMock<Network::MockReadFilterCallbacks> filter_callbacks_;
   NiceMock<Server::Configuration::MockFactoryContext> factory_context_;
+  ConfigSharedPtr config_;
+  std::unique_ptr<Filter> filter_;
+  NiceMock<Network::MockReadFilterCallbacks> filter_callbacks_;
   std::vector<std::shared_ptr<NiceMock<Upstream::MockHost>>> upstream_hosts_{};
   std::vector<std::unique_ptr<NiceMock<Network::MockClientConnection>>> upstream_connections_{};
   std::vector<std::unique_ptr<NiceMock<Tcp::ConnectionPool::MockConnectionData>>>
@@ -478,7 +488,6 @@ public:
   std::vector<std::unique_ptr<NiceMock<Tcp::ConnectionPool::MockCancellable>>> conn_pool_handles_;
   NiceMock<Tcp::ConnectionPool::MockInstance> conn_pool_;
   Tcp::ConnectionPool::UpstreamCallbacks* upstream_callbacks_;
-  std::unique_ptr<Filter> filter_;
   StringViewSaver access_log_data_;
   Network::Address::InstanceConstSharedPtr upstream_local_address_;
   Network::Address::InstanceConstSharedPtr upstream_remote_address_;
@@ -602,7 +611,8 @@ TEST_F(TcpProxyTest, ConnectAttemptsUpstreamTimeout) {
 
 // Test that only the configured number of connect attempts occur
 TEST_F(TcpProxyTest, ConnectAttemptsLimit) {
-  envoy::config::filter::network::tcp_proxy::v2::TcpProxy config = defaultConfig();
+  envoy::config::filter::network::tcp_proxy::v2::TcpProxy config =
+      accessLogConfig("%RESPONSE_FLAGS%");
   config.mutable_max_connect_attempts()->set_value(3);
   setup(3, config);
 
@@ -621,6 +631,9 @@ TEST_F(TcpProxyTest, ConnectAttemptsLimit) {
                                   Tcp::ConnectionPool::PoolFailureReason::RemoteConnectionFailure);
   raiseEventUpstreamConnectFailed(2,
                                   Tcp::ConnectionPool::PoolFailureReason::RemoteConnectionFailure);
+
+  filter_.reset();
+  EXPECT_EQ(access_log_data_, "UF,URX");
 }
 
 // Test that the tcp proxy sends the correct notifications to the outlier detector
@@ -706,7 +719,7 @@ TEST_F(TcpProxyTest, UpstreamConnectTimeout) {
   raiseEventUpstreamConnectFailed(0, Tcp::ConnectionPool::PoolFailureReason::Timeout);
 
   filter_.reset();
-  EXPECT_EQ(access_log_data_, "UF");
+  EXPECT_EQ(access_log_data_, "UF,URX");
 }
 
 TEST_F(TcpProxyTest, NoHost) {
@@ -781,13 +794,13 @@ TEST_F(TcpProxyTest, UpstreamConnectFailure) {
                                   Tcp::ConnectionPool::PoolFailureReason::RemoteConnectionFailure);
 
   filter_.reset();
-  EXPECT_EQ(access_log_data_, "UF");
+  EXPECT_EQ(access_log_data_, "UF,URX");
 }
 
 TEST_F(TcpProxyTest, UpstreamConnectionLimit) {
   configure(accessLogConfig("%RESPONSE_FLAGS%"));
   factory_context_.cluster_manager_.thread_local_cluster_.cluster_.info_->resetResourceManager(
-      0, 0, 0, 0);
+      0, 0, 0, 0, 0);
 
   // setup sets up expectation for tcpConnForCluster but this test is expected to NOT call that
   filter_ = std::make_unique<Filter>(config_, factory_context_.cluster_manager_, timeSystem());
@@ -924,6 +937,43 @@ TEST_F(TcpProxyTest, AccessLogUpstreamLocalAddress) {
   filter_callbacks_.connection_.raiseEvent(Network::ConnectionEvent::RemoteClose);
   filter_.reset();
   EXPECT_EQ(access_log_data_, "2.2.2.2:50000");
+}
+
+// Test that access log fields %DOWNSTREAM_PEER_URI_SAN% is correctly logged.
+TEST_F(TcpProxyTest, AccessLogPeerUriSan) {
+  filter_callbacks_.connection_.local_address_ =
+      Network::Utility::resolveUrl("tcp://1.1.1.2:20000");
+  filter_callbacks_.connection_.remote_address_ =
+      Network::Utility::resolveUrl("tcp://1.1.1.1:40000");
+
+  const std::vector<std::string> uriSan{"someSan"};
+  Ssl::MockConnectionInfo mockConnectionInfo;
+  EXPECT_CALL(mockConnectionInfo, uriSanPeerCertificate()).WillOnce(Return(uriSan));
+  EXPECT_CALL(filter_callbacks_.connection_, ssl()).WillRepeatedly(Return(&mockConnectionInfo));
+
+  setup(1, accessLogConfig("%DOWNSTREAM_PEER_URI_SAN%"));
+  filter_callbacks_.connection_.raiseEvent(Network::ConnectionEvent::RemoteClose);
+  filter_.reset();
+  EXPECT_EQ(access_log_data_, "someSan");
+}
+
+// Test that access log fields %DOWNSTREAM_TLS_SESSION_ID% is correctly logged.
+TEST_F(TcpProxyTest, AccessLogTlsSessionId) {
+  filter_callbacks_.connection_.local_address_ =
+      Network::Utility::resolveUrl("tcp://1.1.1.2:20000");
+  filter_callbacks_.connection_.remote_address_ =
+      Network::Utility::resolveUrl("tcp://1.1.1.1:40000");
+
+  const std::string tlsSessionId{
+      "D62A523A65695219D46FE1FFE285A4C371425ACE421B110B5B8D11D3EB4D5F0B"};
+  Ssl::MockConnectionInfo mockConnectionInfo;
+  EXPECT_CALL(mockConnectionInfo, sessionId()).WillOnce(Return(tlsSessionId));
+  EXPECT_CALL(filter_callbacks_.connection_, ssl()).WillRepeatedly(Return(&mockConnectionInfo));
+
+  setup(1, accessLogConfig("%DOWNSTREAM_TLS_SESSION_ID%"));
+  filter_callbacks_.connection_.raiseEvent(Network::ConnectionEvent::RemoteClose);
+  filter_.reset();
+  EXPECT_EQ(access_log_data_, "D62A523A65695219D46FE1FFE285A4C371425ACE421B110B5B8D11D3EB4D5F0B");
 }
 
 // Test that access log fields %DOWNSTREAM_REMOTE_ADDRESS_WITHOUT_PORT% and
@@ -1097,10 +1147,10 @@ public:
 
   Event::TestTimeSystem& timeSystem() { return factory_context_.timeSystem(); }
 
+  NiceMock<Server::Configuration::MockFactoryContext> factory_context_;
   ConfigSharedPtr config_;
   NiceMock<Network::MockConnection> connection_;
   NiceMock<Network::MockReadFilterCallbacks> filter_callbacks_;
-  NiceMock<Server::Configuration::MockFactoryContext> factory_context_;
   std::unique_ptr<Filter> filter_;
 };
 
@@ -1134,7 +1184,7 @@ TEST_F(TcpProxyRoutingTest, RoutableConnection) {
   connection_.local_address_ = std::make_shared<Network::Address::Ipv4Instance>("1.2.3.4", 9999);
 
   // Expect filter to try to open a connection to specified cluster.
-  EXPECT_CALL(factory_context_.cluster_manager_, tcpConnPoolForCluster("fake_cluster", _, _))
+  EXPECT_CALL(factory_context_.cluster_manager_, tcpConnPoolForCluster("fake_cluster", _, _, _))
       .WillOnce(Return(nullptr));
 
   filter_->onNewConnection();
@@ -1156,11 +1206,44 @@ TEST_F(TcpProxyRoutingTest, UseClusterFromPerConnectionCluster) {
 
   // Expect filter to try to open a connection to specified cluster.
   EXPECT_CALL(factory_context_.cluster_manager_,
-              tcpConnPoolForCluster("filter_state_cluster", _, _))
+              tcpConnPoolForCluster("filter_state_cluster", _, _, _))
       .WillOnce(Return(nullptr));
 
   filter_->onNewConnection();
 }
 
+// Test that the tcp proxy forwards the requested server name from FilterState if set
+TEST_F(TcpProxyRoutingTest, UpstreamServerName) {
+  setup();
+
+  NiceMock<StreamInfo::MockStreamInfo> stream_info;
+  stream_info.filterState().setData("envoy.network.upstream_server_name",
+                                    std::make_unique<UpstreamServerName>("www.example.com"),
+                                    StreamInfo::FilterState::StateType::ReadOnly);
+
+  ON_CALL(connection_, streamInfo()).WillByDefault(ReturnRef(stream_info));
+  EXPECT_CALL(Const(connection_), streamInfo()).WillRepeatedly(ReturnRef(stream_info));
+
+  // Expect filter to try to open a connection to a cluster with the transport socket options with
+  // override-server-name
+  EXPECT_CALL(factory_context_.cluster_manager_, tcpConnPoolForCluster(_, _, _, _))
+      .WillOnce(Invoke([](const std::string& cluster, Upstream::ResourcePriority,
+                          Upstream::LoadBalancerContext*,
+                          Network::TransportSocketOptionsSharedPtr transport_socket_options)
+                           -> Tcp::ConnectionPool::Instance* {
+        EXPECT_EQ(cluster, "fake_cluster");
+        EXPECT_NE(transport_socket_options, nullptr);
+        EXPECT_TRUE(transport_socket_options->serverNameOverride().has_value());
+        EXPECT_EQ(transport_socket_options->serverNameOverride().value(), "www.example.com");
+        return nullptr;
+      }));
+
+  // Port 9999 is within the specified destination port range.
+  connection_.local_address_ = std::make_shared<Network::Address::Ipv4Instance>("1.2.3.4", 9999);
+
+  filter_->onNewConnection();
+}
+
+} // namespace
 } // namespace TcpProxy
 } // namespace Envoy

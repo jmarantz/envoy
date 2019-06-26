@@ -36,9 +36,14 @@ public:
 
   // Router::RetryState
   bool enabled() override { return retry_on_ != 0; }
-  RetryStatus shouldRetry(const Http::HeaderMap* response_headers,
-                          const absl::optional<Http::StreamResetReason>& reset_reason,
-                          DoRetryCallback callback) override;
+  RetryStatus shouldRetryHeaders(const Http::HeaderMap& response_headers,
+                                 DoRetryCallback callback) override;
+  // Returns true if the retry policy would retry the passed headers. Does not
+  // take into account circuit breaking or remaining tries.
+  bool wouldRetryFromHeaders(const Http::HeaderMap& response_headers) override;
+  RetryStatus shouldRetryReset(const Http::StreamResetReason reset_reason,
+                               DoRetryCallback callback) override;
+  RetryStatus shouldHedgeRetryPerTryTimeout(DoRetryCallback callback) override;
 
   void onHostAttempted(Upstream::HostDescriptionConstSharedPtr host) override {
     std::for_each(retry_host_predicates_.begin(), retry_host_predicates_.end(),
@@ -54,13 +59,13 @@ public:
         [&host](auto predicate) { return predicate->shouldSelectAnotherHost(host); });
   }
 
-  const Upstream::PriorityLoad&
+  const Upstream::HealthyAndDegradedLoad&
   priorityLoadForRetry(const Upstream::PrioritySet& priority_set,
-                       const Upstream::PriorityLoad& priority_load) override {
+                       const Upstream::HealthyAndDegradedLoad& original_priority_load) override {
     if (!retry_priority_) {
-      return priority_load;
+      return original_priority_load;
     }
-    return retry_priority_->determinePriorityLoad(priority_set, priority_load);
+    return retry_priority_->determinePriorityLoad(priority_set, original_priority_load);
   }
 
   uint32_t hostSelectionMaxAttempts() const override { return host_selection_max_attempts_; }
@@ -73,10 +78,8 @@ private:
 
   void enableBackoffTimer();
   void resetRetry();
-  bool wouldRetry(const Http::HeaderMap* response_headers,
-                  const absl::optional<Http::StreamResetReason>& reset_reason);
-  bool wouldRetryFromReset(const Http::StreamResetReason& reset_reason);
-  bool wouldRetryFromHeaders(const Http::HeaderMap& response_headers);
+  bool wouldRetryFromReset(const Http::StreamResetReason reset_reason);
+  RetryStatus shouldRetry(bool would_retry, DoRetryCallback callback);
 
   const Upstream::ClusterInfo& cluster_;
   Runtime::Loader& runtime_;

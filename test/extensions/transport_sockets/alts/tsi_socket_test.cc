@@ -12,6 +12,7 @@ namespace Envoy {
 namespace Extensions {
 namespace TransportSockets {
 namespace Alts {
+namespace {
 
 using testing::NiceMock;
 using testing::Return;
@@ -399,13 +400,14 @@ protected:
 };
 
 TEST_F(TsiSocketFactoryTest, CreateTransportSocket) {
-  EXPECT_NE(nullptr, socket_factory_->createTransportSocket());
+  EXPECT_NE(nullptr, socket_factory_->createTransportSocket(nullptr));
 }
 
 TEST_F(TsiSocketFactoryTest, ImplementsSecureTransport) {
   EXPECT_TRUE(socket_factory_->implementsSecureTransport());
 }
 
+} // namespace
 } // namespace Alts
 } // namespace TransportSockets
 } // namespace Extensions

@@ -2,14 +2,18 @@
 
 #include <numeric>
 
+#include "envoy/api/api.h"
 #include "envoy/common/exception.h"
 #include "envoy/json/json_object.h"
+#include "envoy/protobuf/message_validator.h"
+#include "envoy/runtime/runtime.h"
 #include "envoy/type/percent.pb.h"
 
 #include "common/common/hash.h"
 #include "common/common/utility.h"
 #include "common/json/json_loader.h"
 #include "common/protobuf/protobuf.h"
+#include "common/singleton/const_singleton.h"
 
 // Obtain the value of a wrapped field (e.g. google.protobuf.UInt32Value) if set. Otherwise, return
 // the default value.
@@ -57,6 +61,15 @@ uint64_t checkAndReturnDefault(uint64_t default_value, uint64_t max_value);
 uint64_t convertPercent(double percent, uint64_t max_value);
 
 /**
+ * Given a fractional percent chance of a given event occurring, evaluate to a yes/no decision
+ * based on a provided random value.
+ * @param percent the chance of a given event happening.
+ * @param random_value supplies a numerical value to use to evaluate the event.
+ * @return bool decision about whether the event should occur.
+ */
+bool evaluateFractionalPercent(envoy::type::FractionalPercent percent, uint64_t random_value);
+
+/**
  * Convert a fractional percent denominator enum into an integer.
  * @param denominator supplies denominator to convert.
  * @return the converted denominator.
@@ -92,7 +105,7 @@ public:
 
 class RepeatedPtrUtil {
 public:
-  static std::string join(const Protobuf::RepeatedPtrField<ProtobufTypes::String>& source,
+  static std::string join(const Protobuf::RepeatedPtrField<std::string>& source,
                           const std::string& delimiter) {
     return StringUtil::join(std::vector<std::string>(source.begin(), source.end()), delimiter);
   }
@@ -114,7 +127,7 @@ public:
   static std::size_t hash(const Protobuf::RepeatedPtrField<ProtoType>& source) {
     // Use Protobuf::io::CodedOutputStream to force deterministic serialization, so that the same
     // message doesn't hash to different values.
-    ProtobufTypes::String text;
+    std::string text;
     {
       // For memory safety, the StringOutputStream needs to be destroyed before
       // we read the string.
@@ -127,14 +140,31 @@ public:
     }
     return HashUtil::xxHash64(text);
   }
+
+  /**
+   * Converts a proto repeated field into a container of const Protobuf::Message unique_ptr's.
+   *
+   * @param repeated_field the proto repeated field to convert.
+   * @return ReturnType the container of const Message pointers.
+   */
+  template <typename ProtoType, typename ReturnType>
+  static ReturnType
+  convertToConstMessagePtrContainer(const Protobuf::RepeatedPtrField<ProtoType>& repeated_field) {
+    ReturnType ret_container;
+    std::transform(repeated_field.begin(), repeated_field.end(), std::back_inserter(ret_container),
+                   [](const ProtoType& proto_message) -> std::unique_ptr<const Protobuf::Message> {
+                     Protobuf::Message* clone = proto_message.New();
+                     clone->MergeFrom(proto_message);
+                     return std::unique_ptr<const Protobuf::Message>(clone);
+                   });
+    return ret_container;
+  }
 };
 
 class ProtoValidationException : public EnvoyException {
 public:
   ProtoValidationException(const std::string& validation_error, const Protobuf::Message& message);
 };
-
-enum class ProtoUnknownFieldsMode { Strict, Allow };
 
 class MessageUtil {
 public:
@@ -146,10 +176,21 @@ public:
     return Protobuf::util::MessageDifferencer::Equivalent(lhs, rhs);
   }
 
+  class FileExtensionValues {
+  public:
+    const std::string ProtoBinary = ".pb";
+    const std::string ProtoBinaryLengthDelimited = ".pb_length_delimited";
+    const std::string ProtoText = ".pb_text";
+    const std::string Json = ".json";
+    const std::string Yaml = ".yaml";
+  };
+
+  using FileExtensions = ConstSingleton<FileExtensionValues>;
+
   static std::size_t hash(const Protobuf::Message& message) {
     // Use Protobuf::io::CodedOutputStream to force deterministic serialization, so that the same
     // message doesn't hash to different values.
-    ProtobufTypes::String text;
+    std::string text;
     {
       // For memory safety, the StringOutputStream needs to be destroyed before
       // we read the string.
@@ -161,21 +202,31 @@ public:
     return HashUtil::xxHash64(text);
   }
 
-  static ProtoUnknownFieldsMode proto_unknown_fields;
-
-  static void checkUnknownFields(const Protobuf::Message& message) {
-    if (MessageUtil::proto_unknown_fields == ProtoUnknownFieldsMode::Strict &&
-        !message.GetReflection()->GetUnknownFields(message).empty()) {
-      throw EnvoyException("Protobuf message (type " + message.GetTypeName() +
-                           ") has unknown fields");
+  static void checkUnknownFields(const Protobuf::Message& message,
+                                 ProtobufMessage::ValidationVisitor& validation_visitor) {
+    if (!message.GetReflection()->GetUnknownFields(message).empty()) {
+      validation_visitor.onUnknownField("type " + message.GetTypeName());
     }
   }
 
-  static void loadFromJson(const std::string& json, Protobuf::Message& message);
-  static void loadFromJsonEx(const std::string& json, Protobuf::Message& message,
-                             ProtoUnknownFieldsMode proto_unknown_fields);
-  static void loadFromYaml(const std::string& yaml, Protobuf::Message& message);
-  static void loadFromFile(const std::string& path, Protobuf::Message& message);
+  static void loadFromJson(const std::string& json, Protobuf::Message& message,
+                           ProtobufMessage::ValidationVisitor& validation_visitor);
+  static void loadFromJson(const std::string& json, ProtobufWkt::Struct& message);
+  static void loadFromYaml(const std::string& yaml, Protobuf::Message& message,
+                           ProtobufMessage::ValidationVisitor& validation_visitor);
+  static void loadFromFile(const std::string& path, Protobuf::Message& message,
+                           ProtobufMessage::ValidationVisitor& validation_visitor, Api::Api& api);
+
+  /**
+   * Checks for use of deprecated fields in message and all sub-messages.
+   * @param message message to validate.
+   * @param loader optional a pointer to the runtime loader for live deprecation status.
+   * @throw ProtoValidationException if deprecated fields are used and listed
+   *    in disallowed_features in runtime_features.h
+   */
+  static void
+  checkForDeprecation(const Protobuf::Message& message,
+                      Runtime::Loader* loader = Runtime::LoaderSingleton::getExisting());
 
   /**
    * Validate protoc-gen-validate constraints on a given protobuf.
@@ -185,6 +236,9 @@ public:
    * @throw ProtoValidationException if the message does not satisfy its type constraints.
    */
   template <class MessageType> static void validate(const MessageType& message) {
+    // Log warnings or throw errors if deprecated fields are in use.
+    checkForDeprecation(message);
+
     std::string err;
     if (!Validate(message, &err)) {
       throw ProtoValidationException(err, message);
@@ -192,14 +246,16 @@ public:
   }
 
   template <class MessageType>
-  static void loadFromFileAndValidate(const std::string& path, MessageType& message) {
-    loadFromFile(path, message);
+  static void loadFromFileAndValidate(const std::string& path, MessageType& message,
+                                      ProtobufMessage::ValidationVisitor& validation_visitor) {
+    loadFromFile(path, message, validation_visitor);
     validate(message);
   }
 
   template <class MessageType>
-  static void loadFromYamlAndValidate(const std::string& yaml, MessageType& message) {
-    loadFromYaml(yaml, message);
+  static void loadFromYamlAndValidate(const std::string& yaml, MessageType& message,
+                                      ProtobufMessage::ValidationVisitor& validation_visitor) {
+    loadFromYaml(yaml, message, validation_visitor);
     validate(message);
   }
 
@@ -221,15 +277,18 @@ public:
   /**
    * Convert from google.protobuf.Any to a typed message.
    * @param message source google.protobuf.Any message.
+   * @param validation_visitor message validation visitor instance.
+   *
    * @return MessageType the typed message inside the Any.
    */
   template <class MessageType>
-  static inline MessageType anyConvert(const ProtobufWkt::Any& message) {
+  static inline MessageType anyConvert(const ProtobufWkt::Any& message,
+                                       ProtobufMessage::ValidationVisitor& validation_visitor) {
     MessageType typed_message;
     if (!message.UnpackTo(&typed_message)) {
       throw EnvoyException("Unable to unpack " + message.DebugString());
     }
-    checkUnknownFields(typed_message);
+    checkUnknownFields(typed_message, validation_visitor);
     return typed_message;
   };
 
@@ -241,7 +300,22 @@ public:
    * @param source message.
    * @param dest message.
    */
-  static void jsonConvert(const Protobuf::Message& source, Protobuf::Message& dest);
+  static void jsonConvert(const Protobuf::Message& source, ProtobufWkt::Struct& dest);
+  static void jsonConvert(const ProtobufWkt::Struct& source,
+                          ProtobufMessage::ValidationVisitor& validation_visitor,
+                          Protobuf::Message& dest);
+
+  /**
+   * Extract YAML as string from a google.protobuf.Message.
+   * @param message message of type type.googleapis.com/google.protobuf.Message.
+   * @param block_print whether the returned JSON should be in block style rather than flow style.
+   * @param always_print_primitive_fields whether to include primitive fields set to their default
+   * values, e.g. an int32 set to 0 or a bool set to false.
+   * @return std::string of formatted YAML object.
+   */
+  static std::string getYamlStringFromMessage(const Protobuf::Message& message,
+                                              const bool block_print = true,
+                                              const bool always_print_primitive_fields = false);
 
   /**
    * Extract JSON as string from a google.protobuf.Message.
@@ -271,6 +345,13 @@ public:
    * @param value the string value to associate with the key
    */
   static ProtobufWkt::Struct keyValueStruct(const std::string& key, const std::string& value);
+
+  /**
+   * Utility method to print a human readable string of the code passed in.
+   *
+   * @param code the protobuf error code
+   */
+  static std::string CodeEnumToString(ProtobufUtil::error::Code code);
 };
 
 class ValueUtil {

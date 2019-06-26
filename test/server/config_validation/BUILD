@@ -18,7 +18,7 @@ envoy_cc_test(
         "//source/server/config_validation:dns_lib",
         "//test/mocks/http:http_mocks",
         "//test/mocks/upstream:upstream_mocks",
-        "//test/test_common:test_time_lib",
+        "//test/test_common:simulated_time_system_lib",
     ],
 )
 
@@ -29,8 +29,8 @@ envoy_cc_test(
         "//include/envoy/upstream:resource_manager_interface",
         "//include/envoy/upstream:upstream_interface",
         "//source/common/api:api_lib",
-        "//source/common/ssl:context_lib",
         "//source/common/stats:stats_lib",
+        "//source/extensions/transport_sockets/tls:context_lib",
         "//source/server/config_validation:cluster_manager_lib",
         "//source/server/config_validation:dns_lib",
         "//test/mocks/access_log:access_log_mocks",
@@ -38,6 +38,7 @@ envoy_cc_test(
         "//test/mocks/http:http_mocks",
         "//test/mocks/local_info:local_info_mocks",
         "//test/mocks/network:network_mocks",
+        "//test/mocks/protobuf:protobuf_mocks",
         "//test/mocks/runtime:runtime_mocks",
         "//test/mocks/secret:secret_mocks",
         "//test/mocks/server:server_mocks",
@@ -58,7 +59,7 @@ envoy_cc_test(
     deps = [
         "//source/extensions/filters/http/router:config",
         "//source/extensions/filters/network/http_connection_manager:config",
-        "//source/extensions/transport_sockets/ssl:config",
+        "//source/extensions/transport_sockets/tls:config",
         "//source/server/config_validation:server_lib",
         "//test/integration:integration_lib",
         "//test/mocks/server:server_mocks",
@@ -73,6 +74,7 @@ envoy_cc_test(
     srcs = ["dispatcher_test.cc"],
     deps = [
         "//source/common/event:libevent_lib",
+        "//source/common/stats:isolated_store_lib",
         "//source/server/config_validation:api_lib",
         "//source/server/config_validation:dns_lib",
         "//test/test_common:environment_lib",
@@ -86,6 +88,7 @@ envoy_cc_fuzz_test(
     srcs = ["config_fuzz_test.cc"],
     corpus = "//test/server:server_fuzz_test_corpus",
     deps = [
+        "//source/common/common:thread_lib",
         "//source/server/config_validation:server_lib",
         "//source/server:proto_descriptors_lib",
         "//test/integration:integration_lib",

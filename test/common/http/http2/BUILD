@@ -4,36 +4,18 @@ load(
     "//bazel:envoy_build_system.bzl",
     "envoy_cc_fuzz_test",
     "envoy_cc_test",
+    "envoy_cc_test_library",
     "envoy_package",
-    "envoy_proto_library",
 )
 
 envoy_package()
 
-envoy_proto_library(
-    name = "codec_impl_fuzz_proto",
-    srcs = ["codec_impl_fuzz.proto"],
-    deps = ["//test/fuzz:common_proto"],
-)
-
-envoy_cc_fuzz_test(
-    name = "codec_impl_fuzz_test",
-    srcs = ["codec_impl_fuzz_test.cc"],
-    corpus = "codec_impl_corpus",
-    deps = [
-        ":codec_impl_fuzz_proto_cc",
-        "//source/common/http:header_map_lib",
-        "//source/common/http/http2:codec_lib",
-        "//test/fuzz:utility_lib",
-        "//test/mocks/http:http_mocks",
-        "//test/mocks/network:network_mocks",
-    ],
-)
-
 envoy_cc_test(
     name = "codec_impl_test",
     srcs = ["codec_impl_test.cc"],
+    shard_count = 5,
     deps = [
+        ":codec_impl_test_util",
         "//source/common/event:dispatcher_lib",
         "//source/common/http:exception_lib",
         "//source/common/http:header_map_lib",
@@ -44,6 +26,14 @@ envoy_cc_test(
         "//test/mocks/network:network_mocks",
         "//test/mocks/upstream:upstream_mocks",
         "//test/test_common:utility_lib",
+    ],
+)
+
+envoy_cc_test_library(
+    name = "codec_impl_test_util",
+    hdrs = ["codec_impl_test_util.h"],
+    deps = [
+        "//source/common/http/http2:codec_lib",
     ],
 )
 
@@ -63,8 +53,36 @@ envoy_cc_test(
         "//test/mocks/network:network_mocks",
         "//test/mocks/runtime:runtime_mocks",
         "//test/mocks/upstream:upstream_mocks",
-        "//test/test_common:test_time_lib",
     ],
+)
+
+envoy_cc_test_library(
+    name = "frame_replay_lib",
+    srcs = ["frame_replay.cc"],
+    hdrs = ["frame_replay.h"],
+    deps = [
+        "//source/common/common:hex_lib",
+        "//source/common/common:macros",
+        "//source/common/http/http2:codec_lib",
+        "//test/common/http:common_lib",
+        "//test/common/http/http2:codec_impl_test_util",
+        "//test/mocks/http:http_mocks",
+        "//test/mocks/network:network_mocks",
+        "//test/test_common:environment_lib",
+        "//test/test_common:utility_lib",
+    ],
+)
+
+envoy_cc_test(
+    name = "frame_replay_test",
+    srcs = ["frame_replay_test.cc"],
+    data = [
+        "request_header_corpus/simple_example_huffman",
+        "request_header_corpus/simple_example_plain",
+        "response_header_corpus/simple_example_huffman",
+        "response_header_corpus/simple_example_plain",
+    ],
+    deps = [":frame_replay_lib"],
 )
 
 envoy_cc_test(
@@ -80,4 +98,18 @@ envoy_cc_test(
         "//source/common/runtime:runtime_lib",
         "//test/test_common:utility_lib",
     ],
+)
+
+envoy_cc_fuzz_test(
+    name = "response_header_fuzz_test",
+    srcs = ["response_header_fuzz_test.cc"],
+    corpus = "response_header_corpus",
+    deps = [":frame_replay_lib"],
+)
+
+envoy_cc_fuzz_test(
+    name = "request_header_fuzz_test",
+    srcs = ["request_header_fuzz_test.cc"],
+    corpus = "request_header_corpus",
+    deps = [":frame_replay_lib"],
 )

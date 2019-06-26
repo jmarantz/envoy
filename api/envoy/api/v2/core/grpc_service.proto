@@ -2,6 +2,10 @@ syntax = "proto3";
 
 package envoy.api.v2.core;
 
+option java_outer_classname = "GrpcServiceProto";
+option java_multiple_files = true;
+option java_package = "io.envoyproxy.envoy.api.v2.core";
+
 import "envoy/api/v2/core/base.proto";
 
 import "google/protobuf/any.proto";
@@ -82,7 +86,6 @@ message GrpcService {
         oneof config_type {
           google.protobuf.Struct config = 2;
 
-          // [#not-implemented-hide:]
           google.protobuf.Any typed_config = 3;
         }
       }

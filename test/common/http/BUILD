@@ -19,6 +19,7 @@ envoy_cc_test(
         ":common_lib",
         "//source/common/buffer:buffer_lib",
         "//source/common/http:async_client_lib",
+        "//source/common/http:context_lib",
         "//source/common/http:headers_lib",
         "//source/common/http:utility_lib",
         "//test/mocks:common_lib",
@@ -53,8 +54,29 @@ envoy_cc_test(
         "//test/mocks/upstream:upstream_mocks",
         "//test/test_common:environment_lib",
         "//test/test_common:network_utility_lib",
-        "//test/test_common:test_time_lib",
         "//test/test_common:utility_lib",
+    ],
+)
+
+envoy_proto_library(
+    name = "codec_impl_fuzz_proto",
+    srcs = ["codec_impl_fuzz.proto"],
+    deps = ["//test/fuzz:common_proto"],
+)
+
+envoy_cc_fuzz_test(
+    name = "codec_impl_fuzz_test",
+    srcs = ["codec_impl_fuzz_test.cc"],
+    corpus = "codec_impl_corpus",
+    deps = [
+        ":codec_impl_fuzz_proto_cc",
+        "//source/common/http:header_map_lib",
+        "//source/common/http/http1:codec_lib",
+        "//source/common/http/http2:codec_lib",
+        "//test/common/http/http2:codec_impl_test_util",
+        "//test/fuzz:utility_lib",
+        "//test/mocks/http:http_mocks",
+        "//test/mocks/network:network_mocks",
     ],
 )
 
@@ -88,7 +110,6 @@ envoy_cc_test_binary(
         "benchmark",
     ],
     deps = [
-        "//source/common/common:empty_string",
         "//source/common/http:codes_lib",
         "//source/common/stats:isolated_store_lib",
         "//source/common/stats:stats_lib",
@@ -108,6 +129,17 @@ envoy_cc_test_library(
     ],
 )
 
+envoy_cc_test_library(
+    name = "conn_manager_impl_common_lib",
+    hdrs = ["conn_manager_impl_common.h"],
+    deps = [
+        "//include/envoy/common:time_interface",
+        "//include/envoy/config:config_provider_interface",
+        "//include/envoy/router:rds_interface",
+        "//test/mocks/router:router_mocks",
+    ],
+)
+
 envoy_proto_library(
     name = "conn_manager_impl_fuzz_proto",
     srcs = ["conn_manager_impl_fuzz.proto"],
@@ -121,9 +153,11 @@ envoy_cc_fuzz_test(
     srcs = ["conn_manager_impl_fuzz_test.cc"],
     corpus = "conn_manager_impl_corpus",
     deps = [
+        ":conn_manager_impl_common_lib",
         ":conn_manager_impl_fuzz_proto_cc",
         "//source/common/common:empty_string",
         "//source/common/http:conn_manager_lib",
+        "//source/common/http:context_lib",
         "//source/common/http:date_provider_lib",
         "//source/common/network:address_lib",
         "//source/common/network:utility_lib",
@@ -145,6 +179,7 @@ envoy_cc_test(
     name = "conn_manager_impl_test",
     srcs = ["conn_manager_impl_test.cc"],
     deps = [
+        ":conn_manager_impl_common_lib",
         "//include/envoy/access_log:access_log_interface",
         "//include/envoy/buffer:buffer_interface",
         "//include/envoy/event:dispatcher_interface",
@@ -155,6 +190,7 @@ envoy_cc_test(
         "//source/common/common:macros",
         "//source/common/event:dispatcher_lib",
         "//source/common/http:conn_manager_lib",
+        "//source/common/http:context_lib",
         "//source/common/http:date_provider_lib",
         "//source/common/http:exception_lib",
         "//source/common/http:header_map_lib",
@@ -220,6 +256,17 @@ envoy_cc_test(
     ],
 )
 
+envoy_cc_test_binary(
+    name = "header_map_impl_speed_test",
+    srcs = ["header_map_impl_speed_test.cc"],
+    external_deps = [
+        "benchmark",
+    ],
+    deps = [
+        "//source/common/http:header_map_lib",
+    ],
+)
+
 envoy_proto_library(
     name = "header_map_impl_fuzz_proto",
     srcs = ["header_map_impl_fuzz.proto"],
@@ -232,6 +279,7 @@ envoy_cc_fuzz_test(
     deps = [
         ":header_map_impl_fuzz_proto_cc",
         "//source/common/http:header_map_lib",
+        "//test/fuzz:utility_lib",
     ],
 )
 
@@ -268,6 +316,7 @@ envoy_cc_fuzz_test(
     deps = [
         ":utility_fuzz_proto_cc",
         "//source/common/http:utility_lib",
+        "//test/fuzz:utility_lib",
         "//test/test_common:utility_lib",
     ],
 )
@@ -284,5 +333,14 @@ envoy_cc_test(
         "//test/mocks/http:http_mocks",
         "//test/mocks/upstream:upstream_mocks",
         "//test/test_common:utility_lib",
+    ],
+)
+
+envoy_cc_test(
+    name = "path_utility_test",
+    srcs = ["path_utility_test.cc"],
+    deps = [
+        "//source/common/http:header_map_lib",
+        "//source/common/http:path_utility_lib",
     ],
 )

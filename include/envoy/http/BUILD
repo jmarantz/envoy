@@ -32,6 +32,7 @@ envoy_cc_library(
 envoy_cc_library(
     name = "codes_interface",
     hdrs = ["codes.h"],
+    deps = ["//include/envoy/stats:stats_interface"],
 )
 
 envoy_cc_library(
@@ -41,6 +42,15 @@ envoy_cc_library(
         ":codec_interface",
         "//include/envoy/event:deferred_deletable",
         "//include/envoy/upstream:upstream_interface",
+    ],
+)
+
+envoy_cc_library(
+    name = "context_interface",
+    hdrs = ["context.h"],
+    deps = [
+        ":codes_interface",
+        "//include/envoy/tracing:http_tracer_interface",
     ],
 )
 
@@ -63,7 +73,10 @@ envoy_cc_library(
 envoy_cc_library(
     name = "header_map_interface",
     hdrs = ["header_map.h"],
-    deps = ["//source/common/common:hash_lib"],
+    deps = [
+        "//source/common/common:assert_lib",
+        "//source/common/common:hash_lib",
+    ],
 )
 
 envoy_cc_library(

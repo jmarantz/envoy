@@ -23,19 +23,21 @@ class HealthCheckerFactory : public Logger::Loggable<Logger::Id::health_checker>
 public:
   /**
    * Create a health checker.
-   * @param hc_config supplies the health check proto.
+   * @param health_check_config supplies the health check proto.
    * @param cluster supplies the owning cluster.
    * @param runtime supplies the runtime loader.
    * @param random supplies the random generator.
    * @param dispatcher supplies the dispatcher.
    * @param event_logger supplies the event_logger.
+   * @param validation_visitor message validation visitor instance.
    * @return a health checker.
    */
-  static HealthCheckerSharedPtr create(const envoy::api::v2::core::HealthCheck& hc_config,
+  static HealthCheckerSharedPtr create(const envoy::api::v2::core::HealthCheck& health_check_config,
                                        Upstream::Cluster& cluster, Runtime::Loader& runtime,
                                        Runtime::RandomGenerator& random,
                                        Event::Dispatcher& dispatcher,
-                                       AccessLog::AccessLogManager& log_manager);
+                                       AccessLog::AccessLogManager& log_manager,
+                                       ProtobufMessage::ValidationVisitor& validation_visitor);
 };
 
 /**
@@ -47,19 +49,36 @@ public:
                         Event::Dispatcher& dispatcher, Runtime::Loader& runtime,
                         Runtime::RandomGenerator& random, HealthCheckEventLoggerPtr&& event_logger);
 
+  /**
+   * Utility class checking if given http status matches configured expectations.
+   */
+  class HttpStatusChecker {
+  public:
+    HttpStatusChecker(const Protobuf::RepeatedPtrField<envoy::type::Int64Range>& expected_statuses,
+                      uint64_t default_expected_status);
+
+    bool inRange(uint64_t http_status) const;
+
+  private:
+    std::vector<std::pair<uint64_t, uint64_t>> ranges_;
+  };
+
 private:
   struct HttpActiveHealthCheckSession : public ActiveHealthCheckSession,
                                         public Http::StreamDecoder,
                                         public Http::StreamCallbacks {
     HttpActiveHealthCheckSession(HttpHealthCheckerImpl& parent, const HostSharedPtr& host);
-    ~HttpActiveHealthCheckSession();
+    ~HttpActiveHealthCheckSession() override;
 
     void onResponseComplete();
-    bool isHealthCheckSucceeded();
+    enum class HealthCheckResult { Succeeded, Degraded, Failed };
+    HealthCheckResult healthCheckResult();
+    bool shouldClose() const;
 
     // ActiveHealthCheckSession
     void onInterval() override;
     void onTimeout() override;
+    void onDeferredDelete() final;
 
     // Http::StreamDecoder
     void decode100ContinueHeaders(Http::HeaderMapPtr&&) override {}
@@ -73,7 +92,8 @@ private:
     void decodeMetadata(Http::MetadataMapPtr&&) override {}
 
     // Http::StreamCallbacks
-    void onResetStream(Http::StreamResetReason reason) override;
+    void onResetStream(Http::StreamResetReason reason,
+                       absl::string_view transport_failure_reason) override;
     void onAboveWriteBufferHighWatermark() override {}
     void onBelowWriteBufferLowWatermark() override {}
 
@@ -94,7 +114,6 @@ private:
     ConnectionCallbackImpl connection_callback_impl_{*this};
     HttpHealthCheckerImpl& parent_;
     Http::CodecClientPtr client_;
-    Http::StreamEncoder* request_encoder_{};
     Http::HeaderMapPtr response_headers_;
     const std::string& hostname_;
     const Http::Protocol protocol_;
@@ -102,7 +121,7 @@ private:
     bool expect_reset_{};
   };
 
-  typedef std::unique_ptr<HttpActiveHealthCheckSession> HttpActiveHealthCheckSessionPtr;
+  using HttpActiveHealthCheckSessionPtr = std::unique_ptr<HttpActiveHealthCheckSession>;
 
   virtual Http::CodecClient* createCodecClient(Upstream::Host::CreateConnectionData& data) PURE;
 
@@ -120,6 +139,7 @@ private:
   const std::string host_value_;
   absl::optional<std::string> service_name_;
   Router::HeaderParserPtr request_headers_parser_;
+  const HttpStatusChecker http_status_checker_;
 
 protected:
   const Http::CodecClient::Type codec_client_type_;
@@ -181,7 +201,7 @@ public:
  */
 class TcpHealthCheckMatcher {
 public:
-  typedef std::list<std::vector<uint8_t>> MatchSegments;
+  using MatchSegments = std::list<std::vector<uint8_t>>;
 
   static MatchSegments loadProtoBytes(
       const Protobuf::RepeatedPtrField<envoy::api::v2::core::HealthCheck::Payload>& byte_array);
@@ -221,7 +241,7 @@ private:
   struct TcpActiveHealthCheckSession : public ActiveHealthCheckSession {
     TcpActiveHealthCheckSession(TcpHealthCheckerImpl& parent, const HostSharedPtr& host)
         : ActiveHealthCheckSession(parent, host), parent_(parent) {}
-    ~TcpActiveHealthCheckSession();
+    ~TcpActiveHealthCheckSession() override;
 
     void onData(Buffer::Instance& data);
     void onEvent(Network::ConnectionEvent event);
@@ -229,13 +249,17 @@ private:
     // ActiveHealthCheckSession
     void onInterval() override;
     void onTimeout() override;
+    void onDeferredDelete() final;
 
     TcpHealthCheckerImpl& parent_;
     Network::ClientConnectionPtr client_;
     std::shared_ptr<TcpSessionCallbacks> session_callbacks_;
+    // If true, stream close was initiated by us, not e.g. remote close or TCP reset.
+    // In this case healthcheck status already reported, only state cleanup required.
+    bool expect_close_{};
   };
 
-  typedef std::unique_ptr<TcpActiveHealthCheckSession> TcpActiveHealthCheckSessionPtr;
+  using TcpActiveHealthCheckSessionPtr = std::unique_ptr<TcpActiveHealthCheckSession>;
 
   // HealthCheckerImplBase
   ActiveHealthCheckSessionPtr makeSession(HostSharedPtr host) override {
@@ -263,7 +287,7 @@ private:
                                         public Http::StreamDecoder,
                                         public Http::StreamCallbacks {
     GrpcActiveHealthCheckSession(GrpcHealthCheckerImpl& parent, const HostSharedPtr& host);
-    ~GrpcActiveHealthCheckSession();
+    ~GrpcActiveHealthCheckSession() override;
 
     void onRpcComplete(Grpc::Status::GrpcStatus grpc_status, const std::string& grpc_message,
                        bool end_stream);
@@ -275,6 +299,7 @@ private:
     // ActiveHealthCheckSession
     void onInterval() override;
     void onTimeout() override;
+    void onDeferredDelete() final;
 
     // Http::StreamDecoder
     void decode100ContinueHeaders(Http::HeaderMapPtr&&) override {}
@@ -284,7 +309,8 @@ private:
     void decodeMetadata(Http::MetadataMapPtr&&) override {}
 
     // Http::StreamCallbacks
-    void onResetStream(Http::StreamResetReason reason) override;
+    void onResetStream(Http::StreamResetReason reason,
+                       absl::string_view transport_failure_reason) override;
     void onAboveWriteBufferHighWatermark() override {}
     void onBelowWriteBufferLowWatermark() override {}
 
@@ -338,6 +364,7 @@ private:
 
   const Protobuf::MethodDescriptor& service_method_;
   absl::optional<std::string> service_name_;
+  absl::optional<std::string> authority_value_;
 };
 
 /**

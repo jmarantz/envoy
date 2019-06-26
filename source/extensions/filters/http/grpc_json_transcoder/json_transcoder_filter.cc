@@ -1,18 +1,20 @@
 #include "extensions/filters/http/grpc_json_transcoder/json_transcoder_filter.h"
 
 #include <memory>
+#include <unordered_set>
 
 #include "envoy/common/exception.h"
 #include "envoy/http/filter.h"
 
+#include "common/buffer/buffer_impl.h"
 #include "common/common/assert.h"
 #include "common/common/enum_to_int.h"
 #include "common/common/utility.h"
-#include "common/filesystem/filesystem_impl.h"
 #include "common/grpc/common.h"
 #include "common/http/headers.h"
 #include "common/http/utility.h"
 #include "common/protobuf/protobuf.h"
+#include "common/protobuf/utility.h"
 
 #include "google/api/annotations.pb.h"
 #include "google/api/http.pb.h"
@@ -27,6 +29,7 @@ using Envoy::Protobuf::FileDescriptorSet;
 using Envoy::Protobuf::io::ZeroCopyInputStream;
 using Envoy::ProtobufUtil::Status;
 using Envoy::ProtobufUtil::error::Code;
+using google::api::HttpRule;
 using google::grpc::transcoding::JsonRequestTranslator;
 using google::grpc::transcoding::PathMatcherBuilder;
 using google::grpc::transcoding::PathMatcherUtility;
@@ -40,8 +43,17 @@ namespace Extensions {
 namespace HttpFilters {
 namespace GrpcJsonTranscoder {
 
-namespace {
+struct RcDetailsValues {
+  // The gRPC json transcoder filter failed to transcode when processing request headers.
+  // This will generally be accompanied by details about the transcoder failure.
+  const std::string GrpcTranscodeFailedEarly = "early_grpc_json_transcode_failure";
+  // The gRPC json transcoder filter failed to transcode when processing the request body.
+  // This will generally be accompanied by details about the transcoder failure.
+  const std::string GrpcTranscodeFailed = "grpc_json_transcode_failure";
+};
+using RcDetails = ConstSingleton<RcDetailsValues>;
 
+namespace {
 // Transcoder:
 // https://github.com/grpc-ecosystem/grpc-httpjson-transcoding/blob/master/src/include/grpc_transcoding/transcoder.h
 // implementation based on JsonRequestTranslator & ResponseToJsonTranslator
@@ -78,13 +90,14 @@ private:
 } // namespace
 
 JsonTranscoderConfig::JsonTranscoderConfig(
-    const envoy::config::filter::http::transcoder::v2::GrpcJsonTranscoder& proto_config) {
+    const envoy::config::filter::http::transcoder::v2::GrpcJsonTranscoder& proto_config,
+    Api::Api& api) {
   FileDescriptorSet descriptor_set;
 
   switch (proto_config.descriptor_set_case()) {
   case envoy::config::filter::http::transcoder::v2::GrpcJsonTranscoder::kProtoDescriptor:
     if (!descriptor_set.ParseFromString(
-            Filesystem::fileReadToEnd(proto_config.proto_descriptor()))) {
+            api.fileSystem().fileReadToEnd(proto_config.proto_descriptor()))) {
       throw EnvoyException("transcoding_filter: Unable to parse proto descriptor");
     }
     break;
@@ -104,6 +117,10 @@ JsonTranscoderConfig::JsonTranscoderConfig(
   }
 
   PathMatcherBuilder<const Protobuf::MethodDescriptor*> pmb;
+  std::unordered_set<std::string> ignored_query_parameters;
+  for (const auto& query_param : proto_config.ignored_query_parameters()) {
+    ignored_query_parameters.insert(query_param);
+  }
 
   for (const auto& service_name : proto_config.services()) {
     auto service = descriptor_pool_.FindServiceByName(service_name);
@@ -113,8 +130,18 @@ JsonTranscoderConfig::JsonTranscoderConfig(
     }
     for (int i = 0; i < service->method_count(); ++i) {
       auto method = service->method(i);
-      if (!PathMatcherUtility::RegisterByHttpRule(
-              pmb, method->options().GetExtension(google::api::http), method)) {
+
+      HttpRule http_rule;
+      if (method->options().HasExtension(google::api::http)) {
+        http_rule = method->options().GetExtension(google::api::http);
+      } else if (proto_config.auto_mapping()) {
+        auto post = "/" + service->full_name() + "/" + method->name();
+        http_rule.set_post(post);
+        http_rule.set_body("*");
+      }
+
+      if (!PathMatcherUtility::RegisterByHttpRule(pmb, http_rule, ignored_query_parameters,
+                                                  method)) {
         throw EnvoyException("transcoding_filter: Cannot register '" + method->full_name() +
                              "' to path matcher");
       }
@@ -127,7 +154,7 @@ JsonTranscoderConfig::JsonTranscoderConfig(
       Protobuf::util::NewTypeResolverForDescriptorPool(Grpc::Common::typeUrlPrefix(),
                                                        &descriptor_pool_));
 
-  const auto print_config = proto_config.print_options();
+  const auto& print_config = proto_config.print_options();
   print_options_.add_whitespace = print_config.add_whitespace();
   print_options_.always_print_primitive_fields = print_config.always_print_primitive_fields();
   print_options_.always_print_enums_as_ints = print_config.always_print_enums_as_ints();
@@ -148,9 +175,9 @@ ProtobufUtil::Status JsonTranscoderConfig::createTranscoder(
     return ProtobufUtil::Status(Code::INVALID_ARGUMENT,
                                 "Request headers has application/grpc content-type");
   }
-  const ProtobufTypes::String method = headers.Method()->value().c_str();
-  ProtobufTypes::String path = headers.Path()->value().c_str();
-  ProtobufTypes::String args;
+  const std::string method(headers.Method()->value().getStringView());
+  std::string path(headers.Path()->value().getStringView());
+  std::string args;
 
   const size_t pos = path.find('?');
   if (pos != std::string::npos) {
@@ -245,8 +272,13 @@ Http::FilterHeadersStatus JsonTranscoderFilter::decodeHeaders(Http::HeaderMap& h
     if (!request_status.ok()) {
       ENVOY_LOG(debug, "Transcoding request error {}", request_status.ToString());
       error_ = true;
-      decoder_callbacks_->sendLocalReply(Http::Code::BadRequest, request_status.error_message(),
-                                         nullptr, absl::nullopt);
+      decoder_callbacks_->sendLocalReply(
+          Http::Code::BadRequest,
+          absl::string_view(request_status.error_message().data(),
+                            request_status.error_message().size()),
+          nullptr, absl::nullopt,
+          absl::StrCat(RcDetails::get().GrpcTranscodeFailedEarly, "{",
+                       MessageUtil::CodeEnumToString(request_status.code()), "}"));
 
       return Http::FilterHeadersStatus::StopIteration;
     }
@@ -281,8 +313,13 @@ Http::FilterDataStatus JsonTranscoderFilter::decodeData(Buffer::Instance& data, 
   if (!request_status.ok()) {
     ENVOY_LOG(debug, "Transcoding request error {}", request_status.ToString());
     error_ = true;
-    decoder_callbacks_->sendLocalReply(Http::Code::BadRequest, request_status.error_message(),
-                                       nullptr, absl::nullopt);
+    decoder_callbacks_->sendLocalReply(
+        Http::Code::BadRequest,
+        absl::string_view(request_status.error_message().data(),
+                          request_status.error_message().size()),
+        nullptr, absl::nullopt,
+        absl::StrCat(RcDetails::get().GrpcTranscodeFailed, "{",
+                     MessageUtil::CodeEnumToString(request_status.code()), "}"));
 
     return Http::FilterDataStatus::StopIterationNoBuffer;
   }
@@ -446,9 +483,7 @@ void JsonTranscoderFilter::buildResponseFromHttpBodyOutput(Http::HeaderMap& resp
       http_body.ParseFromZeroCopyStream(&stream);
       const auto& body = http_body.data();
 
-      // TODO(mrice32): This string conversion is currently required because body has a different
-      // type within Google. Remove when the string types merge.
-      data.add(ProtobufTypes::String(body));
+      data.add(body);
 
       response_headers.insertContentType().value(http_body.content_type());
       response_headers.insertContentLength().value(body.size());

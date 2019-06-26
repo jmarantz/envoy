@@ -15,7 +15,6 @@
 #include "test/mocks/runtime/mocks.h"
 #include "test/mocks/upstream/mocks.h"
 #include "test/test_common/printers.h"
-#include "test/test_common/test_time.h"
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -65,13 +64,11 @@ public:
   };
 
   Http2ConnPoolImplTest()
-      : pool_(dispatcher_, host_, Upstream::ResourcePriority::Default, nullptr) {}
+      : api_(Api::createApiForTest(stats_store_)),
+        pool_(dispatcher_, host_, Upstream::ResourcePriority::Default, nullptr) {}
 
   ~Http2ConnPoolImplTest() {
-    // Make sure all gauges are 0.
-    for (const Stats::GaugeSharedPtr& gauge : cluster_->stats_store_.gauges()) {
-      EXPECT_EQ(0U, gauge->value());
-    }
+    EXPECT_TRUE(TestUtility::gaugesZeroed(cluster_->stats_store_.gauges()));
   }
 
   // Creates a new test client, expecting a new connection to be created and associated
@@ -82,8 +79,7 @@ public:
     test_client.connection_ = new NiceMock<Network::MockClientConnection>();
     test_client.codec_ = new NiceMock<Http::MockClientConnection>();
     test_client.connect_timer_ = new NiceMock<Event::MockTimer>(&dispatcher_);
-    test_client.client_dispatcher_ =
-        std::make_unique<Event::DispatcherImpl>(test_time_.timeSystem());
+    test_client.client_dispatcher_ = api_->allocateDispatcher();
     EXPECT_CALL(dispatcher_, createClientConnection_(_, _, _, _))
         .WillOnce(Return(test_client.connection_));
     auto cluster = std::make_shared<NiceMock<Upstream::MockClusterInfo>>();
@@ -115,9 +111,26 @@ public:
   // Asserts that the provided requests receives onPoolFailure.
   void expectStreamReset(ActiveTestRequest& r);
 
+  /**
+   * Closes a test client.
+   */
+  void closeClient(size_t index);
+
+  /**
+   * Completes an active request. Useful when this flow is not part of the main test assertions.
+   */
+  void completeRequest(ActiveTestRequest& r);
+
+  /**
+   * Completes an active request and closes the upstream connection. Useful when this flow is
+   * not part of the main test assertions.
+   */
+  void completeRequestCloseUpstream(size_t index, ActiveTestRequest& r);
+
   MOCK_METHOD0(onClientDestroy, void());
 
-  DangerousDeprecatedTestTime test_time_;
+  Stats::IsolatedStoreImpl stats_store_;
+  Api::ApiPtr api_;
   NiceMock<Event::MockDispatcher> dispatcher_;
   std::shared_ptr<Upstream::MockClusterInfo> cluster_{new NiceMock<Upstream::MockClusterInfo>()};
   Upstream::HostSharedPtr host_{Upstream::makeTestHost(cluster_, "tcp://127.0.0.1:80")};
@@ -167,6 +180,29 @@ void Http2ConnPoolImplTest::expectStreamReset(ActiveTestRequest& r) {
   EXPECT_CALL(r.callbacks_.pool_failure_, ready());
 }
 
+void Http2ConnPoolImplTest::closeClient(size_t index) {
+  test_clients_[index].connection_->raiseEvent(Network::ConnectionEvent::RemoteClose);
+  EXPECT_CALL(*this, onClientDestroy());
+  dispatcher_.clearDeferredDeleteList();
+}
+
+void Http2ConnPoolImplTest::completeRequest(ActiveTestRequest& r) {
+  EXPECT_CALL(r.inner_encoder_, encodeHeaders(_, true));
+  r.callbacks_.outer_encoder_->encodeHeaders(HeaderMapImpl{}, true);
+  EXPECT_CALL(r.decoder_, decodeHeaders_(_, true));
+  r.inner_decoder_->decodeHeaders(HeaderMapPtr{new HeaderMapImpl{}}, true);
+}
+
+void Http2ConnPoolImplTest::completeRequestCloseUpstream(size_t index, ActiveTestRequest& r) {
+  completeRequest(r);
+  closeClient(index);
+}
+
+/**
+ * Verify that the pool retains and returns the host it was constructed with.
+ */
+TEST_F(Http2ConnPoolImplTest, Host) { EXPECT_EQ(host_, pool_.host()); }
+
 /**
  * Verify that connections are drained when requested.
  */
@@ -198,6 +234,9 @@ TEST_F(Http2ConnPoolImplTest, DrainConnections) {
   test_clients_[1].connection_->raiseEvent(Network::ConnectionEvent::RemoteClose);
   EXPECT_CALL(*this, onClientDestroy());
   dispatcher_.clearDeferredDeleteList();
+
+  EXPECT_EQ(2U, cluster_->stats_.upstream_cx_destroy_.value());
+  EXPECT_EQ(1U, cluster_->stats_.upstream_cx_destroy_remote_.value());
 }
 
 // Verifies that requests are queued up in the conn pool until the connection becomes ready.
@@ -232,6 +271,9 @@ TEST_F(Http2ConnPoolImplTest, PendingRequests) {
   test_clients_[0].connection_->raiseEvent(Network::ConnectionEvent::RemoteClose);
   EXPECT_CALL(*this, onClientDestroy());
   dispatcher_.clearDeferredDeleteList();
+
+  EXPECT_EQ(1U, cluster_->stats_.upstream_cx_destroy_.value());
+  EXPECT_EQ(1U, cluster_->stats_.upstream_cx_destroy_remote_.value());
 }
 
 // Verifies that requests are queued up in the conn pool and fail when the connection
@@ -262,6 +304,9 @@ TEST_F(Http2ConnPoolImplTest, PendingRequestsFailure) {
   test_clients_[1].connection_->raiseEvent(Network::ConnectionEvent::RemoteClose);
   EXPECT_CALL(*this, onClientDestroy()).Times(2);
   dispatcher_.clearDeferredDeleteList();
+
+  EXPECT_EQ(2U, cluster_->stats_.upstream_cx_destroy_.value());
+  EXPECT_EQ(2U, cluster_->stats_.upstream_cx_destroy_remote_.value());
 }
 
 // Verifies that requests are queued up in the conn pool and respect max request circuit breaking
@@ -296,6 +341,9 @@ TEST_F(Http2ConnPoolImplTest, PendingRequestsRequestOverflow) {
   test_clients_[0].connection_->raiseEvent(Network::ConnectionEvent::RemoteClose);
   EXPECT_CALL(*this, onClientDestroy());
   dispatcher_.clearDeferredDeleteList();
+
+  EXPECT_EQ(1U, cluster_->stats_.upstream_cx_destroy_.value());
+  EXPECT_EQ(1U, cluster_->stats_.upstream_cx_destroy_remote_.value());
 }
 
 // Verifies that we honor the max pending requests circuit breaker.
@@ -330,6 +378,9 @@ TEST_F(Http2ConnPoolImplTest, PendingRequestsMaxPendingCircuitBreaker) {
   test_clients_[0].connection_->raiseEvent(Network::ConnectionEvent::RemoteClose);
   EXPECT_CALL(*this, onClientDestroy());
   dispatcher_.clearDeferredDeleteList();
+
+  EXPECT_EQ(1U, cluster_->stats_.upstream_cx_destroy_.value());
+  EXPECT_EQ(1U, cluster_->stats_.upstream_cx_destroy_remote_.value());
 }
 
 TEST_F(Http2ConnPoolImplTest, VerifyConnectionTimingStats) {
@@ -349,6 +400,9 @@ TEST_F(Http2ConnPoolImplTest, VerifyConnectionTimingStats) {
               deliverHistogramToSinks(Property(&Stats::Metric::name, "upstream_cx_length_ms"), _));
   EXPECT_CALL(*this, onClientDestroy());
   dispatcher_.clearDeferredDeleteList();
+
+  EXPECT_EQ(1U, cluster_->stats_.upstream_cx_destroy_.value());
+  EXPECT_EQ(1U, cluster_->stats_.upstream_cx_destroy_remote_.value());
 }
 
 /**
@@ -368,6 +422,9 @@ TEST_F(Http2ConnPoolImplTest, VerifyBufferLimits) {
   test_clients_[0].connection_->raiseEvent(Network::ConnectionEvent::RemoteClose);
   EXPECT_CALL(*this, onClientDestroy());
   dispatcher_.clearDeferredDeleteList();
+
+  EXPECT_EQ(1U, cluster_->stats_.upstream_cx_destroy_.value());
+  EXPECT_EQ(1U, cluster_->stats_.upstream_cx_destroy_remote_.value());
 }
 
 TEST_F(Http2ConnPoolImplTest, RequestAndResponse) {
@@ -390,6 +447,9 @@ TEST_F(Http2ConnPoolImplTest, RequestAndResponse) {
   test_clients_[0].connection_->raiseEvent(Network::ConnectionEvent::RemoteClose);
   EXPECT_CALL(*this, onClientDestroy());
   dispatcher_.clearDeferredDeleteList();
+
+  EXPECT_EQ(1U, cluster_->stats_.upstream_cx_destroy_.value());
+  EXPECT_EQ(1U, cluster_->stats_.upstream_cx_destroy_remote_.value());
 }
 
 TEST_F(Http2ConnPoolImplTest, LocalReset) {
@@ -405,6 +465,8 @@ TEST_F(Http2ConnPoolImplTest, LocalReset) {
   test_clients_[0].connection_->raiseEvent(Network::ConnectionEvent::RemoteClose);
   EXPECT_CALL(*this, onClientDestroy());
   dispatcher_.clearDeferredDeleteList();
+  EXPECT_EQ(1U, cluster_->stats_.upstream_cx_destroy_.value());
+  EXPECT_EQ(1U, cluster_->stats_.upstream_cx_destroy_remote_.value());
   EXPECT_EQ(1U, cluster_->stats_.upstream_rq_tx_reset_.value());
   EXPECT_EQ(0U, cluster_->circuit_breakers_stats_.rq_open_.value());
 }
@@ -422,6 +484,8 @@ TEST_F(Http2ConnPoolImplTest, RemoteReset) {
   test_clients_[0].connection_->raiseEvent(Network::ConnectionEvent::RemoteClose);
   EXPECT_CALL(*this, onClientDestroy());
   dispatcher_.clearDeferredDeleteList();
+  EXPECT_EQ(1U, cluster_->stats_.upstream_cx_destroy_.value());
+  EXPECT_EQ(1U, cluster_->stats_.upstream_cx_destroy_remote_.value());
   EXPECT_EQ(1U, cluster_->stats_.upstream_rq_rx_reset_.value());
   EXPECT_EQ(0U, cluster_->circuit_breakers_stats_.rq_open_.value());
 }
@@ -444,6 +508,9 @@ TEST_F(Http2ConnPoolImplTest, DrainDisconnectWithActiveRequest) {
   test_clients_[0].connection_->raiseEvent(Network::ConnectionEvent::RemoteClose);
   EXPECT_CALL(*this, onClientDestroy());
   dispatcher_.clearDeferredDeleteList();
+
+  EXPECT_EQ(1U, cluster_->stats_.upstream_cx_destroy_.value());
+  EXPECT_EQ(1U, cluster_->stats_.upstream_cx_destroy_remote_.value());
 }
 
 TEST_F(Http2ConnPoolImplTest, DrainDisconnectDrainingWithActiveRequest) {
@@ -476,6 +543,9 @@ TEST_F(Http2ConnPoolImplTest, DrainDisconnectDrainingWithActiveRequest) {
   test_clients_[0].connection_->raiseEvent(Network::ConnectionEvent::RemoteClose);
   EXPECT_CALL(*this, onClientDestroy());
   dispatcher_.clearDeferredDeleteList();
+
+  EXPECT_EQ(2U, cluster_->stats_.upstream_cx_destroy_.value());
+  EXPECT_EQ(1U, cluster_->stats_.upstream_cx_destroy_remote_.value());
 }
 
 TEST_F(Http2ConnPoolImplTest, DrainPrimary) {
@@ -575,10 +645,13 @@ TEST_F(Http2ConnPoolImplTest, ConnectTimeout) {
   EXPECT_EQ(1U, cluster_->stats_.upstream_cx_connect_fail_.value());
   EXPECT_EQ(1U, cluster_->stats_.upstream_cx_connect_timeout_.value());
   EXPECT_EQ(1U, cluster_->stats_.upstream_rq_pending_failure_eject_.value());
+  EXPECT_EQ(2U, cluster_->stats_.upstream_cx_destroy_.value());
+  EXPECT_EQ(1U, cluster_->stats_.upstream_cx_destroy_local_.value());
+  EXPECT_EQ(1U, cluster_->stats_.upstream_cx_destroy_remote_.value());
 }
 
 TEST_F(Http2ConnPoolImplTest, MaxGlobalRequests) {
-  cluster_->resetResourceManager(1024, 1024, 1, 1);
+  cluster_->resetResourceManager(1024, 1024, 1, 1, 1);
   InSequence s;
 
   expectClientCreate();
@@ -595,6 +668,9 @@ TEST_F(Http2ConnPoolImplTest, MaxGlobalRequests) {
   test_clients_[0].connection_->raiseEvent(Network::ConnectionEvent::RemoteClose);
   EXPECT_CALL(*this, onClientDestroy());
   dispatcher_.clearDeferredDeleteList();
+
+  EXPECT_EQ(1U, cluster_->stats_.upstream_cx_destroy_.value());
+  EXPECT_EQ(1U, cluster_->stats_.upstream_cx_destroy_remote_.value());
 }
 
 TEST_F(Http2ConnPoolImplTest, GoAway) {
@@ -626,6 +702,72 @@ TEST_F(Http2ConnPoolImplTest, GoAway) {
   EXPECT_EQ(1U, cluster_->stats_.upstream_cx_close_notify_.value());
 }
 
+TEST_F(Http2ConnPoolImplTest, NoActiveConnectionsByDefault) {
+  EXPECT_FALSE(pool_.hasActiveConnections());
+}
+
+// Show that an active request on the primary connection is considered active.
+TEST_F(Http2ConnPoolImplTest, ActiveConnectionsHasActiveRequestsTrue) {
+  expectClientCreate();
+  ActiveTestRequest r1(*this, 0, false);
+  expectClientConnect(0, r1);
+
+  EXPECT_TRUE(pool_.hasActiveConnections());
+
+  completeRequestCloseUpstream(0, r1);
+}
+
+// Show that pending requests are considered active.
+TEST_F(Http2ConnPoolImplTest, PendingRequestsConsideredActive) {
+  expectClientCreate();
+  ActiveTestRequest r1(*this, 0, false);
+
+  EXPECT_TRUE(pool_.hasActiveConnections());
+
+  expectClientConnect(0, r1);
+  completeRequestCloseUpstream(0, r1);
+}
+
+// Show that even if there is a primary client still, if all of its requests have completed, then it
+// does not have any active connections.
+TEST_F(Http2ConnPoolImplTest, ResponseCompletedConnectionReadyNoActiveConnections) {
+  expectClientCreate();
+  ActiveTestRequest r1(*this, 0, false);
+  expectClientConnect(0, r1);
+  completeRequest(r1);
+
+  EXPECT_FALSE(pool_.hasActiveConnections());
+
+  closeClient(0);
+}
+
+// Show that if connections are draining, they're still considered active.
+TEST_F(Http2ConnPoolImplTest, DrainingConnectionsConsideredActive) {
+  pool_.max_streams_ = 1;
+  expectClientCreate();
+  ActiveTestRequest r1(*this, 0, false);
+  expectClientConnect(0, r1);
+  pool_.drainConnections();
+
+  EXPECT_TRUE(pool_.hasActiveConnections());
+
+  completeRequest(r1);
+  closeClient(0);
+}
+
+// Show that once we've drained all connections, there are no longer any active.
+TEST_F(Http2ConnPoolImplTest, DrainedConnectionsNotActive) {
+  pool_.max_streams_ = 1;
+  expectClientCreate();
+  ActiveTestRequest r1(*this, 0, false);
+  expectClientConnect(0, r1);
+  pool_.drainConnections();
+  completeRequest(r1);
+
+  EXPECT_FALSE(pool_.hasActiveConnections());
+
+  closeClient(0);
+}
 } // namespace Http2
 } // namespace Http
 } // namespace Envoy

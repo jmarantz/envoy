@@ -2,6 +2,10 @@ syntax = "proto3";
 
 package envoy.admin.v2alpha;
 
+option java_outer_classname = "ServerInfoProto";
+option java_multiple_files = true;
+option java_package = "io.envoyproxy.envoy.admin.v2alpha";
+
 import "google/protobuf/duration.proto";
 
 // [#protodoc-title: Server State]
@@ -17,6 +21,10 @@ message ServerInfo {
     LIVE = 0;
     // Server is draining listeners in response to external health checks failing.
     DRAINING = 1;
+    // Server has not yet completed cluster manager initialization.
+    PRE_INITIALIZING = 2;
+    // Server is running the cluster manager initialization callbacks (e.g., RDS).
+    INITIALIZING = 3;
   }
 
   // State of the server.
@@ -106,11 +114,9 @@ message CommandLineOptions {
   // See :option:`--mode` for details.
   Mode mode = 19;
 
-  // See :option:`--max-stats` for details.
-  uint64 max_stats = 20;
-
-  // See :option:`--max-obj-name-len` for details.
-  uint64 max_obj_name_len = 21;
+  // max_stats and max_obj_name_len are now unused and have no effect.
+  uint64 max_stats = 20 [deprecated = true];
+  uint64 max_obj_name_len = 21 [deprecated = true];
 
   // See :option:`--disable-hot-restart` for details.
   bool disable_hot_restart = 22;
@@ -120,4 +126,7 @@ message CommandLineOptions {
 
   // See :option:`--restart-epoch` for details.
   uint32 restart_epoch = 24;
+
+  // See :option:`--cpuset-threads` for details.
+  bool cpuset_threads = 25;
 }

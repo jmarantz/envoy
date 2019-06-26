@@ -8,6 +8,7 @@
 #include "test/proto/bookstore.pb.h"
 #include "test/test_common/utility.h"
 
+#include "absl/strings/match.h"
 #include "gtest/gtest.h"
 
 using Envoy::Protobuf::Message;
@@ -18,13 +19,14 @@ using Envoy::ProtobufUtil::error::Code;
 using Envoy::ProtobufWkt::Empty;
 
 namespace Envoy {
+namespace {
 
 class GrpcJsonTranscoderIntegrationTest
-    : public HttpIntegrationTest,
-      public testing::TestWithParam<Network::Address::IpVersion> {
+    : public testing::TestWithParam<Network::Address::IpVersion>,
+      public HttpIntegrationTest {
 public:
   GrpcJsonTranscoderIntegrationTest()
-      : HttpIntegrationTest(Http::CodecClient::Type::HTTP1, GetParam(), realTime()) {}
+      : HttpIntegrationTest(Http::CodecClient::Type::HTTP1, GetParam()) {}
   /**
    * Global initializer for all integration tests.
    */
@@ -96,8 +98,9 @@ protected:
       response_headers.insertStatus().value(200);
       response_headers.insertContentType().value(std::string("application/grpc"));
       if (grpc_response_messages.empty()) {
-        response_headers.insertGrpcStatus().value(grpc_status.error_code());
-        response_headers.insertGrpcMessage().value(grpc_status.error_message());
+        response_headers.insertGrpcStatus().value(static_cast<uint64_t>(grpc_status.error_code()));
+        response_headers.insertGrpcMessage().value(absl::string_view(
+            grpc_status.error_message().data(), grpc_status.error_message().size()));
         upstream_request_->encodeHeaders(response_headers, true);
       } else {
         response_headers.addCopy(Http::LowerCaseString("trailer"), "Grpc-Status");
@@ -106,12 +109,13 @@ protected:
         for (const auto& response_message_str : grpc_response_messages) {
           ResponseType response_message;
           EXPECT_TRUE(TextFormat::ParseFromString(response_message_str, &response_message));
-          auto buffer = Grpc::Common::serializeBody(response_message);
+          auto buffer = Grpc::Common::serializeToGrpcFrame(response_message);
           upstream_request_->encodeData(*buffer, false);
         }
         Http::TestHeaderMapImpl response_trailers;
-        response_trailers.insertGrpcStatus().value(grpc_status.error_code());
-        response_trailers.insertGrpcMessage().value(grpc_status.error_message());
+        response_trailers.insertGrpcStatus().value(static_cast<uint64_t>(grpc_status.error_code()));
+        response_trailers.insertGrpcMessage().value(absl::string_view(
+            grpc_status.error_message().data(), grpc_status.error_message().size()));
         upstream_request_->encodeTrailers(response_trailers);
       }
       EXPECT_TRUE(upstream_request_->complete());
@@ -121,17 +125,20 @@ protected:
     EXPECT_TRUE(response->complete());
 
     if (response->headers().get(Http::LowerCaseString("transfer-encoding")) == nullptr ||
-        strncmp(
-            response->headers().get(Http::LowerCaseString("transfer-encoding"))->value().c_str(),
-            "chunked", strlen("chunked")) != 0) {
+        !absl::StartsWith(response->headers()
+                              .get(Http::LowerCaseString("transfer-encoding"))
+                              ->value()
+                              .getStringView(),
+                          "chunked")) {
       EXPECT_EQ(response->headers().get(Http::LowerCaseString("trailer")), nullptr);
     }
 
     response_headers.iterate(
         [](const Http::HeaderEntry& entry, void* context) -> Http::HeaderMap::Iterate {
-          IntegrationStreamDecoder* response = static_cast<IntegrationStreamDecoder*>(context);
-          Http::LowerCaseString lower_key{entry.key().c_str()};
-          EXPECT_STREQ(entry.value().c_str(), response->headers().get(lower_key)->value().c_str());
+          auto* response = static_cast<IntegrationStreamDecoder*>(context);
+          Http::LowerCaseString lower_key{std::string(entry.key().getStringView())};
+          EXPECT_EQ(entry.value().getStringView(),
+                    response->headers().get(lower_key)->value().getStringView());
           return Http::HeaderMap::Iterate::Continue;
         },
         response.get());
@@ -139,7 +146,7 @@ protected:
       if (full_response) {
         EXPECT_EQ(response_body, response->body());
       } else {
-        EXPECT_TRUE(StringUtil::startsWith(response->body().c_str(), response_body));
+        EXPECT_TRUE(absl::StartsWith(response->body(), response_body));
       }
     }
 
@@ -149,9 +156,9 @@ protected:
   }
 };
 
-INSTANTIATE_TEST_CASE_P(IpVersions, GrpcJsonTranscoderIntegrationTest,
-                        testing::ValuesIn(TestEnvironment::getIpVersionsForTest()),
-                        TestUtility::ipTestParamsToString);
+INSTANTIATE_TEST_SUITE_P(IpVersions, GrpcJsonTranscoderIntegrationTest,
+                         testing::ValuesIn(TestEnvironment::getIpVersionsForTest()),
+                         TestUtility::ipTestParamsToString);
 
 TEST_P(GrpcJsonTranscoderIntegrationTest, UnaryPost) {
   testTranscoding<bookstore::CreateShelfRequest, bookstore::Shelf>(
@@ -326,4 +333,5 @@ TEST_P(GrpcJsonTranscoderIntegrationTest, InvalidJson) {
       "Expected : between key:value pair.\n", false);
 }
 
+} // namespace
 } // namespace Envoy

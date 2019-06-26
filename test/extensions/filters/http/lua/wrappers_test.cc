@@ -15,10 +15,11 @@ namespace Envoy {
 namespace Extensions {
 namespace HttpFilters {
 namespace Lua {
+namespace {
 
 class LuaHeaderMapWrapperTest : public Filters::Common::Lua::LuaWrappersTestBase<HeaderMapWrapper> {
 public:
-  virtual void setup(const std::string& script) {
+  void setup(const std::string& script) override {
     Filters::Common::Lua::LuaWrappersTestBase<HeaderMapWrapper>::setup(script);
     state_->registerType<HeaderMapIterator>();
   }
@@ -219,7 +220,7 @@ TEST_F(LuaHeaderMapWrapperTest, IteratorAcrossYield) {
 class LuaStreamInfoWrapperTest
     : public Filters::Common::Lua::LuaWrappersTestBase<StreamInfoWrapper> {
 public:
-  virtual void setup(const std::string& script) {
+  void setup(const std::string& script) override {
     Filters::Common::Lua::LuaWrappersTestBase<StreamInfoWrapper>::setup(script);
     state_->registerType<DynamicMetadataMapWrapper>();
     state_->registerType<DynamicMetadataMapIterator>();
@@ -248,7 +249,7 @@ protected:
 
   envoy::api::v2::core::Metadata parseMetadataFromYaml(const std::string& yaml_string) {
     envoy::api::v2::core::Metadata metadata;
-    MessageUtil::loadFromYaml(yaml_string, metadata);
+    TestUtility::loadFromYaml(yaml_string, metadata);
     return metadata;
   }
 
@@ -394,6 +395,7 @@ TEST_F(LuaStreamInfoWrapperTest, DontFinishIterationForDynamicMetadata) {
       "[string \"...\"]:6: cannot create a second iterator before completing the first");
 }
 
+} // namespace
 } // namespace Lua
 } // namespace HttpFilters
 } // namespace Extensions

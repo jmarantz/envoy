@@ -24,6 +24,7 @@ namespace Envoy {
 namespace Extensions {
 namespace HttpFilters {
 namespace IpTagging {
+namespace {
 
 class IpTaggingFilterTest : public testing::Test {
 public:
@@ -43,7 +44,7 @@ ip_tags:
 
   void initializeFilter(const std::string& yaml) {
     envoy::config::filter::http::ip_tagging::v2::IPTagging config;
-    MessageUtil::loadFromYaml(yaml, config);
+    TestUtility::loadFromYaml(yaml, config);
     config_.reset(new IpTaggingFilterConfig(config, "prefix.", stats_, runtime_));
     filter_ = std::make_unique<IpTaggingFilter>(config_);
     filter_->setDecoderFilterCallbacks(filter_callbacks_);
@@ -280,6 +281,7 @@ TEST_F(IpTaggingFilterTest, ClearRouteCache) {
   EXPECT_FALSE(request_headers.has(Http::Headers::get().EnvoyIpTags));
 }
 
+} // namespace
 } // namespace IpTagging
 } // namespace HttpFilters
 } // namespace Extensions

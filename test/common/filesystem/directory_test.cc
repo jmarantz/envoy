@@ -70,18 +70,18 @@ struct EntryHash {
   }
 };
 
-typedef std::unordered_set<DirectoryEntry, EntryHash> EntrySet;
+using EntrySet = std::unordered_set<DirectoryEntry, EntryHash>;
 
 EntrySet getDirectoryContents(const std::string& dir_path, bool recursive) {
   Directory directory(dir_path);
   EntrySet ret;
-  for (const DirectoryEntry entry : directory) {
+  for (const DirectoryEntry& entry : directory) {
     ret.insert(entry);
     if (entry.type_ == FileType::Directory && entry.name_ != "." && entry.name_ != ".." &&
         recursive) {
       std::string subdir_name = entry.name_;
       EntrySet subdir = getDirectoryContents(dir_path + "/" + subdir_name, recursive);
-      for (const DirectoryEntry entry : subdir) {
+      for (const DirectoryEntry& entry : subdir) {
         ret.insert({subdir_name + "/" + entry.name_, entry.type_});
       }
     }
@@ -126,7 +126,7 @@ TEST_F(DirectoryTest, DirectoryWithFileInSubDirectory) {
   EXPECT_EQ(expected, getDirectoryContents(dir_path_, false));
 }
 
-// Test that when recursively creating DirectoryIterators, they do not interfere with eachother
+// Test that when recursively creating DirectoryIterators, they do not interfere with each other
 TEST_F(DirectoryTest, RecursionIntoSubDirectory) {
   addSubDirs({"sub_dir"});
   addFiles({"file", "sub_dir/sub_file"});
@@ -198,23 +198,23 @@ TEST_F(DirectoryTest, DirectoryWithEmptyDirectory) {
 TEST(DirectoryIteratorImpl, NonExistingDir) {
   const std::string dir_path("some/non/existing/dir");
 
-#if !defined(WIN32)
-  EXPECT_THROW_WITH_MESSAGE(
-      DirectoryIteratorImpl dir_iterator(dir_path), EnvoyException,
-      fmt::format("unable to open directory {}: No such file or directory", dir_path));
-#else
+#ifdef WIN32
   EXPECT_THROW_WITH_MESSAGE(
       DirectoryIteratorImpl dir_iterator(dir_path), EnvoyException,
       fmt::format("unable to open directory {}: {}", dir_path, ERROR_PATH_NOT_FOUND));
+#else
+  EXPECT_THROW_WITH_MESSAGE(
+      DirectoryIteratorImpl dir_iterator(dir_path), EnvoyException,
+      fmt::format("unable to open directory {}: No such file or directory", dir_path));
 #endif
 }
 
 // Test that we correctly handle trailing path separators
 TEST(Directory, DirectoryHasTrailingPathSeparator) {
-#if !defined(WIN32)
-  const std::string dir_path(TestEnvironment::temporaryPath("envoy_test") + "/");
-#else
+#ifdef WIN32
   const std::string dir_path(TestEnvironment::temporaryPath("envoy_test") + "\\");
+#else
+  const std::string dir_path(TestEnvironment::temporaryPath("envoy_test") + "/");
 #endif
   TestUtility::createDirectory(dir_path);
 

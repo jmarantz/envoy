@@ -24,6 +24,7 @@ envoy_cc_test(
     srcs = ["assert_test.cc"],
     deps = [
         "//source/common/common:assert_lib",
+        "//test/test_common:logging_lib",
     ],
 )
 
@@ -58,6 +59,12 @@ envoy_cc_test(
     name = "cleanup_test",
     srcs = ["cleanup_test.cc"],
     deps = ["//source/common/common:cleanup_lib"],
+)
+
+envoy_cc_test(
+    name = "phantom_test",
+    srcs = ["phantom_test.cc"],
+    deps = ["//source/common/common:phantom"],
 )
 
 envoy_cc_test(
@@ -112,6 +119,7 @@ envoy_cc_test(
     deps = [
         "//source/common/common:mutex_tracer_lib",
         "//test/test_common:contention_lib",
+        "//test/test_common:utility_lib",
     ],
 )
 
@@ -174,17 +182,6 @@ envoy_cc_test(
     deps = ["//source/common/common:callback_impl_lib"],
 )
 
-envoy_cc_test(
-    name = "block_memory_hash_set_test",
-    srcs = ["block_memory_hash_set_test.cc"],
-    deps = [
-        "//include/envoy/stats:stats_interface",
-        "//source/common/common:block_memory_hash_set_lib",
-        "//source/common/common:hash_lib",
-        "//source/common/stats:stats_lib",
-    ],
-)
-
 envoy_cc_binary(
     name = "utility_speed_test",
     srcs = ["utility_speed_test.cc"],
@@ -204,5 +201,13 @@ envoy_cc_test(
     deps = [
         "//source/common/common:lock_guard_lib",
         "//source/common/common:thread_lib",
+    ],
+)
+
+envoy_cc_test(
+    name = "stl_helpers_test",
+    srcs = ["stl_helpers_test.cc"],
+    deps = [
+        "//source/common/common:stl_helpers",
     ],
 )

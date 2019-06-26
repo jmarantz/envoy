@@ -22,7 +22,8 @@ class ConnPoolImpl : Logger::Loggable<Logger::Id::pool>, public ConnectionPool::
 public:
   ConnPoolImpl(Event::Dispatcher& dispatcher, Upstream::HostConstSharedPtr host,
                Upstream::ResourcePriority priority,
-               const Network::ConnectionSocket::OptionsSharedPtr& options);
+               const Network::ConnectionSocket::OptionsSharedPtr& options,
+               Network::TransportSocketOptionsSharedPtr transport_socket_options);
 
   ~ConnPoolImpl();
 
@@ -54,10 +55,10 @@ protected:
     bool conn_valid_{true};
   };
 
-  typedef std::shared_ptr<ConnectionWrapper> ConnectionWrapperSharedPtr;
+  using ConnectionWrapperSharedPtr = std::shared_ptr<ConnectionWrapper>;
 
   struct ConnectionDataImpl : public ConnectionPool::ConnectionData {
-    ConnectionDataImpl(ConnectionWrapperSharedPtr wrapper) : wrapper_(wrapper) {}
+    ConnectionDataImpl(ConnectionWrapperSharedPtr wrapper) : wrapper_(std::move(wrapper)) {}
     ~ConnectionDataImpl() { wrapper_->release(false); }
 
     // ConnectionPool::ConnectionData
@@ -117,7 +118,7 @@ protected:
     bool timed_out_;
   };
 
-  typedef std::unique_ptr<ActiveConn> ActiveConnPtr;
+  using ActiveConnPtr = std::unique_ptr<ActiveConn>;
 
   struct PendingRequest : LinkedObject<PendingRequest>, public ConnectionPool::Cancellable {
     PendingRequest(ConnPoolImpl& parent, ConnectionPool::Callbacks& callbacks);
@@ -132,7 +133,7 @@ protected:
     ConnectionPool::Callbacks& callbacks_;
   };
 
-  typedef std::unique_ptr<PendingRequest> PendingRequestPtr;
+  using PendingRequestPtr = std::unique_ptr<PendingRequest>;
 
   void assignConnection(ActiveConn& conn, ConnectionPool::Callbacks& callbacks);
   void createNewConnection();
@@ -148,6 +149,7 @@ protected:
   Upstream::HostConstSharedPtr host_;
   Upstream::ResourcePriority priority_;
   const Network::ConnectionSocket::OptionsSharedPtr socket_options_;
+  Network::TransportSocketOptionsSharedPtr transport_socket_options_;
 
   std::list<ActiveConnPtr> pending_conns_; // conns awaiting connected event
   std::list<ActiveConnPtr> ready_conns_;   // conns ready for assignment

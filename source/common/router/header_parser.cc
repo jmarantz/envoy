@@ -209,7 +209,7 @@ parseInternal(const envoy::api::v2::core::HeaderValueOption& header_value_option
     formatters.emplace_back(new PlainHeaderFormatter(unescape(literal), append));
   }
 
-  ASSERT(formatters.size() > 0);
+  ASSERT(!formatters.empty());
 
   if (formatters.size() == 1) {
     return std::move(formatters[0]);
@@ -236,7 +236,7 @@ HeaderParserPtr HeaderParser::configure(
 
 HeaderParserPtr HeaderParser::configure(
     const Protobuf::RepeatedPtrField<envoy::api::v2::core::HeaderValueOption>& headers_to_add,
-    const Protobuf::RepeatedPtrField<ProtobufTypes::String>& headers_to_remove) {
+    const Protobuf::RepeatedPtrField<std::string>& headers_to_remove) {
   HeaderParserPtr header_parser = configure(headers_to_add);
 
   for (const auto& header : headers_to_remove) {
@@ -254,6 +254,12 @@ HeaderParserPtr HeaderParser::configure(
 
 void HeaderParser::evaluateHeaders(Http::HeaderMap& headers,
                                    const StreamInfo::StreamInfo& stream_info) const {
+  // Removing headers in the headers_to_remove_ list first makes
+  // remove-before-add the default behavior as expected by users.
+  for (const auto& header : headers_to_remove_) {
+    headers.remove(header);
+  }
+
   for (const auto& formatter : headers_to_add_) {
     const std::string value = formatter.second->format(stream_info);
     if (!value.empty()) {
@@ -263,10 +269,6 @@ void HeaderParser::evaluateHeaders(Http::HeaderMap& headers,
         headers.setReferenceKey(formatter.first, value);
       }
     }
-  }
-
-  for (const auto& header : headers_to_remove_) {
-    headers.remove(header);
   }
 }
 

@@ -84,7 +84,7 @@ private:
   static Compressor::ZlibCompressorImpl::CompressionStrategy compressionStrategyEnum(
       envoy::config::filter::http::gzip::v2::Gzip_CompressionStrategy compression_strategy);
   static StringUtil::CaseUnorderedSet
-  contentTypeSet(const Protobuf::RepeatedPtrField<Envoy::ProtobufTypes::String>& types);
+  contentTypeSet(const Protobuf::RepeatedPtrField<std::string>& types);
 
   static uint64_t contentLengthUint(Protobuf::uint32 length);
   static uint64_t memoryLevelUint(Protobuf::uint32 level);
@@ -107,7 +107,7 @@ private:
   GzipStats stats_;
   Runtime::Loader& runtime_;
 };
-typedef std::shared_ptr<GzipFilterConfig> GzipFilterConfigSharedPtr;
+using GzipFilterConfigSharedPtr = std::shared_ptr<GzipFilterConfig>;
 
 /**
  * A filter that compresses data dispatched from the upstream upon client request.
@@ -137,8 +137,9 @@ public:
   }
   Http::FilterHeadersStatus encodeHeaders(Http::HeaderMap& headers, bool end_stream) override;
   Http::FilterDataStatus encodeData(Buffer::Instance& buffer, bool end_stream) override;
-  Http::FilterTrailersStatus encodeTrailers(Http::HeaderMap&) override {
-    return Http::FilterTrailersStatus::Continue;
+  Http::FilterTrailersStatus encodeTrailers(Http::HeaderMap&) override;
+  Http::FilterMetadataStatus encodeMetadata(Http::MetadataMap&) override {
+    return Http::FilterMetadataStatus::Continue;
   }
   void setEncoderFilterCallbacks(Http::StreamEncoderFilterCallbacks& callbacks) override {
     encoder_callbacks_ = &callbacks;
@@ -146,7 +147,7 @@ public:
 
 private:
   // TODO(gsagula): This is here temporarily and just to facilitate testing. Ideally all
-  // the logic in these private member functions would be availale in another class.
+  // the logic in these private member functions would be available in another class.
   friend class GzipFilterTest;
 
   bool hasCacheControlNoTransform(Http::HeaderMap& headers) const;

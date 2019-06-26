@@ -33,8 +33,10 @@ public:
   Http::Protocol protocol() const override { return Http::Protocol::Http2; }
   void addDrainedCallback(DrainedCb cb) override;
   void drainConnections() override;
+  bool hasActiveConnections() const override;
   ConnectionPool::Cancellable* newStream(Http::StreamDecoder& response_decoder,
                                          ConnectionPool::Callbacks& callbacks) override;
+  Upstream::HostDescriptionConstSharedPtr host() const override { return host_; };
 
 protected:
   struct ActiveClient : public Network::ConnectionCallbacks,
@@ -72,7 +74,7 @@ protected:
     bool closed_with_active_rq_{};
   };
 
-  typedef std::unique_ptr<ActiveClient> ActiveClientPtr;
+  using ActiveClientPtr = std::unique_ptr<ActiveClient>;
 
   // Http::ConnPoolImplBase
   void checkForDrained() override;

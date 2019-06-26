@@ -31,7 +31,7 @@ namespace ThriftProxy {
  */
 class Config {
 public:
-  virtual ~Config() {}
+  virtual ~Config() = default;
 
   virtual ThriftFilters::FilterChainFactory& filterFactory() PURE;
   virtual ThriftFilterStats& stats() PURE;
@@ -45,7 +45,7 @@ public:
  */
 class ProtocolOptionsConfig : public Upstream::ProtocolOptionsConfig {
 public:
-  virtual ~ProtocolOptionsConfig() {}
+  ~ProtocolOptionsConfig() override = default;
 
   virtual TransportType transport(TransportType downstream_transport) const PURE;
   virtual ProtocolType protocol(ProtocolType downstream_protocol) const PURE;
@@ -60,7 +60,7 @@ class ConnectionManager : public Network::ReadFilter,
                           Logger::Loggable<Logger::Id::thrift> {
 public:
   ConnectionManager(Config& config, Runtime::RandomGenerator& random_generator,
-                    Event::TimeSystem& time_system);
+                    TimeSource& time_system);
   ~ConnectionManager();
 
   // Network::ReadFilter
@@ -109,7 +109,7 @@ private:
     bool complete_ : 1;
     bool first_reply_field_ : 1;
   };
-  typedef std::unique_ptr<ResponseDecoder> ResponseDecoderPtr;
+  using ResponseDecoderPtr = std::unique_ptr<ResponseDecoder>;
 
   // Wraps a DecoderFilter and acts as the DecoderFilterCallbacks for the filter, enabling filter
   // chain continuation.
@@ -144,7 +144,7 @@ private:
     ActiveRpc& parent_;
     ThriftFilters::DecoderFilterSharedPtr handle_;
   };
-  typedef std::unique_ptr<ActiveRpcDecoderFilter> ActiveRpcDecoderFilterPtr;
+  using ActiveRpcDecoderFilterPtr = std::unique_ptr<ActiveRpcDecoderFilter>;
 
   // ActiveRpc tracks request/response pairs.
   struct ActiveRpc : LinkedObject<ActiveRpc>,
@@ -154,9 +154,9 @@ private:
                      public ThriftFilters::FilterChainFactoryCallbacks {
     ActiveRpc(ConnectionManager& parent)
         : parent_(parent), request_timer_(new Stats::Timespan(parent_.stats_.request_time_ms_,
-                                                              parent_.time_system_)),
+                                                              parent_.time_source_)),
           stream_id_(parent_.random_generator_.random()),
-          stream_info_(parent_.time_system_), local_response_sent_{false}, pending_transport_end_{
+          stream_info_(parent_.time_source_), local_response_sent_{false}, pending_transport_end_{
                                                                                false} {
       parent_.stats_.request_active_.inc();
 
@@ -246,7 +246,7 @@ private:
     bool pending_transport_end_ : 1;
   };
 
-  typedef std::unique_ptr<ActiveRpc> ActiveRpcPtr;
+  using ActiveRpcPtr = std::unique_ptr<ActiveRpc>;
 
   void continueDecoding();
   void dispatch();
@@ -267,7 +267,7 @@ private:
   Runtime::RandomGenerator& random_generator_;
   bool stopped_{false};
   bool half_closed_{false};
-  Event::TimeSystem& time_system_;
+  TimeSource& time_source_;
 };
 
 } // namespace ThriftProxy

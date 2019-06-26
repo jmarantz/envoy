@@ -12,6 +12,7 @@ namespace Extensions {
 namespace Filters {
 namespace Common {
 namespace Lua {
+namespace {
 
 class LuaBufferWrapperTest : public LuaWrappersTestBase<BufferWrapper> {};
 
@@ -24,7 +25,7 @@ public:
 
   envoy::api::v2::core::Metadata parseMetadataFromYaml(const std::string& yaml_string) {
     envoy::api::v2::core::Metadata metadata;
-    MessageUtil::loadFromYaml(yaml_string, metadata);
+    TestUtility::loadFromYaml(yaml_string, metadata);
     return metadata;
   }
 };
@@ -62,7 +63,7 @@ protected:
   }
 
   NiceMock<Envoy::Network::MockConnection> connection_;
-  NiceMock<Envoy::Ssl::MockConnection> ssl_;
+  NiceMock<Envoy::Ssl::MockConnectionInfo> ssl_;
 };
 
 // Basic buffer wrapper methods test.
@@ -267,6 +268,7 @@ TEST_F(LuaConnectionWrapperTest, Secure) {
   expectSecureConnection(false);
 }
 
+} // namespace
 } // namespace Lua
 } // namespace Common
 } // namespace Filters

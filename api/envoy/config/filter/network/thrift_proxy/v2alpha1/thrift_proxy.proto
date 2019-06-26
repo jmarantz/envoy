@@ -1,6 +1,10 @@
 syntax = "proto3";
 
 package envoy.config.filter.network.thrift_proxy.v2alpha1;
+
+option java_outer_classname = "ThriftProxyProto";
+option java_multiple_files = true;
+option java_package = "io.envoyproxy.envoy.config.filter.network.thrift_proxy.v2alpha1";
 option go_package = "v2";
 
 import "envoy/config/filter/network/thrift_proxy/v2alpha1/route.proto";
@@ -95,7 +99,6 @@ message ThriftFilter {
   oneof config_type {
     google.protobuf.Struct config = 2;
 
-    // [#not-implemented-hide:]
     google.protobuf.Any typed_config = 3;
   }
 }

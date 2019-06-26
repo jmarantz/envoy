@@ -197,7 +197,7 @@ void SquashFilter::onCreateAttachmentSuccess(Http::MessagePtr&& m) {
   // Get the config object that was created
   if (Http::Utility::getResponseStatus(m->headers()) != enumToInt(Http::Code::Created)) {
     ENVOY_LOG(debug, "Squash: can't create attachment object. status {} - not squashing",
-              m->headers().Status()->value().c_str());
+              m->headers().Status()->value().getStringView());
     doneSquashing();
   } else {
     std::string debug_attachment_id;
@@ -224,7 +224,7 @@ void SquashFilter::onCreateAttachmentFailure(Http::AsyncClient::FailureReason) {
   bool request_created = in_flight_request_ != nullptr;
   in_flight_request_ = nullptr;
 
-  // No retries here, as we couldnt create the attachment object.
+  // No retries here, as we couldn't create the attachment object.
   if (request_created) {
     // Cleanup not needed if onFailure called inline in async client send, as this means that
     // decodeHeaders is down the stack and will return Continue.

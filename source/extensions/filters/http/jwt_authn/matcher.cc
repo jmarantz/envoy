@@ -1,6 +1,9 @@
 #include "extensions/filters/http/jwt_authn/matcher.h"
 
+#include "common/common/logger.h"
 #include "common/router/config_impl.h"
+
+#include "absl/strings/match.h"
 
 using ::envoy::api::v2::route::RouteMatch;
 using ::envoy::config::filter::http::jwt_authn::v2alpha::JwtProvider;
@@ -18,9 +21,7 @@ namespace {
  */
 class BaseMatcherImpl : public Matcher, public Logger::Loggable<Logger::Id::filter> {
 public:
-  BaseMatcherImpl(const RequirementRule& rule,
-                  const Protobuf::Map<ProtobufTypes::String, JwtProvider>& providers,
-                  const AuthFactory& factory, const Extractor& extractor)
+  BaseMatcherImpl(const RequirementRule& rule)
       : case_sensitive_(PROTOBUF_GET_WRAPPED_OR_DEFAULT(rule.match(), case_sensitive, true)) {
 
     for (const auto& header_map : rule.match().headers()) {
@@ -30,8 +31,6 @@ public:
     for (const auto& query_parameter : rule.match().query_parameters()) {
       config_query_parameters_.push_back(query_parameter);
     }
-
-    verifier_ = Verifier::create(rule.requires(), providers, factory, extractor);
   }
 
   // Check match for HeaderMatcher and QueryParameterMatcher
@@ -48,15 +47,12 @@ public:
     return matches;
   }
 
-  const VerifierPtr& verifier() const override { return verifier_; }
-
 protected:
   const bool case_sensitive_;
 
 private:
   std::vector<Http::HeaderUtility::HeaderData> config_headers_;
   std::vector<Router::ConfigUtility::QueryParameterMatcher> config_query_parameters_;
-  VerifierPtr verifier_;
 };
 
 /**
@@ -64,14 +60,14 @@ private:
  */
 class PrefixMatcherImpl : public BaseMatcherImpl {
 public:
-  PrefixMatcherImpl(const RequirementRule& rule,
-                    const Protobuf::Map<ProtobufTypes::String, JwtProvider>& providers,
-                    const AuthFactory& factory, const Extractor& extractor)
-      : BaseMatcherImpl(rule, providers, factory, extractor), prefix_(rule.match().prefix()) {}
+  PrefixMatcherImpl(const RequirementRule& rule)
+      : BaseMatcherImpl(rule), prefix_(rule.match().prefix()) {}
 
   bool matches(const Http::HeaderMap& headers) const override {
     if (BaseMatcherImpl::matchRoute(headers) &&
-        StringUtil::startsWith(headers.Path()->value().c_str(), prefix_, case_sensitive_)) {
+        (case_sensitive_
+             ? absl::StartsWith(headers.Path()->value().getStringView(), prefix_)
+             : absl::StartsWithIgnoreCase(headers.Path()->value().getStringView(), prefix_))) {
       ENVOY_LOG(debug, "Prefix requirement '{}' matched.", prefix_);
       return true;
     }
@@ -88,16 +84,14 @@ private:
  */
 class PathMatcherImpl : public BaseMatcherImpl {
 public:
-  PathMatcherImpl(const RequirementRule& rule,
-                  const Protobuf::Map<ProtobufTypes::String, JwtProvider>& providers,
-                  const AuthFactory& factory, const Extractor& extractor)
-      : BaseMatcherImpl(rule, providers, factory, extractor), path_(rule.match().path()) {}
+  PathMatcherImpl(const RequirementRule& rule)
+      : BaseMatcherImpl(rule), path_(rule.match().path()) {}
 
   bool matches(const Http::HeaderMap& headers) const override {
     if (BaseMatcherImpl::matchRoute(headers)) {
       const Http::HeaderString& path = headers.Path()->value();
-      size_t compare_length = Http::Utility::findQueryStringStart(path) - path.c_str();
-
+      const size_t compare_length =
+          path.getStringView().length() - Http::Utility::findQueryStringStart(path).length();
       auto real_path = path.getStringView().substr(0, compare_length);
       bool match = case_sensitive_ ? real_path == path_ : StringUtil::caseCompare(real_path, path_);
       if (match) {
@@ -118,17 +112,17 @@ private:
  */
 class RegexMatcherImpl : public BaseMatcherImpl {
 public:
-  RegexMatcherImpl(const RequirementRule& rule,
-                   const Protobuf::Map<ProtobufTypes::String, JwtProvider>& providers,
-                   const AuthFactory& factory, const Extractor& extractor)
-      : BaseMatcherImpl(rule, providers, factory, extractor),
-        regex_(RegexUtil::parseRegex(rule.match().regex())), regex_str_(rule.match().regex()) {}
+  RegexMatcherImpl(const RequirementRule& rule)
+      : BaseMatcherImpl(rule), regex_(RegexUtil::parseRegex(rule.match().regex())),
+        regex_str_(rule.match().regex()) {}
 
   bool matches(const Http::HeaderMap& headers) const override {
     if (BaseMatcherImpl::matchRoute(headers)) {
       const Http::HeaderString& path = headers.Path()->value();
-      const char* query_string_start = Http::Utility::findQueryStringStart(path);
-      if (std::regex_match(path.c_str(), query_string_start, regex_)) {
+      const absl::string_view query_string = Http::Utility::findQueryStringStart(path);
+      absl::string_view path_view = path.getStringView();
+      path_view.remove_suffix(query_string.length());
+      if (std::regex_match(path_view.begin(), path_view.end(), regex_)) {
         ENVOY_LOG(debug, "Regex requirement '{}' matched.", regex_str_);
         return true;
       }
@@ -145,17 +139,14 @@ private:
 
 } // namespace
 
-MatcherConstSharedPtr
-Matcher::create(const RequirementRule& rule,
-                const Protobuf::Map<ProtobufTypes::String, JwtProvider>& providers,
-                const AuthFactory& factory, const Extractor& extractor) {
+MatcherConstPtr Matcher::create(const RequirementRule& rule) {
   switch (rule.match().path_specifier_case()) {
   case RouteMatch::PathSpecifierCase::kPrefix:
-    return std::make_shared<PrefixMatcherImpl>(rule, providers, factory, extractor);
+    return std::make_unique<PrefixMatcherImpl>(rule);
   case RouteMatch::PathSpecifierCase::kPath:
-    return std::make_shared<PathMatcherImpl>(rule, providers, factory, extractor);
+    return std::make_unique<PathMatcherImpl>(rule);
   case RouteMatch::PathSpecifierCase::kRegex:
-    return std::make_shared<RegexMatcherImpl>(rule, providers, factory, extractor);
+    return std::make_unique<RegexMatcherImpl>(rule);
   // path specifier is required.
   case RouteMatch::PathSpecifierCase::PATH_SPECIFIER_NOT_SET:
   default:

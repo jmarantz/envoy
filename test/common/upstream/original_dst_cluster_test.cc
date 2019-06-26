@@ -8,6 +8,7 @@
 
 #include "common/network/address_impl.h"
 #include "common/network/utility.h"
+#include "common/singleton/manager_impl.h"
 #include "common/upstream/original_dst_cluster.h"
 #include "common/upstream/upstream_impl.h"
 
@@ -17,7 +18,9 @@
 #include "test/mocks/common.h"
 #include "test/mocks/local_info/mocks.h"
 #include "test/mocks/network/mocks.h"
+#include "test/mocks/protobuf/mocks.h"
 #include "test/mocks/runtime/mocks.h"
+#include "test/mocks/server/mocks.h"
 #include "test/mocks/ssl/mocks.h"
 #include "test/mocks/upstream/mocks.h"
 #include "test/test_common/utility.h"
@@ -35,6 +38,7 @@ using testing::SaveArg;
 namespace Envoy {
 namespace Upstream {
 namespace OriginalDstClusterTest {
+namespace {
 
 class TestLoadBalancerContext : public LoadBalancerContextBase {
 public:
@@ -60,9 +64,10 @@ public:
   // cleanup timer must be created before the cluster (in setup()), so that we can set expectations
   // on it. Ownership is transferred to the cluster at the cluster constructor, so the cluster will
   // take care of destructing it!
-  OriginalDstClusterTest() : cleanup_timer_(new Event::MockTimer(&dispatcher_)) {}
+  OriginalDstClusterTest()
+      : cleanup_timer_(new Event::MockTimer(&dispatcher_)),
+        api_(Api::createApiForTest(stats_store_)) {}
 
-  void setupFromJson(const std::string& json) { setup(parseClusterFromJson(json)); }
   void setupFromYaml(const std::string& yaml) { setup(parseClusterFromV2Yaml(yaml)); }
 
   void setup(const envoy::api::v2::Cluster& cluster_config) {
@@ -71,10 +76,11 @@ public:
         "cluster.{}.", cluster_config.alt_stat_name().empty() ? cluster_config.name()
                                                               : cluster_config.alt_stat_name()));
     Envoy::Server::Configuration::TransportSocketFactoryContextImpl factory_context(
-        ssl_context_manager_, *scope, cm, local_info_, dispatcher_, random_, stats_store_);
+        admin_, ssl_context_manager_, *scope, cm, local_info_, dispatcher_, random_, stats_store_,
+        singleton_manager_, tls_, validation_visitor_, *api_);
     cluster_.reset(
         new OriginalDstCluster(cluster_config, runtime_, factory_context, std::move(scope), false));
-    cluster_->prioritySet().addMemberUpdateCb(
+    cluster_->prioritySet().addPriorityUpdateCb(
         [&](uint32_t, const HostVector&, const HostVector&) -> void {
           membership_updated_.ready();
         });
@@ -91,6 +97,11 @@ public:
   Event::MockTimer* cleanup_timer_;
   NiceMock<Runtime::MockRandomGenerator> random_;
   NiceMock<LocalInfo::MockLocalInfo> local_info_;
+  NiceMock<Server::MockAdmin> admin_;
+  Singleton::ManagerImpl singleton_manager_{Thread::threadFactoryForTest().currentThreadId()};
+  NiceMock<ThreadLocal::MockInstance> tls_;
+  NiceMock<ProtobufMessage::MockValidationVisitor> validation_visitor_;
+  Api::ApiPtr api_;
 };
 
 TEST(OriginalDstClusterConfigTest, BadConfig) {
@@ -104,7 +115,8 @@ TEST(OriginalDstClusterConfigTest, BadConfig) {
   }
   )EOF"; // Help Emacs balance quotation marks: "
 
-  EXPECT_THROW(parseClusterFromJson(json), EnvoyException);
+  EXPECT_THROW_WITH_MESSAGE(parseClusterFromJson(json), EnvoyException,
+                            "original_dst clusters must have no hosts configured");
 }
 
 TEST(OriginalDstClusterConfigTest, GoodConfig) {
@@ -121,40 +133,77 @@ TEST(OriginalDstClusterConfigTest, GoodConfig) {
   EXPECT_TRUE(parseClusterFromJson(json).has_cleanup_interval());
 }
 
+TEST_F(OriginalDstClusterTest, BadConfigWithLoadAssignment) {
+  const std::string yaml = R"EOF(
+    name: name
+    connect_timeout: 0.25s
+    type: ORIGINAL_DST
+    lb_policy: ORIGINAL_DST_LB
+    cleanup_interval: 1s
+    load_assignment:
+      cluster_name: name
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address:
+                address: 127.0.0.1
+                port_value: 8000
+  )EOF";
+
+  EXPECT_THROW_WITH_MESSAGE(
+      setupFromYaml(yaml), EnvoyException,
+      "ORIGINAL_DST clusters must have no load assignment or hosts configured");
+}
+
+TEST_F(OriginalDstClusterTest, BadConfigWithDeprecatedHosts) {
+  const std::string yaml = R"EOF(
+    name: name
+    connect_timeout: 0.25s
+    type: ORIGINAL_DST
+    lb_policy: ORIGINAL_DST_LB
+    cleanup_interval: 1s
+    hosts:
+      - socket_address:
+          address: 127.0.0.1
+          port_value: 8000
+  )EOF";
+
+  EXPECT_THROW_WITH_MESSAGE(
+      setupFromYaml(yaml), EnvoyException,
+      "ORIGINAL_DST clusters must have no load assignment or hosts configured");
+}
+
 TEST_F(OriginalDstClusterTest, CleanupInterval) {
-  std::string json = R"EOF(
-  {
-    "name": "name",
-    "connect_timeout_ms": 250,
-    "type": "original_dst",
-    "lb_type": "original_dst_lb",
-    "cleanup_interval_ms": 1000
-  }
+  std::string yaml = R"EOF(
+    name: name
+    connect_timeout: 1.250s
+    type: ORIGINAL_DST
+    lb_policy: ORIGINAL_DST_LB
+    cleanup_interval: 1s
   )EOF"; // Help Emacs balance quotation marks: "
 
   EXPECT_CALL(initialized_, ready());
   EXPECT_CALL(membership_updated_, ready()).Times(0);
   EXPECT_CALL(*cleanup_timer_, enableTimer(std::chrono::milliseconds(1000)));
-  setupFromJson(json);
+  setupFromYaml(yaml);
 
   EXPECT_EQ(0UL, cluster_->prioritySet().hostSetsPerPriority()[0]->hosts().size());
   EXPECT_EQ(0UL, cluster_->prioritySet().hostSetsPerPriority()[0]->healthyHosts().size());
 }
 
 TEST_F(OriginalDstClusterTest, NoContext) {
-  std::string json = R"EOF(
-  {
-    "name": "name",
-    "connect_timeout_ms": 1250,
-    "type": "original_dst",
-    "lb_type": "original_dst_lb"
-  }
+  std::string yaml = R"EOF(
+    name: name,
+    connect_timeout: 0.125s
+    type: ORIGINAL_DST
+    lb_policy: ORIGINAL_DST_LB
   )EOF";
 
   EXPECT_CALL(initialized_, ready());
   EXPECT_CALL(membership_updated_, ready()).Times(0);
   EXPECT_CALL(*cleanup_timer_, enableTimer(_));
-  setupFromJson(json);
+  setupFromYaml(yaml);
 
   EXPECT_EQ(0UL, cluster_->prioritySet().hostSetsPerPriority()[0]->hosts().size());
   EXPECT_EQ(0UL, cluster_->prioritySet().hostSetsPerPriority()[0]->healthyHosts().size());
@@ -205,18 +254,16 @@ TEST_F(OriginalDstClusterTest, NoContext) {
 }
 
 TEST_F(OriginalDstClusterTest, Membership) {
-  std::string json = R"EOF(
-  {
-    "name": "name",
-    "connect_timeout_ms": 1250,
-    "type": "original_dst",
-    "lb_type": "original_dst_lb"
-  }
+  std::string yaml = R"EOF(
+    name: name
+    connect_timeout: 1.250s
+    type: ORIGINAL_DST
+    lb_policy: ORIGINAL_DST_LB
   )EOF";
 
   EXPECT_CALL(initialized_, ready());
   EXPECT_CALL(*cleanup_timer_, enableTimer(_));
-  setupFromJson(json);
+  setupFromYaml(yaml);
 
   EXPECT_EQ(0UL, cluster_->prioritySet().hostSetsPerPriority()[0]->hosts().size());
   EXPECT_EQ(0UL, cluster_->prioritySet().hostSetsPerPriority()[0]->healthyHosts().size());
@@ -297,18 +344,16 @@ TEST_F(OriginalDstClusterTest, Membership) {
 }
 
 TEST_F(OriginalDstClusterTest, Membership2) {
-  std::string json = R"EOF(
-  {
-    "name": "name",
-    "connect_timeout_ms": 1250,
-    "type": "original_dst",
-    "lb_type": "original_dst_lb"
-  }
+  std::string yaml = R"EOF(
+    name: name
+    connect_timeout: 1.250s
+    type: ORIGINAL_DST
+    lb_policy: ORIGINAL_DST_LB
   )EOF";
 
   EXPECT_CALL(initialized_, ready());
   EXPECT_CALL(*cleanup_timer_, enableTimer(_));
-  setupFromJson(json);
+  setupFromYaml(yaml);
 
   EXPECT_EQ(0UL, cluster_->prioritySet().hostSetsPerPriority()[0]->hosts().size());
   EXPECT_EQ(0UL, cluster_->prioritySet().hostSetsPerPriority()[0]->healthyHosts().size());
@@ -389,18 +434,16 @@ TEST_F(OriginalDstClusterTest, Membership2) {
 }
 
 TEST_F(OriginalDstClusterTest, Connection) {
-  std::string json = R"EOF(
-  {
-    "name": "name",
-    "connect_timeout_ms": 1250,
-    "type": "original_dst",
-    "lb_type": "original_dst_lb"
-  }
+  std::string yaml = R"EOF(
+    name: name
+    connect_timeout: 1.250s
+    type: ORIGINAL_DST
+    lb_policy: ORIGINAL_DST_LB
   )EOF";
 
   EXPECT_CALL(initialized_, ready());
   EXPECT_CALL(*cleanup_timer_, enableTimer(_));
-  setupFromJson(json);
+  setupFromYaml(yaml);
 
   EXPECT_EQ(0UL, cluster_->prioritySet().hostSetsPerPriority()[0]->hosts().size());
   EXPECT_EQ(0UL, cluster_->prioritySet().hostSetsPerPriority()[0]->healthyHosts().size());
@@ -428,36 +471,35 @@ TEST_F(OriginalDstClusterTest, Connection) {
 
   EXPECT_CALL(dispatcher_, createClientConnection_(PointeesEq(connection.local_address_), _, _, _))
       .WillOnce(Return(new NiceMock<Network::MockClientConnection>()));
-  host->createConnection(dispatcher_, nullptr);
+  host->createConnection(dispatcher_, nullptr, nullptr);
 }
 
 TEST_F(OriginalDstClusterTest, MultipleClusters) {
-  std::string json = R"EOF(
-  {
-    "name": "name",
-    "connect_timeout_ms": 1250,
-    "type": "original_dst",
-    "lb_type": "original_dst_lb"
-  }
+  std::string yaml = R"EOF(
+    name: name
+    connect_timeout: 1.250s
+    type: ORIGINAL_DST
+    lb_policy: ORIGINAL_DST_LB
   )EOF";
 
   EXPECT_CALL(initialized_, ready());
   EXPECT_CALL(*cleanup_timer_, enableTimer(_));
-  setupFromJson(json);
+  setupFromYaml(yaml);
 
   PrioritySetImpl second;
-  cluster_->prioritySet().addMemberUpdateCb(
+  cluster_->prioritySet().addPriorityUpdateCb(
       [&](uint32_t, const HostVector& added, const HostVector& removed) -> void {
         // Update second hostset accordingly;
         HostVectorSharedPtr new_hosts(
             new HostVector(cluster_->prioritySet().hostSetsPerPriority()[0]->hosts()));
-        HostVectorSharedPtr healthy_hosts(
-            new HostVector(cluster_->prioritySet().hostSetsPerPriority()[0]->hosts()));
+        auto healthy_hosts = std::make_shared<const HealthyHostVector>(
+            cluster_->prioritySet().hostSetsPerPriority()[0]->hosts());
         const HostsPerLocalityConstSharedPtr empty_hosts_per_locality{new HostsPerLocalityImpl()};
 
-        second.getOrCreateHostSet(0).updateHosts(new_hosts, healthy_hosts, empty_hosts_per_locality,
-                                                 empty_hosts_per_locality, {}, added, removed,
-                                                 absl::nullopt);
+        second.updateHosts(0,
+                           updateHostsParams(new_hosts, empty_hosts_per_locality, healthy_hosts,
+                                             empty_hosts_per_locality),
+                           {}, added, removed, absl::nullopt);
       });
 
   EXPECT_CALL(membership_updated_, ready());
@@ -488,7 +530,7 @@ TEST_F(OriginalDstClusterTest, MultipleClusters) {
 
 TEST_F(OriginalDstClusterTest, UseHttpHeaderEnabled) {
   std::string yaml = R"EOF(
-    name: "name"
+    name: name
     connect_timeout: 1.250s
     type: ORIGINAL_DST
     lb_policy: ORIGINAL_DST_LB
@@ -562,7 +604,7 @@ TEST_F(OriginalDstClusterTest, UseHttpHeaderEnabled) {
 
 TEST_F(OriginalDstClusterTest, UseHttpHeaderDisabled) {
   std::string yaml = R"EOF(
-    name: "name"
+    name: name
     connect_timeout: 1.250s
     type: ORIGINAL_DST
     lb_policy: ORIGINAL_DST_LB
@@ -621,6 +663,7 @@ TEST_F(OriginalDstClusterTest, UseHttpHeaderDisabled) {
   EXPECT_EQ(host3, nullptr);
 }
 
+} // namespace
 } // namespace OriginalDstClusterTest
 } // namespace Upstream
 } // namespace Envoy

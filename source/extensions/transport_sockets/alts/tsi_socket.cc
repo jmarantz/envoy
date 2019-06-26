@@ -34,6 +34,11 @@ std::string TsiSocket::protocol() const {
   return EMPTY_STRING;
 }
 
+absl::string_view TsiSocket::failureReason() const {
+  // TODO(htuch): Implement error reason for TSI.
+  return EMPTY_STRING;
+}
+
 Network::PostIoAction TsiSocket::doHandshake() {
   ASSERT(!handshake_complete_);
   ENVOY_CONN_LOG(debug, "TSI: doHandshake", callbacks_->connection());
@@ -127,7 +132,7 @@ Network::PostIoAction TsiSocket::doHandshakeNextDone(NextResultPtr&& next_result
     // returns TSI_OK assuming there is no fatal error. Asserting OK.
     tsi_frame_protector* frame_protector;
     status =
-        tsi_handshaker_result_create_frame_protector(handshaker_result, NULL, &frame_protector);
+        tsi_handshaker_result_create_frame_protector(handshaker_result, nullptr, &frame_protector);
     ASSERT(status == TSI_OK);
     frame_protector_ = std::make_unique<TsiFrameProtector>(frame_protector);
 
@@ -249,7 +254,8 @@ TsiSocketFactory::TsiSocketFactory(HandshakerFactory handshaker_factory,
 
 bool TsiSocketFactory::implementsSecureTransport() const { return true; }
 
-Network::TransportSocketPtr TsiSocketFactory::createTransportSocket() const {
+Network::TransportSocketPtr
+TsiSocketFactory::createTransportSocket(Network::TransportSocketOptionsSharedPtr) const {
   return std::make_unique<TsiSocket>(handshaker_factory_, handshake_validator_);
 }
 

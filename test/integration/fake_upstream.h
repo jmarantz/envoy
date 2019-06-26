@@ -58,6 +58,7 @@ public:
   void encodeData(absl::string_view data, bool end_stream);
   void encodeTrailers(const Http::HeaderMapImpl& trailers);
   void encodeResetStream();
+  void encodeMetadata(const Http::MetadataMapVector& metadata_map_vector);
   const Http::HeaderMap& headers() { return *headers_; }
   void setAddServedByHeader(bool add_header) { add_served_by_header_ = add_header; }
   const Http::HeaderMapPtr& trailers() { return trailers_; }
@@ -89,7 +90,7 @@ public:
   void startGrpcStream();
   void finishGrpcStream(Grpc::Status::GrpcStatus status);
   template <class T> void sendGrpcMessage(const T& message) {
-    auto serialized_response = Grpc::Common::serializeBody(message);
+    auto serialized_response = Grpc::Common::serializeToGrpcFrame(message);
     encodeData(*serialized_response, false);
     ENVOY_LOG(debug, "Sent gRPC message: {}", message.DebugString());
   }
@@ -152,7 +153,8 @@ public:
   void decodeMetadata(Http::MetadataMapPtr&&) override {}
 
   // Http::StreamCallbacks
-  void onResetStream(Http::StreamResetReason reason) override;
+  void onResetStream(Http::StreamResetReason reason,
+                     absl::string_view transport_failure_reason) override;
   void onAboveWriteBufferHighWatermark() override {}
   void onBelowWriteBufferLowWatermark() override {}
 
@@ -178,7 +180,7 @@ private:
   Event::TestTimeSystem& time_system_;
 };
 
-typedef std::unique_ptr<FakeStream> FakeStreamPtr;
+using FakeStreamPtr = std::unique_ptr<FakeStream>;
 
 // Encapsulates various state and functionality related to sharing a Connection object across
 // threads. With FakeUpstream fabricated objects, we have a Connection that is associated with a
@@ -263,7 +265,7 @@ public:
           callback_ready_event.notifyOne();
         });
     Event::TestTimeSystem& time_system =
-        dynamic_cast<Event::TestTimeSystem&>(connection_.dispatcher().timeSystem());
+        dynamic_cast<Event::TestTimeSystem&>(connection_.dispatcher().timeSource());
     Thread::CondVar::WaitStatus status = time_system.waitFor(lock_, callback_ready_event, timeout);
     if (status == Thread::CondVar::WaitStatus::Timeout) {
       return testing::AssertionFailure() << "Timed out while executing on dispatcher.";
@@ -287,10 +289,10 @@ private:
   const bool allow_unexpected_disconnects_;
 };
 
-typedef std::unique_ptr<SharedConnectionWrapper> SharedConnectionWrapperPtr;
+using SharedConnectionWrapperPtr = std::unique_ptr<SharedConnectionWrapper>;
 
 class QueuedConnectionWrapper;
-typedef std::unique_ptr<QueuedConnectionWrapper> QueuedConnectionWrapperPtr;
+using QueuedConnectionWrapperPtr = std::unique_ptr<QueuedConnectionWrapper>;
 
 /**
  * Wraps a raw Network::Connection in a safe way, such that the connection can
@@ -400,10 +402,10 @@ public:
   enum class Type { HTTP1, HTTP2 };
 
   FakeHttpConnection(SharedConnectionWrapper& shared_connection, Stats::Store& store, Type type,
-                     Event::TestTimeSystem& time_system);
+                     Event::TestTimeSystem& time_system, uint32_t max_request_headers_kb);
 
   // By default waitForNewStream assumes the next event is a new stream and
-  // returns AssertionFaliure if an unexpected event occurs. If a caller truly
+  // returns AssertionFailure if an unexpected event occurs. If a caller truly
   // wishes to wait for a new stream, set ignore_spurious_events = true. Returns
   // the new stream via the stream argument.
   ABSL_MUST_USE_RESULT
@@ -413,7 +415,7 @@ public:
                    std::chrono::milliseconds timeout = TestUtility::DefaultTimeout);
 
   // Http::ServerConnectionCallbacks
-  Http::StreamDecoder& newStream(Http::StreamEncoder& response_encoder) override;
+  Http::StreamDecoder& newStream(Http::StreamEncoder& response_encoder, bool) override;
   void onGoAway() override { NOT_IMPLEMENTED_GCOVR_EXCL_LINE; }
 
 private:
@@ -433,7 +435,7 @@ private:
   std::list<FakeStreamPtr> new_streams_;
 };
 
-typedef std::unique_ptr<FakeHttpConnection> FakeHttpConnectionPtr;
+using FakeHttpConnectionPtr = std::unique_ptr<FakeHttpConnection>;
 
 /**
  * Fake raw connection for integration testing.
@@ -442,7 +444,7 @@ class FakeRawConnection : public FakeConnectionBase {
 public:
   FakeRawConnection(SharedConnectionWrapper& shared_connection, Event::TestTimeSystem& time_system)
       : FakeConnectionBase(shared_connection, time_system) {}
-  typedef const std::function<bool(const std::string&)> ValidatorFunction;
+  using ValidatorFunction = const std::function<bool(const std::string&)>;
 
   // Writes to data. If data is nullptr, discards the received data.
   ABSL_MUST_USE_RESULT
@@ -498,7 +500,7 @@ private:
   std::string data_;
 };
 
-typedef std::unique_ptr<FakeRawConnection> FakeRawConnectionPtr;
+using FakeRawConnectionPtr = std::unique_ptr<FakeRawConnection>;
 
 /**
  * Provides a fake upstream server for integration testing.
@@ -507,8 +509,14 @@ class FakeUpstream : Logger::Loggable<Logger::Id::testing>,
                      public Network::FilterChainManager,
                      public Network::FilterChainFactory {
 public:
+  // Creates a fake upstream bound to the specified unix domain socket path.
   FakeUpstream(const std::string& uds_path, FakeHttpConnection::Type type,
                Event::TestTimeSystem& time_system);
+  // Creates a fake upstream bound to the specified |address|.
+  FakeUpstream(const Network::Address::InstanceConstSharedPtr& address,
+               FakeHttpConnection::Type type, Event::TestTimeSystem& time_system,
+               bool enable_half_close = false);
+  // Creates a fake upstream bound to INADDR_ANY and the specified |port|.
   FakeUpstream(uint32_t port, FakeHttpConnection::Type type, Network::Address::IpVersion version,
                Event::TestTimeSystem& time_system, bool enable_half_close = false);
   FakeUpstream(Network::TransportSocketFactoryPtr&& transport_socket_factory, uint32_t port,
@@ -522,7 +530,8 @@ public:
   ABSL_MUST_USE_RESULT
   testing::AssertionResult
   waitForHttpConnection(Event::Dispatcher& client_dispatcher, FakeHttpConnectionPtr& connection,
-                        std::chrono::milliseconds timeout = TestUtility::DefaultTimeout);
+                        std::chrono::milliseconds timeout = TestUtility::DefaultTimeout,
+                        uint32_t max_request_headers_kb = Http::DEFAULT_MAX_REQUEST_HEADERS_KB);
 
   ABSL_MUST_USE_RESULT
   testing::AssertionResult
@@ -548,6 +557,8 @@ public:
   createNetworkFilterChain(Network::Connection& connection,
                            const std::vector<Network::FilterFactoryCb>& filter_factories) override;
   bool createListenerFilterChain(Network::ListenerFilterManager& listener) override;
+  bool createUdpListenerFilterChain(Network::UdpListenerFilterManager& udp_listener,
+                                    Network::UdpReadFilterCallbacks& callbacks) override;
   void set_allow_unexpected_disconnects(bool value) { allow_unexpected_disconnects_ = value; }
 
   Event::TestTimeSystem& timeSystem() { return time_system_; }
@@ -573,13 +584,16 @@ private:
     Network::FilterChainManager& filterChainManager() override { return parent_; }
     Network::FilterChainFactory& filterChainFactory() override { return parent_; }
     Network::Socket& socket() override { return *parent_.socket_; }
+    const Network::Socket& socket() const override { return *parent_.socket_; }
     bool bindToPort() override { return true; }
     bool handOffRestoredDestinationConnections() const override { return false; }
-    uint32_t perConnectionBufferLimitBytes() override { return 0; }
+    uint32_t perConnectionBufferLimitBytes() const override { return 0; }
+    std::chrono::milliseconds listenerFiltersTimeout() const override {
+      return std::chrono::milliseconds();
+    }
     Stats::Scope& listenerScope() override { return parent_.stats_store_; }
     uint64_t listenerTag() const override { return 0; }
     const std::string& name() const override { return name_; }
-    bool reverseWriteFilterOrder() const override { return true; }
 
     FakeUpstream& parent_;
     std::string name_;
@@ -610,6 +624,6 @@ private:
   const Network::FilterChainSharedPtr filter_chain_;
 };
 
-typedef std::unique_ptr<FakeUpstream> FakeUpstreamPtr;
+using FakeUpstreamPtr = std::unique_ptr<FakeUpstream>;
 
 } // namespace Envoy

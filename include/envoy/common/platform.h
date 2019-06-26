@@ -1,14 +1,20 @@
 #pragma once
 
 // NOLINT(namespace-envoy)
-#if !defined(_MSC_VER)
-#define PACKED_STRUCT(definition, ...) definition, ##__VA_ARGS__ __attribute__((packed))
-
-#else
-#include <malloc.h>
+#ifdef _MSC_VER
+#include <stdint.h>
 
 #define PACKED_STRUCT(definition, ...)                                                             \
   __pragma(pack(push, 1)) definition, ##__VA_ARGS__;                                               \
   __pragma(pack(pop))
+
+#ifdef _M_X64
+using ssize_t = int64_t;
+#else
+#error Envoy is not supported on 32-bit Windows
+#endif
+
+#else
+#define PACKED_STRUCT(definition, ...) definition, ##__VA_ARGS__ __attribute__((packed))
 
 #endif

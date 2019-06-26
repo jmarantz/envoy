@@ -17,6 +17,7 @@ envoy_cc_library(
         "//include/envoy/event:dispatcher_interface",
         "//include/envoy/http:async_client_interface",
         "//include/envoy/http:codec_interface",
+        "//include/envoy/http:context_interface",
         "//include/envoy/http:header_map_interface",
         "//include/envoy/http:message_interface",
         "//include/envoy/router:router_interface",
@@ -88,7 +89,19 @@ envoy_cc_library(
         "//include/envoy/stats:stats_interface",
         "//source/common/common:enum_to_int",
         "//source/common/common:utility_lib",
+        "//source/common/stats:symbol_table_lib",
         "@envoy_api//envoy/type:http_status_cc",
+    ],
+)
+
+envoy_cc_library(
+    name = "context_lib",
+    srcs = ["context_impl.cc"],
+    hdrs = ["context_impl.h"],
+    deps = [
+        ":codes_lib",
+        "//include/envoy/http:context_interface",
+        "//source/common/tracing:http_tracer_lib",
     ],
 )
 
@@ -107,6 +120,7 @@ envoy_cc_library(
     hdrs = ["conn_manager_config.h"],
     deps = [
         ":date_provider_lib",
+        "//include/envoy/config:config_provider_interface",
         "//include/envoy/http:filter_interface",
         "//include/envoy/router:rds_interface",
         "//source/common/network:utility_lib",
@@ -129,6 +143,7 @@ envoy_cc_library(
         ":exception_lib",
         ":header_map_lib",
         ":headers_lib",
+        ":path_utility_lib",
         ":user_agent_lib",
         ":utility_lib",
         "//include/envoy/access_log:access_log_interface",
@@ -137,6 +152,7 @@ envoy_cc_library(
         "//include/envoy/event:deferred_deletable",
         "//include/envoy/event:dispatcher_interface",
         "//include/envoy/http:codec_interface",
+        "//include/envoy/http:context_interface",
         "//include/envoy/http:filter_interface",
         "//include/envoy/http:header_map_interface",
         "//include/envoy/local_info:local_info_interface",
@@ -144,13 +160,13 @@ envoy_cc_library(
         "//include/envoy/network:drain_decision_interface",
         "//include/envoy/network:filter_interface",
         "//include/envoy/router:rds_interface",
+        "//include/envoy/router:scopes_interface",
         "//include/envoy/runtime:runtime_interface",
         "//include/envoy/server:overload_manager_interface",
         "//include/envoy/ssl:connection_interface",
         "//include/envoy/stats:stats_interface",
         "//include/envoy/stats:stats_macros",
         "//include/envoy/stats:timespan",
-        "//include/envoy/tracing:http_tracer_interface",
         "//include/envoy/upstream:upstream_interface",
         "//source/common/access_log:access_log_formatter_lib",
         "//source/common/buffer:buffer_lib",
@@ -261,7 +277,10 @@ envoy_cc_library(
     name = "utility_lib",
     srcs = ["utility.cc"],
     hdrs = ["utility.h"],
-    external_deps = ["abseil_optional"],
+    external_deps = [
+        "abseil_optional",
+        "http_parser",
+    ],
     deps = [
         ":exception_lib",
         ":header_map_lib",
@@ -297,5 +316,17 @@ envoy_cc_library(
         "//source/common/protobuf:utility_lib",
         "@envoy_api//envoy/api/v2/route:route_cc",
         "@envoy_api//envoy/type:range_cc",
+    ],
+)
+
+envoy_cc_library(
+    name = "path_utility_lib",
+    srcs = ["path_utility.cc"],
+    hdrs = ["path_utility.h"],
+    external_deps = ["abseil_optional"],
+    deps = [
+        "//include/envoy/http:header_map_interface",
+        "//source/common/chromium_url",
+        "//source/common/common:logger_lib",
     ],
 )

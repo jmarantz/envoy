@@ -17,11 +17,12 @@ namespace Envoy {
 namespace Extensions {
 namespace HttpFilters {
 namespace JwtAuthn {
+namespace {
 
 TEST(HttpJwtAuthnFilterFactoryTest, GoodRemoteJwks) {
   FilterFactory factory;
   ProtobufTypes::MessagePtr proto_config = factory.createEmptyConfigProto();
-  MessageUtil::loadFromYaml(ExampleConfig, *proto_config);
+  TestUtility::loadFromYaml(ExampleConfig, *proto_config);
 
   NiceMock<Server::Configuration::MockFactoryContext> context;
 
@@ -56,7 +57,7 @@ TEST(HttpJwtAuthnFilterFactoryTest, BadLocalJwks) {
   EXPECT_THROW(factory.createFilterFactoryFromProto(proto_config, "stats", context),
                EnvoyException);
 }
-
+} // namespace
 } // namespace JwtAuthn
 } // namespace HttpFilters
 } // namespace Extensions

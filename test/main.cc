@@ -1,5 +1,8 @@
 // NOLINT(namespace-envoy)
+#include "envoy/thread/thread.h"
+
 #include "test/test_common/environment.h"
+#include "test/test_common/utility.h"
 #include "test/test_runner.h"
 
 #include "absl/debugging/symbolize.h"
@@ -7,11 +10,6 @@
 #ifdef ENVOY_HANDLE_SIGNALS
 #include "exe/signal_action.h"
 #endif
-
-const char* __asan_default_options() {
-  static char result[] = {"check_initialization_order=true strict_init_order=true"};
-  return result;
-}
 
 // The main entry point (and the rest of this file) should have no logic in it,
 // this allows overriding by site specific versions of main.cc.

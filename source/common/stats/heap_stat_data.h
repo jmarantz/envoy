@@ -1,89 +1,86 @@
+// TODO(jmarantz): rename this file and class to heap_allocator.h.
+
 #pragma once
 
-#include <cstdint>
-#include <string>
-#include <unordered_set>
+#include <vector>
 
-#include "common/common/hash.h"
-#include "common/common/thread.h"
-#include "common/common/thread_annotations.h"
-#include "common/stats/stat_data_allocator_impl.h"
+#include "envoy/stats/stat_data_allocator.h"
+#include "envoy/stats/stats.h"
+#include "envoy/stats/symbol_table.h"
+
+#include "common/stats/metric_impl.h"
 
 #include "absl/container/flat_hash_set.h"
+#include "absl/strings/string_view.h"
 
 namespace Envoy {
 namespace Stats {
 
 /**
- * This structure is an alternate backing store for both CounterImpl and GaugeImpl. It is designed
- * so that it can be allocated efficiently from the heap on demand.
+ * Holds backing store for both CounterImpl and GaugeImpl. This provides a level
+ * of indirection needed to enable stats created with the same name from
+ * different scopes to share the same value.
  */
-struct HeapStatData {
-  /**
-   * @returns absl::string_view the name as a string_view.
-   */
-  absl::string_view key() const { return name_; }
+struct HeapStatData : public InlineStorage {
+private:
+  explicit HeapStatData(StatName stat_name) { stat_name.copyToStorage(symbol_storage_); }
 
-  /**
-   * @returns std::string the name as a const char*.
-   */
-  const char* name() const { return name_; }
+public:
+  static HeapStatData* alloc(StatName stat_name, SymbolTable& symbol_table);
 
-  static HeapStatData* alloc(absl::string_view name);
-  void free();
+  void free(SymbolTable& symbol_table);
+  StatName statName() const { return StatName(symbol_storage_); }
+
+  bool operator==(const HeapStatData& rhs) const { return statName() == rhs.statName(); }
+  uint64_t hash() const { return statName().hash(); }
 
   std::atomic<uint64_t> value_{0};
   std::atomic<uint64_t> pending_increment_{0};
   std::atomic<uint16_t> flags_{0};
   std::atomic<uint16_t> ref_count_{1};
-  char name_[];
-
-private:
-  /**
-   * You cannot construct/destruct a HeapStatData directly with new/delete as
-   * it's variable-size. Use alloc()/free() methods above.
-   */
-  explicit HeapStatData(absl::string_view name);
-  ~HeapStatData() {}
+  SymbolTable::Storage symbol_storage_; // This is a 'using' nickname for uint8_t[].
 };
 
-/**
- * Implementation of StatDataAllocator using a pure heap-based strategy, so that
- * Envoy implementations that do not require hot-restart can use less memory.
- */
-class HeapStatDataAllocator : public StatDataAllocatorImpl<HeapStatData> {
+class HeapStatDataAllocator : public StatDataAllocator {
 public:
-  HeapStatDataAllocator();
-  ~HeapStatDataAllocator();
+  HeapStatDataAllocator(SymbolTable& symbol_table) : symbol_table_(symbol_table) {}
+  ~HeapStatDataAllocator() override;
 
-  // StatDataAllocatorImpl
-  HeapStatData* alloc(absl::string_view name) override;
-  void free(HeapStatData& data) override;
+  HeapStatData& alloc(StatName name);
+  void free(HeapStatData& data);
 
   // StatDataAllocator
-  bool requiresBoundedStatNameSize() const override { return false; }
+  CounterSharedPtr makeCounter(StatName name, absl::string_view tag_extracted_name,
+                               const std::vector<Tag>& tags) override;
+  GaugeSharedPtr makeGauge(StatName name, absl::string_view tag_extracted_name,
+                           const std::vector<Tag>& tags, Gauge::ImportMode import_mode) override;
+  SymbolTable& symbolTable() override { return symbol_table_; }
+  const SymbolTable& constSymbolTable() const override { return symbol_table_; }
+
+#ifndef ENVOY_CONFIG_COVERAGE
+  void debugPrint();
+#endif
 
 private:
   struct HeapStatHash {
-    size_t operator()(const HeapStatData* a) const { return HashUtil::xxHash64(a->key()); }
+    size_t operator()(const HeapStatData* a) const { return a->hash(); }
   };
   struct HeapStatCompare {
-    bool operator()(const HeapStatData* a, const HeapStatData* b) const {
-      return (a->key() == b->key());
-    }
+    bool operator()(const HeapStatData* a, const HeapStatData* b) const { return *a == *b; }
   };
 
-  // TODO(jmarantz): See https://github.com/envoyproxy/envoy/pull/3927 and
-  //  https://github.com/envoyproxy/envoy/issues/3585, which can help reorganize
-  // the heap stats using a ref-counted symbol table to compress the stat strings.
-  using StatSet = absl::flat_hash_set<HeapStatData*, HeapStatHash, HeapStatCompare>;
-
   // An unordered set of HeapStatData pointers which keys off the key()
-  // field in each object. This necessitates a custom comparator and hasher.
+  // field in each object. This necessitates a custom comparator and hasher, which key off of the
+  // StatNamePtr's own StatNamePtrHash and StatNamePtrCompare operators.
+  using StatSet = absl::flat_hash_set<HeapStatData*, HeapStatHash, HeapStatCompare>;
   StatSet stats_ GUARDED_BY(mutex_);
-  // A mutex is needed here to protect the stats_ object from both alloc() and free() operations.
-  // Although alloc() operations are called under existing locking, free() operations are made from
-  // the destructors of the individual stat objects, which are not protected by locks.
+
+  SymbolTable& symbol_table_;
+
+  // A mutex is needed here to protect both the stats_ object from both
+  // alloc() and free() operations. Although alloc() operations are called under existing locking,
+  // free() operations are made from the destructors of the individual stat objects, which are not
+  // protected by locks.
   Thread::MutexBasicLockable mutex_;
 };
 

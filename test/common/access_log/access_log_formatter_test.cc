@@ -8,6 +8,7 @@
 #include "common/http/header_map_impl.h"
 
 #include "test/mocks/http/mocks.h"
+#include "test/mocks/ssl/mocks.h"
 #include "test/mocks/stream_info/mocks.h"
 #include "test/mocks/upstream/mocks.h"
 #include "test/test_common/printers.h"
@@ -17,12 +18,14 @@
 #include "gtest/gtest.h"
 
 using testing::_;
+using testing::Const;
 using testing::NiceMock;
 using testing::Return;
 using testing::ReturnRef;
 
 namespace Envoy {
 namespace AccessLog {
+namespace {
 
 TEST(AccessLogFormatUtilsTest, protocolToString) {
   EXPECT_EQ("HTTP/1.0", AccessLogFormatUtils::protocolToString(Http::Protocol::Http10));
@@ -123,6 +126,20 @@ TEST(AccessLogFormatterTest, streamInfoFormatter) {
   }
 
   {
+    StreamInfoFormatter response_format("RESPONSE_CODE_DETAILS");
+    absl::optional<std::string> rc_details;
+    EXPECT_CALL(stream_info, responseCodeDetails()).WillRepeatedly(ReturnRef(rc_details));
+    EXPECT_EQ("-", response_format.format(header, header, header, stream_info));
+  }
+
+  {
+    StreamInfoFormatter response_code_format("RESPONSE_CODE_DETAILS");
+    absl::optional<std::string> rc_details{"via_upstream"};
+    EXPECT_CALL(stream_info, responseCodeDetails()).WillRepeatedly(ReturnRef(rc_details));
+    EXPECT_EQ("via_upstream", response_code_format.format(header, header, header, stream_info));
+  }
+
+  {
     StreamInfoFormatter bytes_sent_format("BYTES_SENT");
     EXPECT_CALL(stream_info, bytesSent()).WillOnce(Return(1));
     EXPECT_EQ("1", bytes_sent_format.format(header, header, header, stream_info));
@@ -199,6 +216,330 @@ TEST(AccessLogFormatterTest, streamInfoFormatter) {
     std::string requested_server_name;
     EXPECT_CALL(stream_info, requestedServerName())
         .WillRepeatedly(ReturnRef(requested_server_name));
+    EXPECT_EQ("-", upstream_format.format(header, header, header, stream_info));
+  }
+  {
+    StreamInfoFormatter upstream_format("DOWNSTREAM_PEER_URI_SAN");
+    NiceMock<Ssl::MockConnectionInfo> connection_info;
+    const std::vector<std::string> sans{"san"};
+    ON_CALL(connection_info, uriSanPeerCertificate()).WillByDefault(Return(sans));
+    EXPECT_CALL(stream_info, downstreamSslConnection()).WillRepeatedly(Return(&connection_info));
+    EXPECT_EQ("san", upstream_format.format(header, header, header, stream_info));
+  }
+  {
+    StreamInfoFormatter upstream_format("DOWNSTREAM_PEER_URI_SAN");
+    NiceMock<Ssl::MockConnectionInfo> connection_info;
+    const std::vector<std::string> sans{"san1", "san2"};
+    ON_CALL(connection_info, uriSanPeerCertificate()).WillByDefault(Return(sans));
+    EXPECT_CALL(stream_info, downstreamSslConnection()).WillRepeatedly(Return(&connection_info));
+    EXPECT_EQ("san1,san2", upstream_format.format(header, header, header, stream_info));
+  }
+  {
+    StreamInfoFormatter upstream_format("DOWNSTREAM_PEER_URI_SAN");
+    NiceMock<Ssl::MockConnectionInfo> connection_info;
+    ON_CALL(connection_info, uriSanPeerCertificate())
+        .WillByDefault(Return(std::vector<std::string>()));
+    EXPECT_CALL(stream_info, downstreamSslConnection()).WillRepeatedly(Return(&connection_info));
+    EXPECT_EQ("-", upstream_format.format(header, header, header, stream_info));
+  }
+  {
+    EXPECT_CALL(stream_info, downstreamSslConnection()).WillRepeatedly(Return(nullptr));
+    StreamInfoFormatter upstream_format("DOWNSTREAM_PEER_URI_SAN");
+    EXPECT_EQ("-", upstream_format.format(header, header, header, stream_info));
+  }
+  {
+    StreamInfoFormatter upstream_format("DOWNSTREAM_LOCAL_URI_SAN");
+    NiceMock<Ssl::MockConnectionInfo> connection_info;
+    const std::vector<std::string> sans{"san"};
+    ON_CALL(connection_info, uriSanLocalCertificate()).WillByDefault(Return(sans));
+    EXPECT_CALL(stream_info, downstreamSslConnection()).WillRepeatedly(Return(&connection_info));
+    EXPECT_EQ("san", upstream_format.format(header, header, header, stream_info));
+  }
+  {
+    StreamInfoFormatter upstream_format("DOWNSTREAM_LOCAL_URI_SAN");
+    NiceMock<Ssl::MockConnectionInfo> connection_info;
+    const std::vector<std::string> sans{"san1", "san2"};
+    ON_CALL(connection_info, uriSanLocalCertificate()).WillByDefault(Return(sans));
+    EXPECT_CALL(stream_info, downstreamSslConnection()).WillRepeatedly(Return(&connection_info));
+    EXPECT_EQ("san1,san2", upstream_format.format(header, header, header, stream_info));
+  }
+  {
+    StreamInfoFormatter upstream_format("DOWNSTREAM_LOCAL_URI_SAN");
+    NiceMock<Ssl::MockConnectionInfo> connection_info;
+    ON_CALL(connection_info, uriSanLocalCertificate())
+        .WillByDefault(Return(std::vector<std::string>()));
+    EXPECT_CALL(stream_info, downstreamSslConnection()).WillRepeatedly(Return(&connection_info));
+    EXPECT_EQ("-", upstream_format.format(header, header, header, stream_info));
+  }
+  {
+    EXPECT_CALL(stream_info, downstreamSslConnection()).WillRepeatedly(Return(nullptr));
+    StreamInfoFormatter upstream_format("DOWNSTREAM_LOCAL_URI_SAN");
+    EXPECT_EQ("-", upstream_format.format(header, header, header, stream_info));
+  }
+  {
+    StreamInfoFormatter upstream_format("DOWNSTREAM_LOCAL_SUBJECT");
+    NiceMock<Ssl::MockConnectionInfo> connection_info;
+    ON_CALL(connection_info, subjectLocalCertificate()).WillByDefault(Return("subject"));
+    EXPECT_CALL(stream_info, downstreamSslConnection()).WillRepeatedly(Return(&connection_info));
+    EXPECT_EQ("subject", upstream_format.format(header, header, header, stream_info));
+  }
+  {
+    StreamInfoFormatter upstream_format("DOWNSTREAM_LOCAL_SUBJECT");
+    NiceMock<Ssl::MockConnectionInfo> connection_info;
+    ON_CALL(connection_info, subjectLocalCertificate()).WillByDefault(Return(""));
+    EXPECT_CALL(stream_info, downstreamSslConnection()).WillRepeatedly(Return(&connection_info));
+    EXPECT_EQ("-", upstream_format.format(header, header, header, stream_info));
+  }
+  {
+    EXPECT_CALL(stream_info, downstreamSslConnection()).WillRepeatedly(Return(nullptr));
+    StreamInfoFormatter upstream_format("DOWNSTREAM_LOCAL_SUBJECT");
+    EXPECT_EQ("-", upstream_format.format(header, header, header, stream_info));
+  }
+  {
+    StreamInfoFormatter upstream_format("DOWNSTREAM_PEER_SUBJECT");
+    NiceMock<Ssl::MockConnectionInfo> connection_info;
+    ON_CALL(connection_info, subjectPeerCertificate()).WillByDefault(Return("subject"));
+    EXPECT_CALL(stream_info, downstreamSslConnection()).WillRepeatedly(Return(&connection_info));
+    EXPECT_EQ("subject", upstream_format.format(header, header, header, stream_info));
+  }
+  {
+    StreamInfoFormatter upstream_format("DOWNSTREAM_PEER_SUBJECT");
+    NiceMock<Ssl::MockConnectionInfo> connection_info;
+    ON_CALL(connection_info, subjectPeerCertificate()).WillByDefault(Return(""));
+    EXPECT_CALL(stream_info, downstreamSslConnection()).WillRepeatedly(Return(&connection_info));
+    EXPECT_EQ("-", upstream_format.format(header, header, header, stream_info));
+  }
+  {
+    EXPECT_CALL(stream_info, downstreamSslConnection()).WillRepeatedly(Return(nullptr));
+    StreamInfoFormatter upstream_format("DOWNSTREAM_PEER_SUBJECT");
+    EXPECT_EQ("-", upstream_format.format(header, header, header, stream_info));
+  }
+  {
+    StreamInfoFormatter upstream_format("DOWNSTREAM_TLS_SESSION_ID");
+    NiceMock<Ssl::MockConnectionInfo> connection_info;
+    ON_CALL(connection_info, sessionId()).WillByDefault(Return("deadbeef"));
+    EXPECT_CALL(stream_info, downstreamSslConnection()).WillRepeatedly(Return(&connection_info));
+    EXPECT_EQ("deadbeef", upstream_format.format(header, header, header, stream_info));
+  }
+  {
+    StreamInfoFormatter upstream_format("DOWNSTREAM_TLS_SESSION_ID");
+    NiceMock<Ssl::MockConnectionInfo> connection_info;
+    ON_CALL(connection_info, sessionId()).WillByDefault(Return(""));
+    EXPECT_CALL(stream_info, downstreamSslConnection()).WillRepeatedly(Return(&connection_info));
+    EXPECT_EQ("-", upstream_format.format(header, header, header, stream_info));
+  }
+  {
+    EXPECT_CALL(stream_info, downstreamSslConnection()).WillRepeatedly(Return(nullptr));
+    StreamInfoFormatter upstream_format("DOWNSTREAM_TLS_SESSION_ID");
+    EXPECT_EQ("-", upstream_format.format(header, header, header, stream_info));
+  }
+  {
+    StreamInfoFormatter upstream_format("DOWNSTREAM_TLS_CIPHER");
+    NiceMock<Ssl::MockConnectionInfo> connection_info;
+    ON_CALL(connection_info, ciphersuiteString())
+        .WillByDefault(Return("TLS_DHE_RSA_WITH_AES_256_GCM_SHA384"));
+    EXPECT_CALL(stream_info, downstreamSslConnection()).WillRepeatedly(Return(&connection_info));
+    EXPECT_EQ("TLS_DHE_RSA_WITH_AES_256_GCM_SHA384",
+              upstream_format.format(header, header, header, stream_info));
+  }
+  {
+    StreamInfoFormatter upstream_format("DOWNSTREAM_TLS_CIPHER");
+    NiceMock<Ssl::MockConnectionInfo> connection_info;
+    ON_CALL(connection_info, ciphersuiteString()).WillByDefault(Return(""));
+    EXPECT_CALL(stream_info, downstreamSslConnection()).WillRepeatedly(Return(&connection_info));
+    EXPECT_EQ("-", upstream_format.format(header, header, header, stream_info));
+  }
+  {
+    EXPECT_CALL(stream_info, downstreamSslConnection()).WillRepeatedly(Return(nullptr));
+    StreamInfoFormatter upstream_format("DOWNSTREAM_TLS_CIPHER");
+    EXPECT_EQ("-", upstream_format.format(header, header, header, stream_info));
+  }
+  {
+    StreamInfoFormatter upstream_format("DOWNSTREAM_TLS_VERSION");
+    NiceMock<Ssl::MockConnectionInfo> connection_info;
+    ON_CALL(connection_info, tlsVersion()).WillByDefault(Return("TLSv1.2"));
+    EXPECT_CALL(stream_info, downstreamSslConnection()).WillRepeatedly(Return(&connection_info));
+    EXPECT_EQ("TLSv1.2", upstream_format.format(header, header, header, stream_info));
+  }
+  {
+    StreamInfoFormatter upstream_format("DOWNSTREAM_TLS_VERSION");
+    NiceMock<Ssl::MockConnectionInfo> connection_info;
+    ON_CALL(connection_info, tlsVersion()).WillByDefault(Return(""));
+    EXPECT_CALL(stream_info, downstreamSslConnection()).WillRepeatedly(Return(&connection_info));
+    EXPECT_EQ("-", upstream_format.format(header, header, header, stream_info));
+  }
+  {
+    EXPECT_CALL(stream_info, downstreamSslConnection()).WillRepeatedly(Return(nullptr));
+    StreamInfoFormatter upstream_format("DOWNSTREAM_TLS_VERSION");
+    EXPECT_EQ("-", upstream_format.format(header, header, header, stream_info));
+  }
+  {
+    StreamInfoFormatter upstream_format("DOWNSTREAM_PEER_FINGERPRINT_256");
+    NiceMock<Ssl::MockConnectionInfo> connection_info;
+    std::string expected_sha = "685a2db593d5f86d346cb1a297009c3b467ad77f1944aa799039a2fb3d531f3f";
+    ON_CALL(connection_info, sha256PeerCertificateDigest()).WillByDefault(ReturnRef(expected_sha));
+    EXPECT_CALL(stream_info, downstreamSslConnection()).WillRepeatedly(Return(&connection_info));
+    EXPECT_EQ(expected_sha, upstream_format.format(header, header, header, stream_info));
+  }
+  {
+    StreamInfoFormatter upstream_format("DOWNSTREAM_PEER_FINGERPRINT_256");
+    NiceMock<Ssl::MockConnectionInfo> connection_info;
+    std::string expected_sha;
+    ON_CALL(connection_info, sha256PeerCertificateDigest()).WillByDefault(ReturnRef(expected_sha));
+    EXPECT_CALL(stream_info, downstreamSslConnection()).WillRepeatedly(Return(&connection_info));
+    EXPECT_EQ("-", upstream_format.format(header, header, header, stream_info));
+  }
+  {
+    EXPECT_CALL(stream_info, downstreamSslConnection()).WillRepeatedly(Return(nullptr));
+    StreamInfoFormatter upstream_format("DOWNSTREAM_PEER_FINGERPRINT_256");
+    EXPECT_EQ("-", upstream_format.format(header, header, header, stream_info));
+  }
+  {
+    StreamInfoFormatter upstream_format("DOWNSTREAM_PEER_SERIAL");
+    NiceMock<Ssl::MockConnectionInfo> connection_info;
+    ON_CALL(connection_info, serialNumberPeerCertificate())
+        .WillByDefault(Return("b8b5ecc898f2124a"));
+    EXPECT_CALL(stream_info, downstreamSslConnection()).WillRepeatedly(Return(&connection_info));
+    EXPECT_EQ("b8b5ecc898f2124a", upstream_format.format(header, header, header, stream_info));
+  }
+  {
+    StreamInfoFormatter upstream_format("DOWNSTREAM_PEER_SERIAL");
+    NiceMock<Ssl::MockConnectionInfo> connection_info;
+    ON_CALL(connection_info, serialNumberPeerCertificate()).WillByDefault(Return(""));
+    EXPECT_CALL(stream_info, downstreamSslConnection()).WillRepeatedly(Return(&connection_info));
+    EXPECT_EQ("-", upstream_format.format(header, header, header, stream_info));
+  }
+  {
+    EXPECT_CALL(stream_info, downstreamSslConnection()).WillRepeatedly(Return(nullptr));
+    StreamInfoFormatter upstream_format("DOWNSTREAM_PEER_SERIAL");
+    EXPECT_EQ("-", upstream_format.format(header, header, header, stream_info));
+  }
+  {
+    StreamInfoFormatter upstream_format("DOWNSTREAM_PEER_ISSUER");
+    NiceMock<Ssl::MockConnectionInfo> connection_info;
+    ON_CALL(connection_info, issuerPeerCertificate())
+        .WillByDefault(
+            Return("CN=Test CA,OU=Lyft Engineering,O=Lyft,L=San Francisco,ST=California,C=US"));
+    EXPECT_CALL(stream_info, downstreamSslConnection()).WillRepeatedly(Return(&connection_info));
+    EXPECT_EQ("CN=Test CA,OU=Lyft Engineering,O=Lyft,L=San Francisco,ST=California,C=US",
+              upstream_format.format(header, header, header, stream_info));
+  }
+  {
+    StreamInfoFormatter upstream_format("DOWNSTREAM_PEER_ISSUER");
+    NiceMock<Ssl::MockConnectionInfo> connection_info;
+    ON_CALL(connection_info, issuerPeerCertificate()).WillByDefault(Return(""));
+    EXPECT_CALL(stream_info, downstreamSslConnection()).WillRepeatedly(Return(&connection_info));
+    EXPECT_EQ("-", upstream_format.format(header, header, header, stream_info));
+  }
+  {
+    EXPECT_CALL(stream_info, downstreamSslConnection()).WillRepeatedly(Return(nullptr));
+    StreamInfoFormatter upstream_format("DOWNSTREAM_PEER_ISSUER");
+    EXPECT_EQ("-", upstream_format.format(header, header, header, stream_info));
+  }
+  {
+    StreamInfoFormatter upstream_format("DOWNSTREAM_PEER_SUBJECT");
+    NiceMock<Ssl::MockConnectionInfo> connection_info;
+    ON_CALL(connection_info, subjectPeerCertificate())
+        .WillByDefault(
+            Return("CN=Test Server,OU=Lyft Engineering,O=Lyft,L=San Francisco,ST=California,C=US"));
+    EXPECT_CALL(stream_info, downstreamSslConnection()).WillRepeatedly(Return(&connection_info));
+    EXPECT_EQ("CN=Test Server,OU=Lyft Engineering,O=Lyft,L=San Francisco,ST=California,C=US",
+              upstream_format.format(header, header, header, stream_info));
+  }
+  {
+    StreamInfoFormatter upstream_format("DOWNSTREAM_PEER_SUBJECT");
+    NiceMock<Ssl::MockConnectionInfo> connection_info;
+    ON_CALL(connection_info, subjectPeerCertificate()).WillByDefault(Return(""));
+    EXPECT_CALL(stream_info, downstreamSslConnection()).WillRepeatedly(Return(&connection_info));
+    EXPECT_EQ("-", upstream_format.format(header, header, header, stream_info));
+  }
+  {
+    EXPECT_CALL(stream_info, downstreamSslConnection()).WillRepeatedly(Return(nullptr));
+    StreamInfoFormatter upstream_format("DOWNSTREAM_PEER_SUBJECT");
+    EXPECT_EQ("-", upstream_format.format(header, header, header, stream_info));
+  }
+  {
+    StreamInfoFormatter upstream_format("DOWNSTREAM_PEER_CERT");
+    NiceMock<Ssl::MockConnectionInfo> connection_info;
+    std::string expected_cert = "<some cert>";
+    ON_CALL(connection_info, urlEncodedPemEncodedPeerCertificate())
+        .WillByDefault(ReturnRef(expected_cert));
+    EXPECT_CALL(stream_info, downstreamSslConnection()).WillRepeatedly(Return(&connection_info));
+    EXPECT_EQ(expected_cert, upstream_format.format(header, header, header, stream_info));
+  }
+  {
+    StreamInfoFormatter upstream_format("DOWNSTREAM_PEER_CERT");
+    NiceMock<Ssl::MockConnectionInfo> connection_info;
+    std::string expected_cert = "";
+    ON_CALL(connection_info, urlEncodedPemEncodedPeerCertificate())
+        .WillByDefault(ReturnRef(expected_cert));
+    EXPECT_CALL(stream_info, downstreamSslConnection()).WillRepeatedly(Return(&connection_info));
+    EXPECT_EQ("-", upstream_format.format(header, header, header, stream_info));
+  }
+  {
+    EXPECT_CALL(stream_info, downstreamSslConnection()).WillRepeatedly(Return(nullptr));
+    StreamInfoFormatter upstream_format("DOWNSTREAM_PEER_CERT");
+    EXPECT_EQ("-", upstream_format.format(header, header, header, stream_info));
+  }
+  {
+    StreamInfoFormatter upstream_format("DOWNSTREAM_PEER_CERT_V_START");
+    NiceMock<Ssl::MockConnectionInfo> connection_info;
+    absl::Time abslStartTime =
+        TestUtility::parseTime("Dec 18 01:50:34 2018 GMT", "%b %e %H:%M:%S %Y GMT");
+    SystemTime startTime = absl::ToChronoTime(abslStartTime);
+    ON_CALL(connection_info, validFromPeerCertificate()).WillByDefault(Return(startTime));
+    EXPECT_CALL(stream_info, downstreamSslConnection()).WillRepeatedly(Return(&connection_info));
+    EXPECT_EQ("2018-12-18T01:50:34.000Z",
+              upstream_format.format(header, header, header, stream_info));
+  }
+  {
+    StreamInfoFormatter upstream_format("DOWNSTREAM_PEER_CERT_V_START");
+    NiceMock<Ssl::MockConnectionInfo> connection_info;
+    ON_CALL(connection_info, validFromPeerCertificate()).WillByDefault(Return(absl::nullopt));
+    EXPECT_CALL(stream_info, downstreamSslConnection()).WillRepeatedly(Return(&connection_info));
+    EXPECT_EQ("-", upstream_format.format(header, header, header, stream_info));
+  }
+  {
+    EXPECT_CALL(stream_info, downstreamSslConnection()).WillRepeatedly(Return(nullptr));
+    StreamInfoFormatter upstream_format("DOWNSTREAM_PEER_CERT_V_START");
+    EXPECT_EQ("-", upstream_format.format(header, header, header, stream_info));
+  }
+  {
+    StreamInfoFormatter upstream_format("DOWNSTREAM_PEER_CERT_V_END");
+    NiceMock<Ssl::MockConnectionInfo> connection_info;
+    absl::Time abslEndTime =
+        TestUtility::parseTime("Dec 17 01:50:34 2020 GMT", "%b %e %H:%M:%S %Y GMT");
+    SystemTime endTime = absl::ToChronoTime(abslEndTime);
+    ON_CALL(connection_info, expirationPeerCertificate()).WillByDefault(Return(endTime));
+    EXPECT_CALL(stream_info, downstreamSslConnection()).WillRepeatedly(Return(&connection_info));
+    EXPECT_EQ("2020-12-17T01:50:34.000Z",
+              upstream_format.format(header, header, header, stream_info));
+  }
+  {
+    StreamInfoFormatter upstream_format("DOWNSTREAM_PEER_CERT_V_END");
+    NiceMock<Ssl::MockConnectionInfo> connection_info;
+    ON_CALL(connection_info, expirationPeerCertificate()).WillByDefault(Return(absl::nullopt));
+    EXPECT_CALL(stream_info, downstreamSslConnection()).WillRepeatedly(Return(&connection_info));
+    EXPECT_EQ("-", upstream_format.format(header, header, header, stream_info));
+  }
+  {
+    EXPECT_CALL(stream_info, downstreamSslConnection()).WillRepeatedly(Return(nullptr));
+    StreamInfoFormatter upstream_format("DOWNSTREAM_PEER_CERT_V_END");
+    EXPECT_EQ("-", upstream_format.format(header, header, header, stream_info));
+  }
+  {
+    StreamInfoFormatter upstream_format("UPSTREAM_TRANSPORT_FAILURE_REASON");
+    std::string upstream_transport_failure_reason = "SSL error";
+    EXPECT_CALL(stream_info, upstreamTransportFailureReason())
+        .WillRepeatedly(ReturnRef(upstream_transport_failure_reason));
+    EXPECT_EQ("SSL error", upstream_format.format(header, header, header, stream_info));
+  }
+
+  {
+    StreamInfoFormatter upstream_format("UPSTREAM_TRANSPORT_FAILURE_REASON");
+    std::string upstream_transport_failure_reason;
+    EXPECT_CALL(stream_info, upstreamTransportFailureReason())
+        .WillRepeatedly(ReturnRef(upstream_transport_failure_reason));
     EXPECT_EQ("-", upstream_format.format(header, header, header, stream_info));
   }
 }
@@ -504,6 +845,7 @@ TEST(AccessLogFormatterTest, JsonFormatterDynamicMetadataTest) {
   envoy::api::v2::core::Metadata metadata;
   populateMetadataTestData(metadata);
   EXPECT_CALL(stream_info, dynamicMetadata()).WillRepeatedly(ReturnRef(metadata));
+  EXPECT_CALL(Const(stream_info), dynamicMetadata()).WillRepeatedly(ReturnRef(metadata));
 
   std::unordered_map<std::string, std::string> expected_json_map = {
       {"test_key", "\"test_value\""},
@@ -527,18 +869,13 @@ TEST(AccessLogFormatterTest, JsonFormatterStartTimeTest) {
   Http::TestHeaderMapImpl response_header;
   Http::TestHeaderMapImpl response_trailer;
 
-  time_t test_epoch = 1522280158;
-  SystemTime time = std::chrono::system_clock::from_time_t(test_epoch);
+  time_t expected_time_in_epoch = 1522280158;
+  SystemTime time = std::chrono::system_clock::from_time_t(expected_time_in_epoch);
   EXPECT_CALL(stream_info, startTime()).WillRepeatedly(Return(time));
-
-  // Needed to take into account the behavior in non-GMT timezones.
-  struct tm time_val;
-  gmtime_r(&test_epoch, &time_val);
-  time_t expected_time_t = mktime(&time_val);
 
   std::unordered_map<std::string, std::string> expected_json_map = {
       {"simple_date", "2018/03/28"},
-      {"test_time", fmt::format("{}", expected_time_t)},
+      {"test_time", fmt::format("{}", expected_time_in_epoch)},
       {"bad_format", "bad_format"},
       {"default", "2018-03-28T23:35:58.000Z"},
       {"all_zeroes", "000000000.0.00.000"}};
@@ -622,6 +959,7 @@ TEST(AccessLogFormatterTest, CompositeFormatterSuccess) {
     envoy::api::v2::core::Metadata metadata;
     populateMetadataTestData(metadata);
     EXPECT_CALL(stream_info, dynamicMetadata()).WillRepeatedly(ReturnRef(metadata));
+    EXPECT_CALL(Const(stream_info), dynamicMetadata()).WillRepeatedly(ReturnRef(metadata));
     const std::string format = "%DYNAMIC_METADATA(com.test:test_key)%|%DYNAMIC_METADATA(com.test:"
                                "test_obj)%|%DYNAMIC_METADATA(com.test:test_obj:inner_key)%";
     FormatterImpl formatter(format);
@@ -634,18 +972,13 @@ TEST(AccessLogFormatterTest, CompositeFormatterSuccess) {
     const std::string format = "%START_TIME(%Y/%m/%d)%|%START_TIME(%s)%|%START_TIME(bad_format)%|"
                                "%START_TIME%|%START_TIME(%f.%1f.%2f.%3f)%";
 
-    time_t test_epoch = 1522280158;
-    SystemTime time = std::chrono::system_clock::from_time_t(test_epoch);
+    time_t expected_time_in_epoch = 1522280158;
+    SystemTime time = std::chrono::system_clock::from_time_t(expected_time_in_epoch);
     EXPECT_CALL(stream_info, startTime()).WillRepeatedly(Return(time));
     FormatterImpl formatter(format);
 
-    // Needed to take into account the behavior in non-GMT timezones.
-    struct tm time_val;
-    gmtime_r(&test_epoch, &time_val);
-    time_t expected_time_t = mktime(&time_val);
-
     EXPECT_EQ(fmt::format("2018/03/28|{}|bad_format|2018-03-28T23:35:58.000Z|000000000.0.00.000",
-                          expected_time_t),
+                          expected_time_in_epoch),
               formatter.format(request_header, response_header, response_trailer, stream_info));
   }
 
@@ -687,7 +1020,7 @@ TEST(AccessLogFormatterTest, CompositeFormatterSuccess) {
 
   {
     // This tests START_TIME specifier that has shorter segments when formatted, i.e.
-    // strftime("%%%%"") equals "%%", %1f will have 1 as its size.
+    // absl::FormatTime("%%%%"") equals "%%", %1f will have 1 as its size.
     const std::string format = "%START_TIME(%%%%|%%%%%f|%s%%%%%3f|%1f%%%%%s)%";
     const SystemTime start_time(std::chrono::microseconds(1522796769123456));
     EXPECT_CALL(stream_info, startTime()).WillOnce(Return(start_time));
@@ -722,12 +1055,15 @@ TEST(AccessLogFormatterTest, ParserFailures) {
       "%TRAILER(TEST):23u1%",
       "%TRAILER(X?Y?Z)%",
       "%TRAILER(:TEST):10",
-      "%DYNAMIC_METADATA(TEST"};
+      "%DYNAMIC_METADATA(TEST",
+      "%START_TIME(%85n)%",
+      "%START_TIME(%#__88n)%"};
 
   for (const std::string& test_case : test_cases) {
     EXPECT_THROW(parser.parse(test_case), EnvoyException) << test_case;
   }
 }
 
+} // namespace
 } // namespace AccessLog
 } // namespace Envoy

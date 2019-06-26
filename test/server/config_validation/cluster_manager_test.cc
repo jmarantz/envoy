@@ -2,15 +2,19 @@
 #include "envoy/upstream/upstream.h"
 
 #include "common/api/api_impl.h"
-#include "common/ssl/context_manager_impl.h"
+#include "common/http/context_impl.h"
+#include "common/singleton/manager_impl.h"
 
 #include "server/config_validation/cluster_manager.h"
+
+#include "extensions/transport_sockets/tls/context_manager_impl.h"
 
 #include "test/mocks/access_log/mocks.h"
 #include "test/mocks/event/mocks.h"
 #include "test/mocks/http/mocks.h"
 #include "test/mocks/local_info/mocks.h"
 #include "test/mocks/network/mocks.h"
+#include "test/mocks/protobuf/mocks.h"
 #include "test/mocks/runtime/mocks.h"
 #include "test/mocks/secret/mocks.h"
 #include "test/mocks/server/mocks.h"
@@ -21,32 +25,37 @@
 
 namespace Envoy {
 namespace Upstream {
+namespace {
 
 TEST(ValidationClusterManagerTest, MockedMethods) {
-  Api::Impl api;
-  NiceMock<Runtime::MockLoader> runtime;
+  Stats::IsolatedStoreImpl stats_store;
   Event::SimulatedTimeSystem time_system;
-  Stats::IsolatedStoreImpl stats;
+  NiceMock<ProtobufMessage::MockValidationVisitor> validation_visitor;
+  Api::ApiPtr api(Api::createApiForTest(stats_store, time_system));
+  NiceMock<Runtime::MockLoader> runtime;
   NiceMock<ThreadLocal::MockInstance> tls;
   NiceMock<Runtime::MockRandomGenerator> random;
   testing::NiceMock<Secret::MockSecretManager> secret_manager;
   auto dns_resolver = std::make_shared<NiceMock<Network::MockDnsResolver>>();
-  Ssl::ContextManagerImpl ssl_context_manager{time_system};
+  Extensions::TransportSockets::Tls::ContextManagerImpl ssl_context_manager{api->timeSource()};
   NiceMock<Event::MockDispatcher> dispatcher;
   LocalInfo::MockLocalInfo local_info;
   NiceMock<Server::MockAdmin> admin;
-
-  ValidationClusterManagerFactory factory(runtime, stats, tls, random, dns_resolver,
-                                          ssl_context_manager, dispatcher, local_info,
-                                          secret_manager, api);
-
+  Http::ContextImpl http_context(stats_store.symbolTable());
   AccessLog::MockAccessLogManager log_manager;
+  Singleton::ManagerImpl singleton_manager{Thread::threadFactoryForTest().currentThreadId()};
+
+  ValidationClusterManagerFactory factory(admin, runtime, stats_store, tls, random, dns_resolver,
+                                          ssl_context_manager, dispatcher, local_info,
+                                          secret_manager, validation_visitor, *api, http_context,
+                                          log_manager, singleton_manager, time_system);
+
   const envoy::config::bootstrap::v2::Bootstrap bootstrap;
-  ClusterManagerPtr cluster_manager = factory.clusterManagerFromProto(
-      bootstrap, stats, tls, runtime, random, local_info, log_manager, admin);
+  Stats::FakeSymbolTableImpl symbol_table;
+  ClusterManagerPtr cluster_manager = factory.clusterManagerFromProto(bootstrap);
   EXPECT_EQ(nullptr, cluster_manager->httpConnPoolForCluster("cluster", ResourcePriority::Default,
                                                              Http::Protocol::Http11, nullptr));
-  Host::CreateConnectionData data = cluster_manager->tcpConnForCluster("cluster", nullptr);
+  Host::CreateConnectionData data = cluster_manager->tcpConnForCluster("cluster", nullptr, nullptr);
   EXPECT_EQ(nullptr, data.connection_);
   EXPECT_EQ(nullptr, data.host_description_);
 
@@ -55,5 +64,6 @@ TEST(ValidationClusterManagerTest, MockedMethods) {
   EXPECT_EQ(nullptr, client.start(stream_callbacks, Http::AsyncClient::StreamOptions()));
 }
 
+} // namespace
 } // namespace Upstream
 } // namespace Envoy

@@ -9,6 +9,7 @@
 #include "envoy/stats/scope.h"
 #include "envoy/stats/stats_macros.h"
 
+#include "extensions/filters/common/ratelimit/ratelimit.h"
 #include "extensions/filters/network/thrift_proxy/filters/filter.h"
 
 namespace Envoy {
@@ -48,7 +49,7 @@ private:
   const bool failure_mode_deny_;
 };
 
-typedef std::shared_ptr<Config> ConfigSharedPtr;
+using ConfigSharedPtr = std::shared_ptr<Config>;
 
 /**
  * Thrift rate limit filter instance. Calls the rate limit service with the given configuration
@@ -59,85 +60,72 @@ typedef std::shared_ptr<Config> ConfigSharedPtr;
  * returned. By default, errors allow the request to continue.
  */
 class Filter : public ThriftProxy::ThriftFilters::DecoderFilter,
-               public RateLimit::RequestCallbacks {
+               public Filters::Common::RateLimit::RequestCallbacks {
 public:
-  Filter(ConfigSharedPtr config, RateLimit::ClientPtr&& client)
-      : config_(config), client_(std::move(client)) {}
-  virtual ~Filter() {}
+  Filter(ConfigSharedPtr config, Filters::Common::RateLimit::ClientPtr&& client)
+      : config_(std::move(config)), client_(std::move(client)) {}
+  ~Filter() override = default;
 
   // ThriftFilters::ThriftDecoderFilter
-  virtual void onDestroy() override;
-  virtual void setDecoderFilterCallbacks(
+  void onDestroy() override;
+  void setDecoderFilterCallbacks(
       ThriftProxy::ThriftFilters::DecoderFilterCallbacks& callbacks) override {
     callbacks_ = &callbacks;
   };
-  virtual ThriftProxy::FilterStatus
+  ThriftProxy::FilterStatus
   transportBegin(NetworkFilters::ThriftProxy::MessageMetadataSharedPtr) override {
     return ThriftProxy::FilterStatus::Continue;
   }
-  virtual ThriftProxy::FilterStatus transportEnd() override {
+  ThriftProxy::FilterStatus transportEnd() override { return ThriftProxy::FilterStatus::Continue; }
+  ThriftProxy::FilterStatus messageBegin(ThriftProxy::MessageMetadataSharedPtr) override;
+  ThriftProxy::FilterStatus messageEnd() override { return ThriftProxy::FilterStatus::Continue; }
+  ThriftProxy::FilterStatus structBegin(absl::string_view) override {
     return ThriftProxy::FilterStatus::Continue;
   }
-  virtual ThriftProxy::FilterStatus messageBegin(ThriftProxy::MessageMetadataSharedPtr) override;
-  virtual ThriftProxy::FilterStatus messageEnd() override {
+  ThriftProxy::FilterStatus structEnd() override { return ThriftProxy::FilterStatus::Continue; }
+  ThriftProxy::FilterStatus fieldBegin(absl::string_view, ThriftProxy::FieldType&,
+                                       int16_t&) override {
     return ThriftProxy::FilterStatus::Continue;
   }
-  virtual ThriftProxy::FilterStatus structBegin(absl::string_view) override {
+  ThriftProxy::FilterStatus fieldEnd() override { return ThriftProxy::FilterStatus::Continue; }
+  ThriftProxy::FilterStatus boolValue(bool&) override {
     return ThriftProxy::FilterStatus::Continue;
   }
-  virtual ThriftProxy::FilterStatus structEnd() override {
+  ThriftProxy::FilterStatus byteValue(uint8_t&) override {
     return ThriftProxy::FilterStatus::Continue;
   }
-  virtual ThriftProxy::FilterStatus fieldBegin(absl::string_view, ThriftProxy::FieldType&,
-                                               int16_t&) override {
+  ThriftProxy::FilterStatus int16Value(int16_t&) override {
     return ThriftProxy::FilterStatus::Continue;
   }
-  virtual ThriftProxy::FilterStatus fieldEnd() override {
+  ThriftProxy::FilterStatus int32Value(int32_t&) override {
     return ThriftProxy::FilterStatus::Continue;
   }
-  virtual ThriftProxy::FilterStatus boolValue(bool&) override {
+  ThriftProxy::FilterStatus int64Value(int64_t&) override {
     return ThriftProxy::FilterStatus::Continue;
   }
-  virtual ThriftProxy::FilterStatus byteValue(uint8_t&) override {
+  ThriftProxy::FilterStatus doubleValue(double&) override {
     return ThriftProxy::FilterStatus::Continue;
   }
-  virtual ThriftProxy::FilterStatus int16Value(int16_t&) override {
+  ThriftProxy::FilterStatus stringValue(absl::string_view) override {
     return ThriftProxy::FilterStatus::Continue;
   }
-  virtual ThriftProxy::FilterStatus int32Value(int32_t&) override {
+  ThriftProxy::FilterStatus mapBegin(ThriftProxy::FieldType&, ThriftProxy::FieldType&,
+                                     uint32_t&) override {
     return ThriftProxy::FilterStatus::Continue;
   }
-  virtual ThriftProxy::FilterStatus int64Value(int64_t&) override {
+  ThriftProxy::FilterStatus mapEnd() override { return ThriftProxy::FilterStatus::Continue; }
+  ThriftProxy::FilterStatus listBegin(ThriftProxy::FieldType&, uint32_t&) override {
     return ThriftProxy::FilterStatus::Continue;
   }
-  virtual ThriftProxy::FilterStatus doubleValue(double&) override {
+  ThriftProxy::FilterStatus listEnd() override { return ThriftProxy::FilterStatus::Continue; }
+  ThriftProxy::FilterStatus setBegin(ThriftProxy::FieldType&, uint32_t&) override {
     return ThriftProxy::FilterStatus::Continue;
   }
-  virtual ThriftProxy::FilterStatus stringValue(absl::string_view) override {
-    return ThriftProxy::FilterStatus::Continue;
-  }
-  virtual ThriftProxy::FilterStatus mapBegin(ThriftProxy::FieldType&, ThriftProxy::FieldType&,
-                                             uint32_t&) override {
-    return ThriftProxy::FilterStatus::Continue;
-  }
-  virtual ThriftProxy::FilterStatus mapEnd() override {
-    return ThriftProxy::FilterStatus::Continue;
-  }
-  virtual ThriftProxy::FilterStatus listBegin(ThriftProxy::FieldType&, uint32_t&) override {
-    return ThriftProxy::FilterStatus::Continue;
-  }
-  virtual ThriftProxy::FilterStatus listEnd() override {
-    return ThriftProxy::FilterStatus::Continue;
-  }
-  virtual ThriftProxy::FilterStatus setBegin(ThriftProxy::FieldType&, uint32_t&) override {
-    return ThriftProxy::FilterStatus::Continue;
-  }
-  virtual ThriftProxy::FilterStatus setEnd() override {
-    return ThriftProxy::FilterStatus::Continue;
-  }
+  ThriftProxy::FilterStatus setEnd() override { return ThriftProxy::FilterStatus::Continue; }
 
   // RateLimit::RequestCallbacks
-  void complete(RateLimit::LimitStatus status, Http::HeaderMapPtr&& headers) override;
+  void complete(Filters::Common::RateLimit::LimitStatus status,
+                Http::HeaderMapPtr&& headers) override;
 
 private:
   void initiateCall(const ThriftProxy::MessageMetadata& metadata);
@@ -149,7 +137,7 @@ private:
   enum class State { NotStarted, Calling, Complete, Responded };
 
   ConfigSharedPtr config_;
-  RateLimit::ClientPtr client_;
+  Filters::Common::RateLimit::ClientPtr client_;
   ThriftProxy::ThriftFilters::DecoderFilterCallbacks* callbacks_{};
   State state_{State::NotStarted};
   Upstream::ClusterInfoConstSharedPtr cluster_;

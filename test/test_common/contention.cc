@@ -1,33 +1,43 @@
 #include "test/test_common/contention.h"
 
+#include "test/test_common/utility.h"
+
 namespace Envoy {
 namespace Thread {
 namespace TestUtil {
 
 void ContentionGenerator::generateContention(MutexTracerImpl& tracer) {
-  MutexBasicLockable mu;
-  Envoy::Thread::ThreadPtr t1 = launchThread(tracer, &mu);
-  Envoy::Thread::ThreadPtr t2 = launchThread(tracer, &mu);
+  Envoy::Thread::ThreadPtr t1 = launchThread(tracer);
+  Envoy::Thread::ThreadPtr t2 = launchThread(tracer);
   t1->join();
   t2->join();
 }
 
-Envoy::Thread::ThreadPtr ContentionGenerator::launchThread(MutexTracerImpl& tracer,
-                                                           MutexBasicLockable* mu) {
-  return std::make_unique<Envoy::Thread::ThreadImpl>(
-      [&tracer, mu]() -> void { holdUntilContention(tracer, mu); });
+Envoy::Thread::ThreadPtr ContentionGenerator::launchThread(MutexTracerImpl& tracer) {
+  return threadFactoryForTest().createThread(
+      [&tracer, this]() -> void { holdUntilContention(tracer); });
 }
 
-void ContentionGenerator::holdUntilContention(MutexTracerImpl& tracer, MutexBasicLockable* mu) {
-  DangerousDeprecatedTestTime test_time;
+void ContentionGenerator::holdUntilContention(MutexTracerImpl& tracer) {
+  Event::DispatcherPtr dispatcher = api_.allocateDispatcher();
+  Event::TimerPtr timer = dispatcher->createTimer([&dispatcher]() { dispatcher->exit(); });
+  auto sleep_ms = [&timer, &dispatcher](int num_ms) {
+    timer->enableTimer(std::chrono::milliseconds(num_ms));
+    dispatcher->run(Event::Dispatcher::RunType::RunUntilExit);
+  };
   int64_t curr_num_contentions = tracer.numContentions();
-  while (tracer.numContentions() == curr_num_contentions) {
-    test_time.timeSystem().sleep(std::chrono::milliseconds(1));
-    LockGuard lock(*mu);
-    // We hold the lock 90% of the time to ensure both contention and eventual acquisition, which
-    // is needed to bump numContentions().
-    test_time.timeSystem().sleep(std::chrono::milliseconds(9));
-  }
+  do {
+    sleep_ms(1);
+    {
+      LockGuard lock(mutex_);
+      // We hold the lock 90% of the time to ensure both contention and eventual acquisition, which
+      // is needed to bump numContentions().
+      sleep_ms(9);
+    }
+    if (tracer.numContentions() > curr_num_contentions) {
+      found_contention_ = true;
+    }
+  } while (!found_contention_);
 }
 
 } // namespace TestUtil

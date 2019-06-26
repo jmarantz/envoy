@@ -8,22 +8,20 @@
 #include "envoy/server/configuration.h"
 #include "envoy/thread_local/thread_local.h"
 
-#include "common/common/thread.h"
-
 #include "server/connection_handler_impl.h"
 
 namespace Envoy {
 namespace Server {
 
 WorkerPtr ProdWorkerFactory::createWorker(OverloadManager& overload_manager) {
-  Event::DispatcherPtr dispatcher(api_.allocateDispatcher(time_system_));
+  Event::DispatcherPtr dispatcher(api_.allocateDispatcher());
   return WorkerPtr{new WorkerImpl(
       tls_, hooks_, std::move(dispatcher),
       Network::ConnectionHandlerPtr{new ConnectionHandlerImpl(ENVOY_LOGGER(), *dispatcher)},
       overload_manager, api_)};
 }
 
-WorkerImpl::WorkerImpl(ThreadLocal::Instance& tls, TestHooks& hooks,
+WorkerImpl::WorkerImpl(ThreadLocal::Instance& tls, ListenerHooks& hooks,
                        Event::DispatcherPtr&& dispatcher, Network::ConnectionHandlerPtr handler,
                        OverloadManager& overload_manager, Api::Api& api)
     : tls_(tls), hooks_(hooks), dispatcher_(std::move(dispatcher)), handler_(std::move(handler)),
@@ -71,7 +69,12 @@ void WorkerImpl::removeListener(Network::ListenerConfig& listener,
 
 void WorkerImpl::start(GuardDog& guard_dog) {
   ASSERT(!thread_);
-  thread_ = api_.createThread([this, &guard_dog]() -> void { threadRoutine(guard_dog); });
+  thread_ =
+      api_.threadFactory().createThread([this, &guard_dog]() -> void { threadRoutine(guard_dog); });
+}
+
+void WorkerImpl::initializeStats(Stats::Scope& scope, const std::string& prefix) {
+  dispatcher_->initializeStats(scope, prefix);
 }
 
 void WorkerImpl::stop() {
@@ -96,7 +99,7 @@ void WorkerImpl::stopListeners() {
 
 void WorkerImpl::threadRoutine(GuardDog& guard_dog) {
   ENVOY_LOG(debug, "worker entering dispatch loop");
-  auto watchdog = guard_dog.createWatchDog(Thread::currentThreadId());
+  auto watchdog = guard_dog.createWatchDog(api_.threadFactory().currentThreadId());
   watchdog->startWatchdog(*dispatcher_);
   dispatcher_->run(Event::Dispatcher::RunType::Block);
   ENVOY_LOG(debug, "worker exited dispatch loop");
@@ -104,8 +107,7 @@ void WorkerImpl::threadRoutine(GuardDog& guard_dog) {
 
   // We must close all active connections before we actually exit the thread. This prevents any
   // destructors from running on the main thread which might reference thread locals. Destroying
-  // the handler does this as well as destroying the dispatcher which purges the delayed deletion
-  // list.
+  // the handler does this which additionally purges the dispatcher delayed deletion list.
   handler_.reset();
   tls_.shutdownThread();
   watchdog.reset();

@@ -18,31 +18,9 @@ using ::testing::MatchesRegex;
 
 namespace Envoy {
 
-INSTANTIATE_TEST_CASE_P(IpVersions, Http2IntegrationTest,
-                        testing::ValuesIn(TestEnvironment::getIpVersionsForTest()),
-                        TestUtility::ipTestParamsToString);
-
-TEST_P(Http2IntegrationTest, RouterNotFound) { testRouterNotFound(); }
-
-TEST_P(Http2IntegrationTest, RouterNotFoundBodyNoBuffer) { testRouterNotFoundWithBody(); }
-
-TEST_P(Http2IntegrationTest, RouterClusterNotFound404) { testRouterClusterNotFound404(); }
-
-TEST_P(Http2IntegrationTest, RouterClusterNotFound503) { testRouterClusterNotFound503(); }
-
-TEST_P(Http2IntegrationTest, RouterRedirect) { testRouterRedirect(); }
-
-TEST_P(Http2IntegrationTest, ValidZeroLengthContent) { testValidZeroLengthContent(); }
-
-TEST_P(Http2IntegrationTest, InvalidContentLength) { testInvalidContentLength(); }
-
-TEST_P(Http2IntegrationTest, MultipleContentLengths) { testMultipleContentLengths(); }
-
-TEST_P(Http2IntegrationTest, ComputedHealthCheck) { testComputedHealthCheck(); }
-
-TEST_P(Http2IntegrationTest, AddEncodedTrailers) { testAddEncodedTrailers(); }
-
-TEST_P(Http2IntegrationTest, DrainClose) { testDrainClose(); }
+INSTANTIATE_TEST_SUITE_P(IpVersions, Http2IntegrationTest,
+                         testing::ValuesIn(TestEnvironment::getIpVersionsForTest()),
+                         TestUtility::ipTestParamsToString);
 
 TEST_P(Http2IntegrationTest, RouterRequestAndResponseWithBodyNoBuffer) {
   testRouterRequestAndResponseWithBody(1024, 512, false);
@@ -54,15 +32,11 @@ TEST_P(Http2IntegrationTest, FlowControlOnAndGiantBody) {
 }
 
 TEST_P(Http2IntegrationTest, RouterHeaderOnlyRequestAndResponseNoBuffer) {
-  testRouterHeaderOnlyRequestAndResponse(true);
+  testRouterHeaderOnlyRequestAndResponse();
 }
 
 TEST_P(Http2IntegrationTest, RouterRequestAndResponseLargeHeaderNoBuffer) {
   testRouterRequestAndResponseWithBody(1024, 512, true);
-}
-
-TEST_P(Http2IntegrationTest, ShutdownWithActiveConnPoolConnections) {
-  testRouterHeaderOnlyRequestAndResponse(false);
 }
 
 TEST_P(Http2IntegrationTest, RouterUpstreamDisconnectBeforeRequestcomplete) {
@@ -85,55 +59,392 @@ TEST_P(Http2IntegrationTest, RouterUpstreamResponseBeforeRequestComplete) {
   testRouterUpstreamResponseBeforeRequestComplete();
 }
 
-TEST_P(Http2IntegrationTest, TwoRequests) { testTwoRequests(); }
-
-TEST_P(Http2IntegrationTest, TwoRequestsWithForcedBackup) { testTwoRequests(true); }
-
 TEST_P(Http2IntegrationTest, Retry) { testRetry(); }
 
 TEST_P(Http2IntegrationTest, RetryAttemptCount) { testRetryAttemptCountHeader(); }
 
-TEST_P(Http2IntegrationTest, EnvoyHandling100Continue) { testEnvoyHandling100Continue(); }
+static std::string response_metadata_filter = R"EOF(
+name: response-metadata-filter
+config: {}
+)EOF";
 
-TEST_P(Http2IntegrationTest, EnvoyHandlingDuplicate100Continue) {
-  testEnvoyHandling100Continue(true);
+// Verifies metadata can be sent at different locations of the responses.
+TEST_P(Http2MetadataIntegrationTest, ProxyMetadataInResponse) {
+  initialize();
+  codec_client_ = makeHttpConnection(lookupPort("http"));
+
+  // Sends the first request.
+  auto response = codec_client_->makeRequestWithBody(default_request_headers_, 10);
+  waitForNextUpstreamRequest();
+
+  // Sends metadata before response header.
+  const std::string key = "key";
+  std::string value = std::string(80 * 1024, '1');
+  Http::MetadataMap metadata_map = {{key, value}};
+  Http::MetadataMapPtr metadata_map_ptr = std::make_unique<Http::MetadataMap>(metadata_map);
+  Http::MetadataMapVector metadata_map_vector;
+  metadata_map_vector.push_back(std::move(metadata_map_ptr));
+  upstream_request_->encodeMetadata(metadata_map_vector);
+  upstream_request_->encodeHeaders(default_response_headers_, false);
+  upstream_request_->encodeData(12, true);
+
+  // Verifies metadata is received by the client.
+  response->waitForEndStream();
+  ASSERT_TRUE(response->complete());
+  EXPECT_EQ(response->metadata_map().find(key)->second, value);
+
+  // Sends the second request.
+  response = codec_client_->makeRequestWithBody(default_request_headers_, 10);
+  waitForNextUpstreamRequest();
+
+  // Sends metadata after response header followed by an empty data frame with end_stream true.
+  value = std::string(10, '2');
+  upstream_request_->encodeHeaders(default_response_headers_, false);
+  metadata_map = {{key, value}};
+  metadata_map_ptr = std::make_unique<Http::MetadataMap>(metadata_map);
+  metadata_map_vector.erase(metadata_map_vector.begin());
+  metadata_map_vector.push_back(std::move(metadata_map_ptr));
+  upstream_request_->encodeMetadata(metadata_map_vector);
+  upstream_request_->encodeData(0, true);
+
+  // Verifies metadata is received by the client.
+  response->waitForEndStream();
+  ASSERT_TRUE(response->complete());
+  EXPECT_EQ(response->metadata_map().find(key)->second, value);
+
+  // Sends the third request.
+  response = codec_client_->makeRequestWithBody(default_request_headers_, 10);
+  waitForNextUpstreamRequest();
+
+  // Sends metadata after response header and before data.
+  value = std::string(10, '3');
+  upstream_request_->encodeHeaders(default_response_headers_, false);
+  metadata_map = {{key, value}};
+  metadata_map_ptr = std::make_unique<Http::MetadataMap>(metadata_map);
+  metadata_map_vector.erase(metadata_map_vector.begin());
+  metadata_map_vector.push_back(std::move(metadata_map_ptr));
+  upstream_request_->encodeMetadata(metadata_map_vector);
+  upstream_request_->encodeData(10, true);
+
+  // Verifies metadata is received by the client.
+  response->waitForEndStream();
+  ASSERT_TRUE(response->complete());
+  EXPECT_EQ(response->metadata_map().find(key)->second, value);
+
+  // Sends the fourth request.
+  response = codec_client_->makeRequestWithBody(default_request_headers_, 10);
+  waitForNextUpstreamRequest();
+
+  // Sends metadata between data frames.
+  value = std::string(10, '4');
+  upstream_request_->encodeHeaders(default_response_headers_, false);
+  upstream_request_->encodeData(10, false);
+  metadata_map = {{key, value}};
+  metadata_map_ptr = std::make_unique<Http::MetadataMap>(metadata_map);
+  metadata_map_vector.erase(metadata_map_vector.begin());
+  metadata_map_vector.push_back(std::move(metadata_map_ptr));
+  upstream_request_->encodeMetadata(metadata_map_vector);
+  upstream_request_->encodeData(10, true);
+
+  // Verifies metadata is received by the client.
+  response->waitForEndStream();
+  ASSERT_TRUE(response->complete());
+  EXPECT_EQ(response->metadata_map().find(key)->second, value);
+
+  // Sends the fifth request.
+  response = codec_client_->makeRequestWithBody(default_request_headers_, 10);
+  waitForNextUpstreamRequest();
+
+  // Sends metadata after the last non-empty data frames.
+  value = std::string(10, '5');
+  upstream_request_->encodeHeaders(default_response_headers_, false);
+  upstream_request_->encodeData(10, false);
+  metadata_map = {{key, value}};
+  metadata_map_ptr = std::make_unique<Http::MetadataMap>(metadata_map);
+  metadata_map_vector.erase(metadata_map_vector.begin());
+  metadata_map_vector.push_back(std::move(metadata_map_ptr));
+  upstream_request_->encodeMetadata(metadata_map_vector);
+  upstream_request_->encodeData(0, true);
+
+  // Verifies metadata is received by the client.
+  response->waitForEndStream();
+  ASSERT_TRUE(response->complete());
+  EXPECT_EQ(response->metadata_map().find(key)->second, value);
+
+  // Sends the sixth request.
+  response = codec_client_->makeRequestWithBody(default_request_headers_, 10);
+  waitForNextUpstreamRequest();
+
+  // Sends metadata before reset.
+  value = std::string(10, '6');
+  upstream_request_->encodeHeaders(default_response_headers_, false);
+  upstream_request_->encodeData(10, false);
+  metadata_map = {{key, value}};
+  metadata_map_ptr = std::make_unique<Http::MetadataMap>(metadata_map);
+  metadata_map_vector.erase(metadata_map_vector.begin());
+  metadata_map_vector.push_back(std::move(metadata_map_ptr));
+  upstream_request_->encodeMetadata(metadata_map_vector);
+  upstream_request_->encodeResetStream();
+
+  // Verifies stream is reset.
+  response->waitForReset();
+  ASSERT_FALSE(response->complete());
 }
 
-TEST_P(Http2IntegrationTest, EnvoyProxyingEarly100Continue) { testEnvoyProxying100Continue(true); }
+TEST_P(Http2MetadataIntegrationTest, ProxyMultipleMetadata) {
+  initialize();
+  codec_client_ = makeHttpConnection(lookupPort("http"));
 
-TEST_P(Http2IntegrationTest, EnvoyProxyingLate100Continue) { testEnvoyProxying100Continue(false); }
+  // Sends a request.
+  auto response = codec_client_->makeRequestWithBody(default_request_headers_, 10);
+  waitForNextUpstreamRequest();
 
-TEST_P(Http2IntegrationTest, RetryHittingBufferLimit) { testRetryHittingBufferLimit(); }
+  const int size = 4;
+  std::vector<Http::MetadataMapVector> multiple_vecs(size);
+  for (int i = 0; i < size; i++) {
+    Runtime::RandomGeneratorImpl random;
+    int value_size = random.random() % Http::METADATA_MAX_PAYLOAD_SIZE + 1;
+    Http::MetadataMap metadata_map = {{std::string(i, 'a'), std::string(value_size, 'b')}};
+    Http::MetadataMapPtr metadata_map_ptr = std::make_unique<Http::MetadataMap>(metadata_map);
+    multiple_vecs[i].push_back(std::move(metadata_map_ptr));
+  }
+  upstream_request_->encodeMetadata(multiple_vecs[0]);
+  upstream_request_->encodeHeaders(default_response_headers_, false);
+  upstream_request_->encodeMetadata(multiple_vecs[1]);
+  upstream_request_->encodeData(12, false);
+  upstream_request_->encodeMetadata(multiple_vecs[2]);
+  upstream_request_->encodeData(12, false);
+  upstream_request_->encodeMetadata(multiple_vecs[3]);
+  upstream_request_->encodeData(12, true);
 
-TEST_P(Http2IntegrationTest, HittingDecoderFilterLimit) { testHittingDecoderFilterLimit(); }
+  // Verifies multiple metadata are received by the client.
+  response->waitForEndStream();
+  ASSERT_TRUE(response->complete());
+  for (int i = 0; i < size; i++) {
+    for (const auto& metadata : *multiple_vecs[i][0]) {
+      EXPECT_EQ(response->metadata_map().find(metadata.first)->second, metadata.second);
+    }
+  }
+  EXPECT_EQ(response->metadata_map().size(), multiple_vecs.size());
+}
 
-TEST_P(Http2IntegrationTest, HittingEncoderFilterLimit) { testHittingEncoderFilterLimit(); }
+TEST_P(Http2MetadataIntegrationTest, ProxyInvalidMetadata) {
+  initialize();
+  codec_client_ = makeHttpConnection(lookupPort("http"));
 
-TEST_P(Http2IntegrationTest, GrpcRouterNotFound) { testGrpcRouterNotFound(); }
+  // Sends a request.
+  auto response = codec_client_->makeRequestWithBody(default_request_headers_, 10);
+  waitForNextUpstreamRequest();
 
-TEST_P(Http2IntegrationTest, RetryHostPredicateFilter) { testRetryHostPredicateFilter(); }
+  // Sends over-sized metadata before response header.
+  const std::string key = "key";
+  std::string value = std::string(1024 * 1024, 'a');
+  Http::MetadataMap metadata_map = {{key, value}};
+  Http::MetadataMapPtr metadata_map_ptr = std::make_unique<Http::MetadataMap>(metadata_map);
+  Http::MetadataMapVector metadata_map_vector;
+  metadata_map_vector.push_back(std::move(metadata_map_ptr));
+  upstream_request_->encodeMetadata(metadata_map_vector);
+  upstream_request_->encodeHeaders(default_response_headers_, false);
+  upstream_request_->encodeMetadata(metadata_map_vector);
+  upstream_request_->encodeData(12, false);
+  upstream_request_->encodeMetadata(metadata_map_vector);
+  upstream_request_->encodeData(12, true);
 
-TEST_P(Http2IntegrationTest, RetryPriority) { testRetryPriority(); }
+  // Verifies metadata is not received by the client.
+  response->waitForEndStream();
+  ASSERT_TRUE(response->complete());
+  EXPECT_EQ(response->metadata_map().size(), 0);
+}
 
-TEST_P(Http2IntegrationTest, GrpcRetry) { testGrpcRetry(); }
+void verifyExpectedMetadata(Http::MetadataMap metadata_map, std::set<std::string> keys) {
+  for (const auto& key : keys) {
+    // keys are the same as their corresponding values.
+    EXPECT_EQ(metadata_map.find(key)->second, key);
+  }
+  EXPECT_EQ(metadata_map.size(), keys.size());
+}
 
-// Send a request with overly large headers, and ensure it results in stream reset.
-TEST_P(Http2IntegrationTest, MaxHeadersInCodec) {
-  Http::TestHeaderMapImpl big_headers{
-      {":method", "GET"}, {":path", "/test/long/url"}, {":scheme", "http"}, {":authority", "host"}};
+TEST_P(Http2MetadataIntegrationTest, TestResponseMetadata) {
 
-  big_headers.addCopy("big", std::string(63 * 1024, 'a'));
+  addFilters({response_metadata_filter});
+  config_helper_.addConfigModifier(
+      [&](envoy::config::filter::network::http_connection_manager::v2::HttpConnectionManager& hcm)
+          -> void { hcm.set_proxy_100_continue(true); });
 
   initialize();
   codec_client_ = makeHttpConnection(lookupPort("http"));
-  auto encoder_decoder = codec_client_->startRequest(big_headers);
-  auto response = std::move(encoder_decoder.second);
-  response->waitForReset();
-  codec_client_->close();
+
+  // Upstream responds with headers.
+  auto response = codec_client_->makeRequestWithBody(default_request_headers_, 10);
+  waitForNextUpstreamRequest();
+  upstream_request_->encodeHeaders(default_response_headers_, true);
+
+  response->waitForEndStream();
+  ASSERT_TRUE(response->complete());
+  // Verify metadata added in encodeHeaders(): "headers", "duplicate" and "keep".
+  std::set<std::string> expected_metadata_keys = {"headers", "duplicate", "keep"};
+  verifyExpectedMetadata(response->metadata_map(), expected_metadata_keys);
+
+  // Upstream responds with headers and data.
+  response = codec_client_->makeRequestWithBody(default_request_headers_, 10);
+  waitForNextUpstreamRequest();
+  upstream_request_->encodeHeaders(default_response_headers_, false);
+  upstream_request_->encodeData(100, true);
+
+  response->waitForEndStream();
+  ASSERT_TRUE(response->complete());
+  // Verify metadata added in encodeHeaders(): "headers" and "duplicate" and metadata added in
+  // encodeData(): "data" and "duplicate" are received by the client. Note that "remove" is
+  // consumed.
+  expected_metadata_keys.insert("data");
+  verifyExpectedMetadata(response->metadata_map(), expected_metadata_keys);
+  EXPECT_EQ(response->keyCount("duplicate"), 2);
+  EXPECT_EQ(response->keyCount("keep"), 2);
+
+  // Upstream responds with headers, data and trailers.
+  response = codec_client_->makeRequestWithBody(default_request_headers_, 10);
+  waitForNextUpstreamRequest();
+  upstream_request_->encodeHeaders(default_response_headers_, false);
+  upstream_request_->encodeData(10, false);
+  Http::TestHeaderMapImpl response_trailers{{"response", "trailer"}};
+  upstream_request_->encodeTrailers(response_trailers);
+
+  response->waitForEndStream();
+  ASSERT_TRUE(response->complete());
+  // Verify metadata added in encodeHeaders(): "headers" and "duplicate", and metadata added in
+  // encodeData(): "data" and "duplicate", and metadata added in encodeTrailer(): "trailers" and
+  // "duplicate" are received by the client. Note that "remove" is consumed.
+  expected_metadata_keys.insert("trailers");
+  verifyExpectedMetadata(response->metadata_map(), expected_metadata_keys);
+  EXPECT_EQ(response->keyCount("duplicate"), 3);
+  EXPECT_EQ(response->keyCount("keep"), 4);
+
+  // Upstream responds with headers, 100-continue and data.
+  response = codec_client_->makeRequestWithBody(Http::TestHeaderMapImpl{{":method", "GET"},
+                                                                        {":path", "/dynamo/url"},
+                                                                        {":scheme", "http"},
+                                                                        {":authority", "host"},
+                                                                        {"expect", "100-continue"}},
+                                                10);
+
+  waitForNextUpstreamRequest();
+  upstream_request_->encode100ContinueHeaders(Http::TestHeaderMapImpl{{":status", "100"}});
+  response->waitForContinueHeaders();
+  upstream_request_->encodeHeaders(default_response_headers_, false);
+  upstream_request_->encodeData(100, true);
+
+  response->waitForEndStream();
+  ASSERT_TRUE(response->complete());
+  // Verify metadata added in encodeHeaders: "headers" and "duplicate", and metadata added in
+  // encodeData(): "data" and "duplicate", and metadata added in encode100Continue(): "100-continue"
+  // and "duplicate" are received by the client. Note that "remove" is consumed.
+  expected_metadata_keys.erase("trailers");
+  expected_metadata_keys.insert("100-continue");
+  verifyExpectedMetadata(response->metadata_map(), expected_metadata_keys);
+  EXPECT_EQ(response->keyCount("duplicate"), 4);
+  EXPECT_EQ(response->keyCount("keep"), 4);
+
+  // Upstream responds with headers and metadata that will not be consumed.
+  response = codec_client_->makeRequestWithBody(default_request_headers_, 10);
+  waitForNextUpstreamRequest();
+  Http::MetadataMap metadata_map = {{"aaa", "aaa"}};
+  Http::MetadataMapPtr metadata_map_ptr = std::make_unique<Http::MetadataMap>(metadata_map);
+  Http::MetadataMapVector metadata_map_vector;
+  metadata_map_vector.push_back(std::move(metadata_map_ptr));
+  upstream_request_->encodeMetadata(metadata_map_vector);
+  upstream_request_->encodeHeaders(default_response_headers_, true);
+
+  response->waitForEndStream();
+  ASSERT_TRUE(response->complete());
+  // Verify metadata added in encodeHeaders(): "headers" and "duplicate", and metadata added in
+  // encodeMetadata(): "aaa", "keep" and "duplicate" are received by the client. Note that "remove"
+  // is consumed.
+  expected_metadata_keys.erase("data");
+  expected_metadata_keys.erase("100-continue");
+  expected_metadata_keys.insert("aaa");
+  verifyExpectedMetadata(response->metadata_map(), expected_metadata_keys);
+  EXPECT_EQ(response->keyCount("keep"), 2);
+
+  // Upstream responds with headers, data and metadata that will be consumed.
+  response = codec_client_->makeRequestWithBody(default_request_headers_, 10);
+  waitForNextUpstreamRequest();
+  metadata_map = {{"consume", "consume"}, {"remove", "remove"}};
+  metadata_map_ptr = std::make_unique<Http::MetadataMap>(metadata_map);
+  metadata_map_vector.clear();
+  metadata_map_vector.push_back(std::move(metadata_map_ptr));
+  upstream_request_->encodeMetadata(metadata_map_vector);
+  upstream_request_->encodeHeaders(default_response_headers_, false);
+  upstream_request_->encodeData(100, true);
+
+  response->waitForEndStream();
+  ASSERT_TRUE(response->complete());
+  // Verify metadata added in encodeHeaders(): "headers" and "duplicate", and metadata added in
+  // encodeData(): "data", "duplicate", and metadata added in encodeMetadata(): "keep", "duplicate",
+  // "replace" are received by the client. Note that key "remove" and "consume" are consumed.
+  expected_metadata_keys.erase("aaa");
+  expected_metadata_keys.insert("data");
+  expected_metadata_keys.insert("replace");
+  verifyExpectedMetadata(response->metadata_map(), expected_metadata_keys);
+  EXPECT_EQ(response->keyCount("duplicate"), 2);
+  EXPECT_EQ(response->keyCount("keep"), 3);
 }
 
-TEST_P(Http2IntegrationTest, DownstreamResetBeforeResponseComplete) {
-  testDownstreamResetBeforeResponseComplete();
+TEST_P(Http2MetadataIntegrationTest, ProxyMultipleMetadataReachSizeLimit) {
+  initialize();
+  codec_client_ = makeHttpConnection(lookupPort("http"));
+
+  // Sends a request.
+  auto response = codec_client_->makeRequestWithBody(default_request_headers_, 10);
+  waitForNextUpstreamRequest();
+
+  // Sends multiple metadata after response header until max size limit is reached.
+  upstream_request_->encodeHeaders(default_response_headers_, false);
+  const int size = 200;
+  std::vector<Http::MetadataMapVector> multiple_vecs(size);
+  for (int i = 0; i < size; i++) {
+    Http::MetadataMap metadata_map = {{"key", std::string(10000, 'a')}};
+    Http::MetadataMapPtr metadata_map_ptr = std::make_unique<Http::MetadataMap>(metadata_map);
+    multiple_vecs[i].push_back(std::move(metadata_map_ptr));
+    upstream_request_->encodeMetadata(multiple_vecs[i]);
+  }
+  upstream_request_->encodeData(12, true);
+
+  // Verifies reset is received.
+  response->waitForReset();
+  ASSERT_FALSE(response->complete());
+}
+
+TEST_P(Http2IntegrationTest, GrpcRouterNotFound) {
+  config_helper_.setDefaultHostAndRoute("foo.com", "/found");
+  initialize();
+
+  BufferingStreamDecoderPtr response = IntegrationUtil::makeSingleRequest(
+      lookupPort("http"), "POST", "/service/notfound", "", downstream_protocol_, version_, "host",
+      Http::Headers::get().ContentTypeValues.Grpc);
+  ASSERT_TRUE(response->complete());
+  EXPECT_EQ("200", response->headers().Status()->value().getStringView());
+  EXPECT_EQ(Http::Headers::get().ContentTypeValues.Grpc,
+            response->headers().ContentType()->value().getStringView());
+  EXPECT_EQ("12", response->headers().GrpcStatus()->value().getStringView());
+}
+
+TEST_P(Http2IntegrationTest, GrpcRetry) { testGrpcRetry(); }
+
+// Verify the case where there is an HTTP/2 codec/protocol error with an active stream.
+TEST_P(Http2IntegrationTest, CodecErrorAfterStreamStart) {
+  initialize();
+  codec_client_ = makeHttpConnection(lookupPort("http"));
+
+  // Sends a request.
+  auto response = codec_client_->makeRequestWithBody(default_request_headers_, 10);
+  waitForNextUpstreamRequest();
+
+  // Send bogus raw data on the connection.
+  Buffer::OwnedImpl bogus_data("some really bogus data");
+  codec_client_->rawConnection().write(bogus_data, false);
+
+  // Verifies reset is received.
+  response->waitForReset();
 }
 
 TEST_P(Http2IntegrationTest, BadMagic) {
@@ -183,7 +494,7 @@ TEST_P(Http2IntegrationTest, GoAway) {
   codec_client_->close();
 
   EXPECT_TRUE(response->complete());
-  EXPECT_STREQ("200", response->headers().Status()->value().c_str());
+  EXPECT_EQ("200", response->headers().Status()->value().getStringView());
 }
 
 TEST_P(Http2IntegrationTest, Trailers) { testTrailers(1024, 2048); }
@@ -217,19 +528,11 @@ TEST_P(Http2IntegrationTest, GrpcRequestTimeout) {
                               {"content-type", "application/grpc"}});
   response->waitForEndStream();
   EXPECT_TRUE(response->complete());
-  EXPECT_STREQ("200", response->headers().Status()->value().c_str());
+  EXPECT_EQ("200", response->headers().Status()->value().getStringView());
   EXPECT_NE(response->headers().GrpcStatus(), nullptr);
-  EXPECT_STREQ("14", response->headers().GrpcStatus()->value().c_str()); // Service Unavailable
+  EXPECT_EQ("14", response->headers().GrpcStatus()->value().getStringView()); // Service Unavailable
   EXPECT_LT(0, test_server_->counter("cluster.cluster_0.upstream_rq_timeout")->value());
 }
-
-// Tests idle timeout behaviour with single request and validates that idle timer kicks in
-// after given timeout.
-TEST_P(Http2IntegrationTest, IdleTimoutBasic) { testIdleTimeoutBasic(); }
-
-// Tests idle timeout behaviour with multiple requests and validates that idle timer kicks in
-// after both the requests are done.
-TEST_P(Http2IntegrationTest, IdleTimeoutWithTwoRequests) { testIdleTimeoutWithTwoRequests(); }
 
 // Interleave two requests and responses and make sure that idle timeout is handled correctly.
 TEST_P(Http2IntegrationTest, IdleTimeoutWithSimultaneousRequests) {
@@ -294,7 +597,7 @@ TEST_P(Http2IntegrationTest, IdleTimeoutWithSimultaneousRequests) {
   EXPECT_TRUE(upstream_request2->complete());
   EXPECT_EQ(request2_bytes, upstream_request2->bodyLength());
   EXPECT_TRUE(response2->complete());
-  EXPECT_STREQ("200", response2->headers().Status()->value().c_str());
+  EXPECT_EQ("200", response2->headers().Status()->value().getStringView());
   EXPECT_EQ(request2_bytes, response2->body().size());
 
   // Validate that idle time is not kicked in.
@@ -308,13 +611,61 @@ TEST_P(Http2IntegrationTest, IdleTimeoutWithSimultaneousRequests) {
   EXPECT_TRUE(upstream_request1->complete());
   EXPECT_EQ(request1_bytes, upstream_request1->bodyLength());
   EXPECT_TRUE(response1->complete());
-  EXPECT_STREQ("200", response1->headers().Status()->value().c_str());
+  EXPECT_EQ("200", response1->headers().Status()->value().getStringView());
   EXPECT_EQ(request1_bytes, response1->body().size());
 
   // Do not send any requests and validate idle timeout kicks in after both the requests are done.
   ASSERT_TRUE(fake_upstream_connection1->waitForDisconnect());
   ASSERT_TRUE(fake_upstream_connection2->waitForDisconnect());
   test_server_->waitForCounterGe("cluster.cluster_0.upstream_cx_idle_timeout", 2);
+}
+
+// Test request mirroring / shadowing with an HTTP/2 downstream and a request with a body.
+TEST_P(Http2IntegrationTest, RequestMirrorWithBody) {
+  config_helper_.addConfigModifier(
+      [&](envoy::config::filter::network::http_connection_manager::v2::HttpConnectionManager& hcm)
+          -> void {
+        hcm.mutable_route_config()
+            ->mutable_virtual_hosts(0)
+            ->mutable_routes(0)
+            ->mutable_route()
+            ->mutable_request_mirror_policy()
+            ->set_cluster("cluster_0");
+      });
+
+  initialize();
+  codec_client_ = makeHttpConnection(lookupPort("http"));
+
+  // Send request with body.
+  IntegrationStreamDecoderPtr request =
+      codec_client_->makeRequestWithBody(Http::TestHeaderMapImpl{{":method", "POST"},
+                                                                 {":path", "/test/long/url"},
+                                                                 {":scheme", "http"},
+                                                                 {":authority", "host"}},
+                                         "hello");
+
+  // Wait for the first request as well as the shadow.
+  waitForNextUpstreamRequest();
+
+  FakeHttpConnectionPtr fake_upstream_connection2;
+  FakeStreamPtr upstream_request2;
+  ASSERT_TRUE(fake_upstreams_[0]->waitForHttpConnection(*dispatcher_, fake_upstream_connection2));
+  ASSERT_TRUE(fake_upstream_connection2->waitForNewStream(*dispatcher_, upstream_request2));
+  ASSERT_TRUE(upstream_request2->waitForEndStream(*dispatcher_));
+
+  // Make sure both requests have a body. Also check the shadow for the shadow headers.
+  EXPECT_EQ("hello", upstream_request_->body().toString());
+  EXPECT_EQ("hello", upstream_request2->body().toString());
+  EXPECT_EQ("host-shadow", upstream_request2->headers().Host()->value().getStringView());
+
+  upstream_request_->encodeHeaders(Http::TestHeaderMapImpl{{":status", "200"}}, true);
+  upstream_request2->encodeHeaders(Http::TestHeaderMapImpl{{":status", "200"}}, true);
+  request->waitForEndStream();
+  EXPECT_EQ("200", request->headers().Status()->value().getStringView());
+
+  // Cleanup.
+  ASSERT_TRUE(fake_upstream_connection2->close());
+  ASSERT_TRUE(fake_upstream_connection2->waitForDisconnect());
 }
 
 // Interleave two requests and responses and make sure the HTTP2 stack handles this correctly.
@@ -366,7 +717,7 @@ void Http2IntegrationTest::simultaneousRequest(int32_t request1_bytes, int32_t r
   EXPECT_TRUE(upstream_request2->complete());
   EXPECT_EQ(request2_bytes, upstream_request2->bodyLength());
   EXPECT_TRUE(response2->complete());
-  EXPECT_STREQ("200", response2->headers().Status()->value().c_str());
+  EXPECT_EQ("200", response2->headers().Status()->value().getStringView());
   EXPECT_EQ(request2_bytes, response2->body().size());
 
   // Respond to request 1
@@ -376,7 +727,7 @@ void Http2IntegrationTest::simultaneousRequest(int32_t request1_bytes, int32_t r
   EXPECT_TRUE(upstream_request1->complete());
   EXPECT_EQ(request1_bytes, upstream_request1->bodyLength());
   EXPECT_TRUE(response1->complete());
-  EXPECT_STREQ("200", response1->headers().Status()->value().c_str());
+  EXPECT_EQ("200", response1->headers().Status()->value().getStringView());
   EXPECT_EQ(request2_bytes, response1->body().size());
 
   // Cleanup both downstream and upstream
@@ -451,6 +802,32 @@ TEST_P(Http2IntegrationTest, DelayedCloseDisabled) {
             0);
 }
 
+TEST_P(Http2IntegrationTest, PauseAndResume) {
+  config_helper_.addFilter(R"EOF(
+  name: stop-iteration-and-continue-filter
+  config: {}
+  )EOF");
+  initialize();
+
+  // Send a request with a bit of data, to trigger the filter pausing.
+  codec_client_ = makeHttpConnection(lookupPort("http"));
+  auto encoder_decoder = codec_client_->startRequest(default_request_headers_);
+  request_encoder_ = &encoder_decoder.first;
+  codec_client_->sendData(*request_encoder_, 1, false);
+
+  auto response = std::move(encoder_decoder.second);
+  ASSERT_TRUE(fake_upstreams_[0]->waitForHttpConnection(*dispatcher_, fake_upstream_connection_));
+  ASSERT_TRUE(fake_upstream_connection_->waitForNewStream(*dispatcher_, upstream_request_));
+  ASSERT_TRUE(upstream_request_->waitForHeadersComplete());
+
+  // Now send the final data frame and make sure it gets proxied.
+  codec_client_->sendData(*request_encoder_, 0, true);
+  ASSERT_TRUE(upstream_request_->waitForEndStream(*dispatcher_));
+  upstream_request_->encodeHeaders(default_response_headers_, true);
+  response->waitForEndStream();
+  ASSERT_TRUE(response->complete());
+}
+
 Http2RingHashIntegrationTest::Http2RingHashIntegrationTest() {
   config_helper_.addConfigModifier([&](envoy::config::bootstrap::v2::Bootstrap& bootstrap) -> void {
     auto* cluster = bootstrap.mutable_static_resources()->mutable_clusters(0);
@@ -483,9 +860,13 @@ void Http2RingHashIntegrationTest::createUpstreams() {
   }
 }
 
-INSTANTIATE_TEST_CASE_P(IpVersions, Http2RingHashIntegrationTest,
-                        testing::ValuesIn(TestEnvironment::getIpVersionsForTest()),
-                        TestUtility::ipTestParamsToString);
+INSTANTIATE_TEST_SUITE_P(IpVersions, Http2RingHashIntegrationTest,
+                         testing::ValuesIn(TestEnvironment::getIpVersionsForTest()),
+                         TestUtility::ipTestParamsToString);
+
+INSTANTIATE_TEST_SUITE_P(IpVersions, Http2MetadataIntegrationTest,
+                         testing::ValuesIn(TestEnvironment::getIpVersionsForTest()),
+                         TestUtility::ipTestParamsToString);
 
 void Http2RingHashIntegrationTest::sendMultipleRequests(
     int request_bytes, Http::TestHeaderMapImpl headers,
@@ -559,10 +940,10 @@ TEST_P(Http2RingHashIntegrationTest, CookieRoutingNoCookieNoTtl) {
                               {":scheme", "http"},
                               {":authority", "host"}},
       [&](IntegrationStreamDecoder& response) {
-        EXPECT_STREQ("200", response.headers().Status()->value().c_str());
+        EXPECT_EQ("200", response.headers().Status()->value().getStringView());
         EXPECT_TRUE(response.headers().get(Http::Headers::get().SetCookie) == nullptr);
-        served_by.insert(
-            response.headers().get(Http::LowerCaseString("x-served-by"))->value().c_str());
+        served_by.insert(std::string(
+            response.headers().get(Http::LowerCaseString("x-served-by"))->value().getStringView()));
       });
   EXPECT_EQ(served_by.size(), num_upstreams_);
 }
@@ -589,8 +970,9 @@ TEST_P(Http2RingHashIntegrationTest, CookieRoutingNoCookieWithNonzeroTtlSet) {
                               {":scheme", "http"},
                               {":authority", "host"}},
       [&](IntegrationStreamDecoder& response) {
-        EXPECT_STREQ("200", response.headers().Status()->value().c_str());
-        std::string value = response.headers().get(Http::Headers::get().SetCookie)->value().c_str();
+        EXPECT_EQ("200", response.headers().Status()->value().getStringView());
+        std::string value(
+            response.headers().get(Http::Headers::get().SetCookie)->value().getStringView());
         set_cookies.insert(value);
         EXPECT_THAT(value, MatchesRegex("foo=.*; Max-Age=15; HttpOnly"));
       });
@@ -619,8 +1001,9 @@ TEST_P(Http2RingHashIntegrationTest, CookieRoutingNoCookieWithZeroTtlSet) {
                               {":scheme", "http"},
                               {":authority", "host"}},
       [&](IntegrationStreamDecoder& response) {
-        EXPECT_STREQ("200", response.headers().Status()->value().c_str());
-        std::string value = response.headers().get(Http::Headers::get().SetCookie)->value().c_str();
+        EXPECT_EQ("200", response.headers().Status()->value().getStringView());
+        std::string value(
+            response.headers().get(Http::Headers::get().SetCookie)->value().getStringView());
         set_cookies.insert(value);
         EXPECT_THAT(value, MatchesRegex("^foo=.*$"));
       });
@@ -649,10 +1032,10 @@ TEST_P(Http2RingHashIntegrationTest, CookieRoutingWithCookieNoTtl) {
                               {":scheme", "http"},
                               {":authority", "host"}},
       [&](IntegrationStreamDecoder& response) {
-        EXPECT_STREQ("200", response.headers().Status()->value().c_str());
+        EXPECT_EQ("200", response.headers().Status()->value().getStringView());
         EXPECT_TRUE(response.headers().get(Http::Headers::get().SetCookie) == nullptr);
-        served_by.insert(
-            response.headers().get(Http::LowerCaseString("x-served-by"))->value().c_str());
+        served_by.insert(std::string(
+            response.headers().get(Http::LowerCaseString("x-served-by"))->value().getStringView()));
       });
   EXPECT_EQ(served_by.size(), 1);
 }
@@ -680,10 +1063,10 @@ TEST_P(Http2RingHashIntegrationTest, CookieRoutingWithCookieWithTtlSet) {
                               {":scheme", "http"},
                               {":authority", "host"}},
       [&](IntegrationStreamDecoder& response) {
-        EXPECT_STREQ("200", response.headers().Status()->value().c_str());
+        EXPECT_EQ("200", response.headers().Status()->value().getStringView());
         EXPECT_TRUE(response.headers().get(Http::Headers::get().SetCookie) == nullptr);
-        served_by.insert(
-            response.headers().get(Http::LowerCaseString("x-served-by"))->value().c_str());
+        served_by.insert(std::string(
+            response.headers().get(Http::LowerCaseString("x-served-by"))->value().getStringView()));
       });
   EXPECT_EQ(served_by.size(), 1);
 }

@@ -17,8 +17,11 @@ namespace Extensions {
 namespace Filters {
 namespace Common {
 namespace Lua {
+namespace {
 
-class TestObject : public BaseLuaObject<TestObject> {
+// Setting large alignment requirement here so it fails the UBSAN tests if Lua allocated memory is
+// not aligned by Envoy. See https://github.com/envoyproxy/envoy/issues/5551 for details.
+class alignas(32) TestObject : public BaseLuaObject<TestObject> {
 public:
   ~TestObject() { onDestroy(); }
 
@@ -154,6 +157,7 @@ TEST_F(LuaTest, MarkDead) {
   lua_gc(cr1->luaState(), LUA_GCCOLLECT, 0);
 }
 
+} // namespace
 } // namespace Lua
 } // namespace Common
 } // namespace Filters

@@ -16,10 +16,13 @@ namespace RBAC {
 
 class DynamicMetadataKeys {
 public:
-  const std::string ShadowPolicyIdField{"shadow_effective_policyID"};
+  const std::string ShadowEffectivePolicyIdField{"shadow_effective_policy_id"};
+  const std::string ShadowEngineResultField{"shadow_engine_result"};
+  const std::string EngineResultAllowed{"allowed"};
+  const std::string EngineResultDenied{"denied"};
 };
 
-typedef ConstSingleton<DynamicMetadataKeys> DynamicMetadataKeysSingleton;
+using DynamicMetadataKeysSingleton = ConstSingleton<DynamicMetadataKeys>;
 
 /**
  * All stats for the RBAC filter. @see stats_macros.h
