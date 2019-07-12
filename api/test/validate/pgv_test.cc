@@ -15,6 +15,7 @@
 #include "envoy/config/filter/http/fault/v2/fault.pb.validate.h"
 #include "envoy/config/filter/http/gzip/v2/gzip.pb.validate.h"
 #include "envoy/config/filter/http/health_check/v2/health_check.pb.validate.h"
+#include "envoy/config/filter/http/header_to_metadata/v2/header_to_metadata.pb.validate.h"
 #include "envoy/config/filter/http/ip_tagging/v2/ip_tagging.pb.validate.h"
 #include "envoy/config/filter/http/lua/v2/lua.pb.validate.h"
 #include "envoy/config/filter/http/router/v2/router.pb.validate.h"
@@ -53,6 +54,7 @@ template <class Proto> struct TestCase {
 // from data plane API.
 int main(int argc, char* argv[]) {
   envoy::config::bootstrap::v2::Bootstrap invalid_bootstrap;
+  invalid_bootstrap.mutable_static_resources()->add_clusters();
   // This is a baseline test of the validation features we care about. It's
   // probably not worth adding in every filter and field that we want to valid
   // in the API upfront, but as regressions occur, this is the place to add the
@@ -62,7 +64,7 @@ int main(int argc, char* argv[]) {
   cluster_manager {}
   admin {
     access_log_path: "/dev/null"
-    address {}
+    address { pipe { path: "/" } }
   }
   )EOF";
   envoy::config::bootstrap::v2::Bootstrap valid_bootstrap;

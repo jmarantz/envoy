@@ -1,7 +1,7 @@
 #include "common/network/cidr_range.h"
 
 #include <arpa/inet.h>
-#include <netinet/ip.h>
+#include <netinet/in.h>
 #include <sys/socket.h>
 
 #include <array>
@@ -128,8 +128,7 @@ CidrRange CidrRange::create(const std::string& range) {
     InstanceConstSharedPtr ptr = Utility::parseInternetAddress(std::string{parts[0]});
     if (ptr->type() == Type::Ip) {
       uint64_t length64;
-      const std::string part{parts[1]};
-      if (StringUtil::atoul(part.c_str(), length64, 10)) {
+      if (absl::SimpleAtoi(parts[1], &length64)) {
         if ((ptr->ip()->version() == IpVersion::v6 && length64 <= 128) ||
             (ptr->ip()->version() == IpVersion::v4 && length64 <= 32)) {
           return create(std::move(ptr), static_cast<uint32_t>(length64));
@@ -194,7 +193,7 @@ InstanceConstSharedPtr CidrRange::truncateIpAddressAndLength(InstanceConstShared
     return std::make_shared<Ipv6Instance>(sa6);
   }
   }
-  NOT_REACHED
+  NOT_REACHED_GCOVR_EXCL_LINE;
 }
 
 IpList::IpList(const std::vector<std::string>& subnets) {

@@ -3,6 +3,7 @@
 #include <memory>
 
 #include "envoy/common/pure.h"
+#include "envoy/common/time.h"
 #include "envoy/network/address.h"
 
 #include "common/common/hex.h"
@@ -10,6 +11,7 @@
 #include "extensions/tracers/zipkin/tracer_interface.h"
 #include "extensions/tracers/zipkin/util.h"
 
+#include "absl/strings/string_view.h"
 #include "absl/types/optional.h"
 
 namespace Envoy {
@@ -26,7 +28,7 @@ public:
   /**
    * Destructor.
    */
-  virtual ~ZipkinBase() {}
+  virtual ~ZipkinBase() = default;
 
   /**
    * All classes defining Zipkin abstractions need to implement this method to convert
@@ -54,7 +56,7 @@ public:
   /**
    * Default constructor. Creates an empty Endpoint.
    */
-  Endpoint() : service_name_(), address_(nullptr) {}
+  Endpoint() : address_(nullptr) {}
 
   /**
    * Constructor that initializes an endpoint with the given attributes.
@@ -116,12 +118,12 @@ public:
   /**
    * Default constructor. Creates an empty annotation.
    */
-  Annotation() : timestamp_(0), value_() {}
+  Annotation() : timestamp_(0) {}
 
   /**
    * Constructor that creates an annotation based on the given parameters.
    *
-   * @param timestamp A 64-bit integer containing the annotation timestasmp attribute.
+   * @param timestamp A 64-bit integer containing the annotation timestamp attribute.
    * @param value A string containing the annotation's value attribute. Valid values
    * appear on ZipkinCoreConstants. The most commonly used values are "cs", "cr", "ss" and "sr".
    * @param endpoint The endpoint object representing the annotation's endpoint attribute.
@@ -215,7 +217,7 @@ public:
   /**
    * Default constructor. Creates an empty binary annotation.
    */
-  BinaryAnnotation() : key_(), value_(), annotation_type_(STRING) {}
+  BinaryAnnotation() : annotation_type_(STRING) {}
 
   /**
    * Constructor that creates a binary annotation based on the given parameters.
@@ -223,7 +225,7 @@ public:
    * @param key The key name of the annotation.
    * @param value The value associated with the key.
    */
-  BinaryAnnotation(const std::string& key, const std::string& value)
+  BinaryAnnotation(absl::string_view key, absl::string_view value)
       : key_(key), value_(value), annotation_type_(STRING) {}
 
   /**
@@ -286,10 +288,10 @@ private:
   std::string key_;
   std::string value_;
   absl::optional<Endpoint> endpoint_;
-  AnnotationType annotation_type_;
+  AnnotationType annotation_type_{};
 };
 
-typedef std::unique_ptr<Span> SpanPtr;
+using SpanPtr = std::unique_ptr<Span>;
 
 /**
  * Represents a Zipkin span. This class is based on Zipkin's Thrift definition of a span.
@@ -304,9 +306,9 @@ public:
   /**
    * Default constructor. Creates an empty span.
    */
-  Span()
-      : trace_id_(0), name_(), id_(0), debug_(false), sampled_(false), monotonic_start_time_(0),
-        tracer_(nullptr) {}
+  explicit Span(TimeSource& time_source)
+      : trace_id_(0), id_(0), debug_(false), sampled_(false), monotonic_start_time_(0),
+        tracer_(nullptr), time_source_(time_source) {}
 
   /**
    * Sets the span's trace id attribute.
@@ -336,7 +338,7 @@ public:
   /**
    * Set the span's sampled flag.
    */
-  void setSampled(const bool val) { sampled_ = val; }
+  void setSampled(bool val) { sampled_ = val; }
 
   /**
    * @return a vector with all annotations added to the span.
@@ -356,7 +358,7 @@ public:
   /**
    * Adds an annotation to the span (move semantics).
    */
-  void addAnnotation(const Annotation&& ann) { annotations_.push_back(ann); }
+  void addAnnotation(Annotation&& ann) { annotations_.emplace_back(std::move(ann)); }
 
   /**
    * Sets the span's binary annotations all at once.
@@ -371,7 +373,9 @@ public:
   /**
    * Adds a binary annotation to the span (move semantics).
    */
-  void addBinaryAnnotation(const BinaryAnnotation&& bann) { binary_annotations_.push_back(bann); }
+  void addBinaryAnnotation(BinaryAnnotation&& bann) {
+    binary_annotations_.emplace_back(std::move(bann));
+  }
 
   /**
    * Sets the span's debug attribute.
@@ -472,6 +476,11 @@ public:
   int64_t timestamp() const { return timestamp_.value(); }
 
   /**
+   * @return the higher 64 bits of a 128-bit trace id.
+   */
+  uint64_t traceIdHigh() const { return trace_id_high_.value(); }
+
+  /**
    * @return the span's trace id as an integer.
    */
   uint64_t traceId() const { return trace_id_; }
@@ -479,12 +488,11 @@ public:
   /**
    * @return the span's trace id as a hexadecimal string.
    */
-  const std::string traceIdAsHexString() const { return Hex::uint64ToHex(trace_id_); }
-
-  /**
-   * @return the higher 64 bits of a 128-bit trace id.
-   */
-  uint64_t traceIdHigh() const { return trace_id_high_.value(); }
+  const std::string traceIdAsHexString() const {
+    return trace_id_high_.has_value()
+               ? Hex::uint64ToHex(trace_id_high_.value()) + Hex::uint64ToHex(trace_id_)
+               : Hex::uint64ToHex(trace_id_);
+  }
 
   /**
    * @return the span's start time (monotonic, used to calculate duration).
@@ -540,7 +548,15 @@ public:
    * @param name The binary annotation's key.
    * @param value The binary annotation's value.
    */
-  void setTag(const std::string& name, const std::string& value);
+  void setTag(absl::string_view name, absl::string_view value);
+
+  /**
+   * Adds an annotation to the span
+   *
+   * @param timestamp The annotation's timestamp.
+   * @param event The annotation's value.
+   */
+  void log(SystemTime timestamp, const std::string& event);
 
 private:
   static const std::string EMPTY_HEX_STRING_;
@@ -557,6 +573,7 @@ private:
   absl::optional<uint64_t> trace_id_high_;
   int64_t monotonic_start_time_;
   TracerInterface* tracer_;
+  TimeSource& time_source_;
 };
 
 } // namespace Zipkin

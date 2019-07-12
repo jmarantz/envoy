@@ -1,7 +1,5 @@
 #include "extensions/transport_sockets/raw_buffer/config.h"
 
-#include "envoy/registry/registry.h"
-
 #include "common/network/raw_buffer_socket.h"
 
 namespace Envoy {
@@ -15,8 +13,8 @@ Network::TransportSocketFactoryPtr UpstreamRawBufferSocketFactory::createTranspo
 }
 
 Network::TransportSocketFactoryPtr DownstreamRawBufferSocketFactory::createTransportSocketFactory(
-    const std::string&, const std::vector<std::string>&, bool, const Protobuf::Message&,
-    Server::Configuration::TransportSocketFactoryContext&) {
+    const Protobuf::Message&, Server::Configuration::TransportSocketFactoryContext&,
+    const std::vector<std::string>&) {
   return std::make_unique<Network::RawBufferSocketFactory>();
 }
 
@@ -24,13 +22,11 @@ ProtobufTypes::MessagePtr RawBufferSocketFactory::createEmptyConfigProto() {
   return std::make_unique<ProtobufWkt::Empty>();
 }
 
-static Registry::RegisterFactory<UpstreamRawBufferSocketFactory,
-                                 Server::Configuration::UpstreamTransportSocketConfigFactory>
-    upstream_registered_;
+REGISTER_FACTORY(UpstreamRawBufferSocketFactory,
+                 Server::Configuration::UpstreamTransportSocketConfigFactory);
 
-static Registry::RegisterFactory<DownstreamRawBufferSocketFactory,
-                                 Server::Configuration::DownstreamTransportSocketConfigFactory>
-    downstream_registered_;
+REGISTER_FACTORY(DownstreamRawBufferSocketFactory,
+                 Server::Configuration::DownstreamTransportSocketConfigFactory);
 
 } // namespace RawBuffer
 } // namespace TransportSockets

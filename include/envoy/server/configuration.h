@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-#include "envoy/ratelimit/ratelimit.h"
+#include "envoy/stats/sink.h"
 #include "envoy/tracing/http_tracer.h"
 #include "envoy/upstream/cluster_manager.h"
 
@@ -18,35 +18,11 @@ namespace Server {
 namespace Configuration {
 
 /**
- * Configuration for local disk runtime support.
- */
-class Runtime {
-public:
-  virtual ~Runtime() {}
-
-  /**
-   * @return const std::string& the root symlink to watch for swapping.
-   */
-  virtual const std::string& symlinkRoot() PURE;
-
-  /**
-   * @return const std::string& the subdirectory to load with runtime data.
-   */
-  virtual const std::string& subdirectory() PURE;
-
-  /**
-   * @return const std::string& the override subdirectory.
-   * Read runtime values from subdirectory and overrideSubdirectory, overrideSubdirectory wins.
-   */
-  virtual const std::string& overrideSubdirectory() PURE;
-};
-
-/**
  * The main server configuration.
  */
 class Main {
 public:
-  virtual ~Main() {}
+  virtual ~Main() = default;
 
   /**
    * @return Upstream::ClusterManager* singleton for use by the entire server.
@@ -60,11 +36,6 @@ public:
   virtual Tracing::HttpTracer& httpTracer() PURE;
 
   /**
-   * @return RateLimit::ClientFactory& the global rate limit service client factory.
-   */
-  virtual RateLimit::ClientFactory& rateLimitClientFactory() PURE;
-
-  /**
    * @return std::list<Stats::SinkPtr>& the list of stats sinks initialized from the configuration.
    */
   virtual std::list<Stats::SinkPtr>& statsSinks() PURE;
@@ -73,7 +44,7 @@ public:
    * @return std::chrono::milliseconds the time interval between flushing to configured stat sinks.
    *         The server latches counters.
    */
-  virtual std::chrono::milliseconds statsFlushInterval() PURE;
+  virtual std::chrono::milliseconds statsFlushInterval() const PURE;
 
   /**
    * @return std::chrono::milliseconds the time interval after which we count a nonresponsive thread
@@ -105,7 +76,7 @@ public:
  */
 class Admin {
 public:
-  virtual ~Admin() {}
+  virtual ~Admin() = default;
 
   /**
    * @return const std::string& the admin access log path.
@@ -128,7 +99,7 @@ public:
  */
 class Initial {
 public:
-  virtual ~Initial() {}
+  virtual ~Initial() = default;
 
   /**
    * @return Admin& the admin config.
@@ -141,9 +112,10 @@ public:
   virtual absl::optional<std::string> flagsPath() PURE;
 
   /**
-   * @return Runtime* the local disk runtime configuration or nullptr if there is no configuration.
+   * @return const envoy::config::bootstrap::v2::LayeredRuntime& runtime
+   *         configuration.
    */
-  virtual Runtime* runtime() PURE;
+  virtual const envoy::config::bootstrap::v2::LayeredRuntime& runtime() PURE;
 };
 
 } // namespace Configuration

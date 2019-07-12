@@ -7,13 +7,14 @@
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
+using testing::_;
 using testing::InSequence;
 using testing::Return;
 using testing::SaveArg;
-using testing::_;
 
 namespace Envoy {
 namespace Server {
+namespace {
 
 class DrainManagerImplTest : public testing::Test {
 public:
@@ -35,7 +36,7 @@ TEST_F(DrainManagerImplTest, Default) {
   EXPECT_CALL(*shutdown_timer, enableTimer(std::chrono::milliseconds(900000)));
   drain_manager.startParentShutdownSequence();
 
-  EXPECT_CALL(server_.hot_restart_, terminateParent());
+  EXPECT_CALL(server_.hot_restart_, sendParentTerminateRequest());
   shutdown_timer->callback_();
 
   // Verify basic drain close.
@@ -72,5 +73,6 @@ TEST_F(DrainManagerImplTest, ModifyOnly) {
   EXPECT_FALSE(drain_manager.drainClose());
 }
 
+} // namespace
 } // namespace Server
 } // namespace Envoy

@@ -1,10 +1,13 @@
 #pragma once
 
 #include <array>
+#include <functional>
 #include <string>
 #include <vector>
 
 #include "envoy/common/pure.h"
+#include "envoy/ssl/certificate_validation_context_config.h"
+#include "envoy/ssl/tls_certificate_config.h"
 
 namespace Envoy {
 namespace Ssl {
@@ -14,7 +17,7 @@ namespace Ssl {
  */
 class ContextConfig {
 public:
-  virtual ~ContextConfig() {}
+  virtual ~ContextConfig() = default;
 
   /**
    * The list of supported protocols exposed via ALPN. Client connections will send these
@@ -22,11 +25,6 @@ public:
    * protocol if the client supports ALPN.
    */
   virtual const std::string& alpnProtocols() const PURE;
-
-  /**
-   * The alternate list of ALPN protocols served via kill switch. @see alpnProtocols().
-   */
-  virtual const std::string& altAlpnProtocols() const PURE;
 
   /**
    * The ':' delimited list of supported cipher suites
@@ -39,59 +37,16 @@ public:
   virtual const std::string& ecdhCurves() const PURE;
 
   /**
-   * @return The CA certificate to use for peer validation.
+   * @return std::vector<std::reference_wrapper<const TlsCertificateConfig>> TLS
+   * certificate configs.
    */
-  virtual const std::string& caCert() const PURE;
+  virtual std::vector<std::reference_wrapper<const TlsCertificateConfig>>
+  tlsCertificates() const PURE;
 
   /**
-   * @return Path of the CA certificate to use for peer validation or "<inline>"
-   * if the CA certificate was inlined.
+   * @return CertificateValidationContextConfig the certificate validation context config.
    */
-  virtual const std::string& caCertPath() const PURE;
-
-  /**
-   * @return The CRL to check if a cert is revoked.
-   */
-  virtual const std::string& certificateRevocationList() const PURE;
-
-  /**
-   * @return Path of the certificate revocation list, or "<inline>" if the CRL
-   * was inlined.
-   */
-  virtual const std::string& certificateRevocationListPath() const PURE;
-
-  /**
-   * @return The certificate chain used to identify the local side.
-   */
-  virtual const std::string& certChain() const PURE;
-
-  /**
-   * @return Path of the certificate chain used to identify the local side or "<inline>"
-   * if the certificate chain was inlined.
-   */
-  virtual const std::string& certChainPath() const PURE;
-
-  /**
-   * @return The private key used to identify the local side.
-   */
-  virtual const std::string& privateKey() const PURE;
-
-  /**
-   * @return Path of the private key used to identify the local side or "<inline>"
-   * if the private key was inlined.
-   */
-  virtual const std::string& privateKeyPath() const PURE;
-
-  /**
-   * @return The subject alt names to be verified, if enabled. Otherwise, ""
-   */
-  virtual const std::vector<std::string>& verifySubjectAltNameList() const PURE;
-
-  /**
-   * @return The hex string representation of the certificate hash to be verified, if enabled.
-   * Otherwise, ""
-   */
-  virtual const std::string& verifyCertificateHash() const PURE;
+  virtual const CertificateValidationContextConfig* certificateValidationContext() const PURE;
 
   /**
    * @return The minimum TLS protocol version to negotiate.
@@ -102,6 +57,19 @@ public:
    * @return The maximum TLS protocol version to negotiate.
    */
   virtual unsigned maxProtocolVersion() const PURE;
+
+  /**
+   * @return true if the ContextConfig is able to provide secrets to create SSL context,
+   * and false if dynamic secrets are expected but are not downloaded from SDS server yet.
+   */
+  virtual bool isReady() const PURE;
+
+  /**
+   * Add secret callback into context config. When dynamic secrets are in use and new secrets
+   * are downloaded from SDS server, this callback is invoked to update SSL context.
+   * @param callback callback that is executed by context config.
+   */
+  virtual void setSecretUpdateCallback(std::function<void()> callback) PURE;
 };
 
 class ClientContextConfig : public virtual ContextConfig {
@@ -111,7 +79,27 @@ public:
    * Otherwise, ""
    */
   virtual const std::string& serverNameIndication() const PURE;
+
+  /**
+   * @return true if server-initiated TLS renegotiation will be allowed.
+   */
+  virtual bool allowRenegotiation() const PURE;
+
+  /**
+   * @return The maximum number of session keys to store.
+   */
+  virtual size_t maxSessionKeys() const PURE;
+
+  /**
+   * @return const std::string& with the signature algorithms for the context.
+   *         This is a :-delimited list of algorithms, see
+   *         https://tools.ietf.org/id/draft-ietf-tls-tls13-21.html#rfc.section.4.2.3
+   *         for names.
+   */
+  virtual const std::string& signingAlgorithmsForTest() const PURE;
 };
+
+using ClientContextConfigPtr = std::unique_ptr<ClientContextConfig>;
 
 class ServerContextConfig : public virtual ContextConfig {
 public:
@@ -133,6 +121,8 @@ public:
    */
   virtual const std::vector<SessionTicketKey>& sessionTicketKeys() const PURE;
 };
+
+using ServerContextConfigPtr = std::unique_ptr<ServerContextConfig>;
 
 } // namespace Ssl
 } // namespace Envoy

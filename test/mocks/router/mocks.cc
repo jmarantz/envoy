@@ -5,12 +5,12 @@
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
+using testing::_;
 using testing::NiceMock;
 using testing::Return;
 using testing::ReturnPointee;
 using testing::ReturnRef;
 using testing::SaveArg;
-using testing::_;
 
 namespace Envoy {
 namespace Router {
@@ -20,9 +20,19 @@ MockDirectResponseEntry::~MockDirectResponseEntry() {}
 
 MockRetryState::MockRetryState() {}
 
-void MockRetryState::expectRetry() {
-  EXPECT_CALL(*this, shouldRetry(_, _, _))
-      .WillOnce(DoAll(SaveArg<2>(&callback_), Return(RetryStatus::Yes)));
+void MockRetryState::expectHeadersRetry() {
+  EXPECT_CALL(*this, shouldRetryHeaders(_, _))
+      .WillOnce(DoAll(SaveArg<1>(&callback_), Return(RetryStatus::Yes)));
+}
+
+void MockRetryState::expectHedgedPerTryTimeoutRetry() {
+  EXPECT_CALL(*this, shouldHedgeRetryPerTryTimeout(_))
+      .WillOnce(DoAll(SaveArg<0>(&callback_), Return(RetryStatus::Yes)));
+}
+
+void MockRetryState::expectResetRetry() {
+  EXPECT_CALL(*this, shouldRetryReset(_, _))
+      .WillOnce(DoAll(SaveArg<1>(&callback_), Return(RetryStatus::Yes)));
 }
 
 MockRetryState::~MockRetryState() {}
@@ -75,6 +85,9 @@ MockRouteEntry::MockRouteEntry() {
   ON_CALL(*this, includeVirtualHostRateLimits()).WillByDefault(Return(true));
   ON_CALL(*this, pathMatchCriterion()).WillByDefault(ReturnRef(path_match_criterion_));
   ON_CALL(*this, metadata()).WillByDefault(ReturnRef(metadata_));
+  ON_CALL(*this, upgradeMap()).WillByDefault(ReturnRef(upgrade_map_));
+  ON_CALL(*this, hedgePolicy()).WillByDefault(ReturnRef(hedge_policy_));
+  ON_CALL(*this, routeName()).WillByDefault(ReturnRef(route_name_));
 }
 
 MockRouteEntry::~MockRouteEntry() {}
@@ -83,6 +96,7 @@ MockConfig::MockConfig() : route_(new NiceMock<MockRoute>()) {
   ON_CALL(*this, route(_, _)).WillByDefault(Return(route_));
   ON_CALL(*this, internalOnlyHeaders()).WillByDefault(ReturnRef(internal_only_headers_));
   ON_CALL(*this, name()).WillByDefault(ReturnRef(name_));
+  ON_CALL(*this, usesVhds()).WillByDefault(Return(false));
 }
 
 MockConfig::~MockConfig() {}
@@ -92,14 +106,21 @@ MockDecorator::MockDecorator() {
 }
 MockDecorator::~MockDecorator() {}
 
+MockRouteTracing::MockRouteTracing() {}
+MockRouteTracing::~MockRouteTracing() {}
+
 MockRoute::MockRoute() {
   ON_CALL(*this, routeEntry()).WillByDefault(Return(&route_entry_));
   ON_CALL(*this, decorator()).WillByDefault(Return(&decorator_));
+  ON_CALL(*this, tracingConfig()).WillByDefault(Return(nullptr));
 }
 MockRoute::~MockRoute() {}
 
 MockRouteConfigProviderManager::MockRouteConfigProviderManager() {}
 MockRouteConfigProviderManager::~MockRouteConfigProviderManager() {}
+
+MockScopedConfig::MockScopedConfig() {}
+MockScopedConfig::~MockScopedConfig() {}
 
 } // namespace Router
 } // namespace Envoy

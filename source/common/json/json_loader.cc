@@ -13,7 +13,6 @@
 #include "common/common/fmt.h"
 #include "common/common/hash.h"
 #include "common/common/utility.h"
-#include "common/filesystem/filesystem_impl.h"
 
 // Do not let RapidJson leak outside of this file.
 #include "rapidjson/document.h"
@@ -24,6 +23,7 @@
 #include "rapidjson/stringbuffer.h"
 #include "rapidjson/writer.h"
 
+#include "absl/strings/match.h"
 #include "yaml-cpp/yaml.h"
 
 namespace Envoy {
@@ -34,7 +34,7 @@ namespace {
  * Internal representation of Object.
  */
 class Field;
-typedef std::shared_ptr<Field> FieldSharedPtr;
+using FieldSharedPtr = std::shared_ptr<Field>;
 
 class Field : public Object {
 public:
@@ -47,12 +47,12 @@ public:
   static FieldSharedPtr createNull() { return FieldSharedPtr{new Field(Type::Null)}; }
 
   bool isNull() const override { return type_ == Type::Null; }
-  bool isArray() const { return type_ == Type::Array; }
-  bool isObject() const { return type_ == Type::Object; }
+  bool isArray() const override { return type_ == Type::Array; }
+  bool isObject() const override { return type_ == Type::Object; }
 
   // Value factory.
   template <typename T> static FieldSharedPtr createValue(T value) {
-    return FieldSharedPtr{new Field(value)};
+    return FieldSharedPtr{new Field(value)}; // NOLINT(modernize-make-shared)
   }
 
   void append(FieldSharedPtr field_ptr) {
@@ -118,7 +118,7 @@ private:
       return "String";
     }
 
-    NOT_REACHED;
+    NOT_REACHED_GCOVR_EXCL_LINE;
   }
 
   struct Value {
@@ -181,7 +181,7 @@ private:
  * Custom stream to allow access to the line number for each object.
  */
 class LineCountingStringStream : public rapidjson::StringStream {
-  // Ch is typdef in parent class to handle character encoding.
+  // Ch is typedef in parent class to handle character encoding.
 public:
   LineCountingStringStream(const Ch* src) : rapidjson::StringStream(src), line_number_(1) {}
   Ch Take() {
@@ -312,7 +312,7 @@ void Field::buildRapidJsonDocument(const Field& field, rapidjson::Value& value,
     break;
   }
   default:
-    NOT_REACHED;
+    NOT_REACHED_GCOVR_EXCL_LINE;
   }
 }
 
@@ -557,7 +557,7 @@ bool ObjectHandler::StartObject() {
     state_ = expectKeyOrEndObject;
     return true;
   default:
-    NOT_REACHED;
+    NOT_REACHED_GCOVR_EXCL_LINE;
   }
 }
 
@@ -576,7 +576,7 @@ bool ObjectHandler::EndObject(rapidjson::SizeType) {
     }
     return true;
   default:
-    NOT_REACHED;
+    NOT_REACHED_GCOVR_EXCL_LINE;
   }
 }
 
@@ -587,7 +587,7 @@ bool ObjectHandler::Key(const char* value, rapidjson::SizeType size, bool) {
     state_ = expectValueOrStartObjectArray;
     return true;
   default:
-    NOT_REACHED;
+    NOT_REACHED_GCOVR_EXCL_LINE;
   }
 }
 
@@ -611,7 +611,7 @@ bool ObjectHandler::StartArray() {
     state_ = expectArrayValueOrEndArray;
     return true;
   default:
-    NOT_REACHED;
+    NOT_REACHED_GCOVR_EXCL_LINE;
   }
 }
 
@@ -631,7 +631,7 @@ bool ObjectHandler::EndArray(rapidjson::SizeType) {
 
     return true;
   default:
-    NOT_REACHED;
+    NOT_REACHED_GCOVR_EXCL_LINE;
   }
 }
 
@@ -646,7 +646,7 @@ bool ObjectHandler::Uint(unsigned value) {
 }
 bool ObjectHandler::Int64(int64_t value) { return handleValueEvent(Field::createValue(value)); }
 bool ObjectHandler::Uint64(uint64_t value) {
-  if (value > std::numeric_limits<int64_t>::max()) {
+  if (value > static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
     throw Exception(fmt::format("JSON value from line {} is larger than int64_t (not supported)",
                                 stream_.getLineNumber()));
   }
@@ -661,7 +661,7 @@ bool ObjectHandler::String(const char* value, rapidjson::SizeType size, bool) {
 
 bool ObjectHandler::RawNumber(const char*, rapidjson::SizeType, bool) {
   // Only called if kParseNumbersAsStrings is set as a parse flag, which it is not.
-  NOT_REACHED;
+  NOT_REACHED_GCOVR_EXCL_LINE;
 }
 
 bool ObjectHandler::handleValueEvent(FieldSharedPtr ptr) {
@@ -682,11 +682,11 @@ bool ObjectHandler::handleValueEvent(FieldSharedPtr ptr) {
 
 } // namespace
 
-ObjectSharedPtr Factory::loadFromFile(const std::string& file_path) {
+ObjectSharedPtr Factory::loadFromFile(const std::string& file_path, Api::Api& api) {
   try {
-    const std::string contents = Filesystem::fileReadToEnd(file_path);
-    return StringUtil::endsWith(file_path, ".yaml") ? loadFromYamlString(contents)
-                                                    : loadFromString(contents);
+    const std::string contents = api.fileSystem().fileReadToEnd(file_path);
+    return absl::EndsWith(file_path, ".yaml") ? loadFromYamlString(contents)
+                                              : loadFromString(contents);
   } catch (EnvoyException& e) {
     throw Exception(e.what());
   }
@@ -737,7 +737,7 @@ FieldSharedPtr parseYamlNode(YAML::Node node) {
   case YAML::NodeType::Undefined:
     throw EnvoyException("Undefined YAML value");
   }
-  NOT_REACHED;
+  NOT_REACHED_GCOVR_EXCL_LINE;
 }
 
 } // namespace

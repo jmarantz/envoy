@@ -3,6 +3,8 @@
 #include <string>
 
 #include "envoy/network/address.h"
+#include "envoy/network/filter.h"
+#include "envoy/network/io_handle.h"
 #include "envoy/network/transport_socket.h"
 
 namespace Envoy {
@@ -57,6 +59,13 @@ const std::string getLoopbackAddressString(const Address::IpVersion version);
 const std::string getAnyAddressUrlString(const Address::IpVersion version);
 
 /**
+ * Get an IP any address as a string.
+ * @param version IP address version of any address.
+ * @return std::string any address as a string.
+ */
+const std::string getAnyAddressString(const Address::IpVersion version);
+
+/**
  * Return a string version of enum IpVersion version.
  * @param version IP address version.
  * @return std::string string version of IpVersion.
@@ -85,7 +94,7 @@ Address::InstanceConstSharedPtr getAnyAddress(const Address::IpVersion version,
  * This function tries to create a socket of type IpVersion version and bind to it. If
  * successful this function returns true. If either socket creation or socket
  * bind fail, this function returns false.
- * @param version the IP verson to test.
+ * @param version the IP version to test.
  * @return bool whether IpVersion addresses are "supported".
  */
 bool supportsIpVersion(const Address::IpVersion version);
@@ -98,8 +107,8 @@ bool supportsIpVersion(const Address::IpVersion version);
  * @param type the type of socket to be bound.
  * @returns the address and the fd of the socket bound to that address.
  */
-std::pair<Address::InstanceConstSharedPtr, int> bindFreeLoopbackPort(Address::IpVersion version,
-                                                                     Address::SocketType type);
+std::pair<Address::InstanceConstSharedPtr, Network::IoHandlePtr>
+bindFreeLoopbackPort(Address::IpVersion version, Address::SocketType type);
 
 /**
  * Create a transport socket for testing purposes.
@@ -113,6 +122,43 @@ TransportSocketPtr createRawBufferSocket();
  * listener.
  */
 TransportSocketFactoryPtr createRawBufferSocketFactory();
+
+/**
+ * Implementation of Network::FilterChain with empty filter chain, but pluggable transport socket
+ * factory.
+ */
+class EmptyFilterChain : public FilterChain {
+public:
+  EmptyFilterChain(TransportSocketFactoryPtr&& transport_socket_factory)
+      : transport_socket_factory_(std::move(transport_socket_factory)) {}
+
+  // Network::FilterChain
+  const Network::TransportSocketFactory& transportSocketFactory() const override {
+    return *transport_socket_factory_;
+  }
+
+  const std::vector<FilterFactoryCb>& networkFilterFactories() const override {
+    return empty_network_filter_factory_;
+  }
+
+private:
+  const TransportSocketFactoryPtr transport_socket_factory_;
+  const std::vector<FilterFactoryCb> empty_network_filter_factory_{};
+};
+
+/**
+ * Create an empty filter chain for testing purposes.
+ * @param transport_socket_factory transport socket factory to use when creating transport sockets.
+ * @return const Network::FilterChainSharedPtr filter chain.
+ */
+const Network::FilterChainSharedPtr
+createEmptyFilterChain(TransportSocketFactoryPtr&& transport_socket_factory);
+
+/**
+ * Create an empty filter chain creating raw buffer sockets for testing purposes.
+ * @return const Network::FilterChainSharedPtr filter chain.
+ */
+const Network::FilterChainSharedPtr createEmptyFilterChainWithRawBufferSockets();
 
 } // namespace Test
 } // namespace Network

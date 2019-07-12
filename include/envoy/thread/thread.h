@@ -1,41 +1,79 @@
 #pragma once
 
+#include <functional>
+#include <limits>
+#include <memory>
+#include <string>
+
 #include "envoy/common/pure.h"
+
+#include "common/common/thread_annotations.h"
 
 namespace Envoy {
 namespace Thread {
 
 /**
- * Like the C++11 "basic lockable concept" but a concrete interface vs. a template.
+ * An id for a thread.
  */
-class BasicLockable {
+class ThreadId {
 public:
-  virtual ~BasicLockable() {}
+  ThreadId() : id_(std::numeric_limits<int64_t>::min()) {}
+  explicit ThreadId(int64_t id) : id_(id) {}
 
-  virtual void lock() PURE;
-  virtual bool try_lock() PURE;
-  virtual void unlock() PURE;
-};
-
-/**
- * A lock guard that deals with an optional lock.
- */
-template <class T> class OptionalLockGuard {
-public:
-  OptionalLockGuard(T* lock) : lock_(lock) {
-    if (lock) {
-      lock->lock();
-    }
-  }
-
-  ~OptionalLockGuard() {
-    if (lock_) {
-      lock_->unlock();
-    }
+  std::string debugString() const { return std::to_string(id_); }
+  bool isEmpty() const { return *this == ThreadId(); }
+  friend bool operator==(ThreadId lhs, ThreadId rhs) { return lhs.id_ == rhs.id_; }
+  friend bool operator!=(ThreadId lhs, ThreadId rhs) { return lhs.id_ != rhs.id_; }
+  template <typename H> friend H AbslHashValue(H h, ThreadId id) {
+    return H::combine(std::move(h), id.id_);
   }
 
 private:
-  T* lock_;
+  int64_t id_;
+};
+
+class Thread {
+public:
+  virtual ~Thread() = default;
+
+  /**
+   * Join on thread exit.
+   */
+  virtual void join() PURE;
+};
+
+using ThreadPtr = std::unique_ptr<Thread>;
+
+/**
+ * Interface providing a mechanism for creating threads.
+ */
+class ThreadFactory {
+public:
+  virtual ~ThreadFactory() = default;
+
+  /**
+   * Create a thread.
+   * @param thread_routine supplies the function to invoke in the thread.
+   */
+  virtual ThreadPtr createThread(std::function<void()> thread_routine) PURE;
+
+  /**
+   * Return the current system thread ID
+   */
+  virtual ThreadId currentThreadId() PURE;
+};
+
+/**
+ * Like the C++11 "basic lockable concept" but a pure virtual interface vs. a template, and
+ * with thread annotations.
+ */
+class LOCKABLE BasicLockable {
+public:
+  virtual ~BasicLockable() = default;
+
+  virtual void lock() EXCLUSIVE_LOCK_FUNCTION() PURE;
+  virtual bool tryLock() EXCLUSIVE_TRYLOCK_FUNCTION(true) PURE;
+  virtual void unlock() UNLOCK_FUNCTION() PURE;
 };
 
 } // namespace Thread

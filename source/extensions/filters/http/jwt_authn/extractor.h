@@ -15,14 +15,16 @@ namespace HttpFilters {
 namespace JwtAuthn {
 
 /**
- * JwtLocation stores following info:
- * *  extracted JWT string,
- * *  the location where the JWT is extracted from,
- * *  list of issuers specified the location.
+ * JwtLocation stores following token information:
+ *
+ * * extracted token string,
+ * * the location where the JWT is extracted from,
+ * * list of issuers specified the location.
+ *
  */
 class JwtLocation {
 public:
-  virtual ~JwtLocation() {}
+  virtual ~JwtLocation() = default;
 
   // Get the token string
   virtual const std::string& token() const PURE;
@@ -34,23 +36,17 @@ public:
   virtual void removeJwt(Http::HeaderMap& headers) const PURE;
 };
 
-typedef std::unique_ptr<const JwtLocation> JwtLocationConstPtr;
+using JwtLocationConstPtr = std::unique_ptr<const JwtLocation>;
+
+class Extractor;
+using ExtractorConstPtr = std::unique_ptr<const Extractor>;
 
 /**
  * Extracts JWT from locations specified in the config.
  *
- * The rules of JWT extraction:
- * * Each issuer can specify its locations at headers and query parameters.
- *
- * * If an issuer doesn't specify any locations, following default locations are
- * used:
- *      header:  Authorization: Bear <token>
- *      query parameter: ?access_token=<token>
- *
-
  * Usage example:
  *
- *  auto extractor = createExtractor(config);
+ *  auto extractor = Extractor::create(config);
  *  auto tokens = extractor->extract(headers);
  *  for (token : tokens) {
  *     Jwt jwt;
@@ -63,28 +59,45 @@ typedef std::unique_ptr<const JwtLocation> JwtLocationConstPtr;
  *        token->removeJwt(headers);
  *     }
  *  }
+ *
  */
 class Extractor {
 public:
-  virtual ~Extractor() {}
+  virtual ~Extractor() = default;
 
   /**
-   * Extract all JWT tokens from the headers
+   * Extract all JWT tokens from the headers. If set of header_keys or param_keys
+   * is not empty only those in the matching locations will be returned.
+   *
    * @param headers is the HTTP request headers.
    * @return list of extracted Jwt location info.
    */
   virtual std::vector<JwtLocationConstPtr> extract(const Http::HeaderMap& headers) const PURE;
+
+  /**
+   * Remove headers that configured to send JWT payloads.
+   *
+   * @param headers is the HTTP request headers.
+   */
+  virtual void sanitizePayloadHeaders(Http::HeaderMap& headers) const PURE;
+
+  /**
+   * Create an instance of Extractor for a given config.
+   * @param the JwtAuthentication config.
+   * @return the extractor object.
+   */
+  static ExtractorConstPtr
+  create(const ::envoy::config::filter::http::jwt_authn::v2alpha::JwtAuthentication& config);
+
+  /**
+   * Create an instance of Extractor for a given config.
+   * @param from_headers header location config.
+   * @param from_params query param location config.
+   * @return the extractor object.
+   */
+  static ExtractorConstPtr
+  create(const ::envoy::config::filter::http::jwt_authn::v2alpha::JwtProvider& provider);
 };
-
-typedef std::unique_ptr<const Extractor> ExtractorConstPtr;
-
-/**
- * Create an instance of Extractor for a given config.
- * @param the JwtAuthentication config.
- * @return the extractor object.
- */
-ExtractorConstPtr
-createExtractor(const ::envoy::config::filter::http::jwt_authn::v2alpha::JwtAuthentication& config);
 
 } // namespace JwtAuthn
 } // namespace HttpFilters

@@ -1,15 +1,23 @@
 syntax = "proto3";
 
 package envoy.api.v2.core;
+
+option java_outer_classname = "BaseProto";
+option java_multiple_files = true;
+option java_package = "io.envoyproxy.envoy.api.v2.core";
 option go_package = "core";
 
+import "google/protobuf/any.proto";
 import "google/protobuf/struct.proto";
 import "google/protobuf/wrappers.proto";
 
 import "validate/validate.proto";
 import "gogoproto/gogo.proto";
 
+import "envoy/type/percent.proto";
+
 option (gogoproto.equal_all) = true;
+option (gogoproto.stable_marshaler_all) = true;
 
 // [#protodoc-title: Common types]
 
@@ -20,7 +28,7 @@ message Locality {
 
   // Defines the local service zone where Envoy is running. Though optional, it
   // should be set if discovery service routing is used and the discovery
-  // service exposes :ref:`zone data <config_cluster_manager_sds_api_host_az>`,
+  // service exposes :ref:`zone data <envoy_api_field_endpoint.LocalityLbEndpoints.locality>`,
   // either in this message or via :option:`--service-zone`. The meaning of zone
   // is context dependent, e.g. `Availability Zone (AZ)
   // <https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-regions-availability-zones.html>`_
@@ -49,9 +57,10 @@ message Node {
   // Defines the local service cluster name where Envoy is running. Though
   // optional, it should be set if any of the following features are used:
   // :ref:`statsd <arch_overview_statistics>`, :ref:`health check cluster
-  // verification <config_cluster_manager_cluster_hc_service_name>`,
-  // :ref:`runtime override directory <config_runtime_override_subdirectory>`,
-  // :ref:`user agent addition <config_http_conn_man_add_user_agent>`,
+  // verification <envoy_api_field_core.HealthCheck.HttpHealthCheck.service_name>`,
+  // :ref:`runtime override directory <envoy_api_msg_config.bootstrap.v2.Runtime>`,
+  // :ref:`user agent addition
+  // <envoy_api_field_config.filter.network.http_connection_manager.v2.HttpConnectionManager.add_user_agent>`,
   // :ref:`HTTP global rate limiting <config_http_filters_rate_limit>`,
   // :ref:`CDS <config_cluster_manager_cds>`, and :ref:`HTTP tracing
   // <arch_overview_tracing>`, either in this message or via
@@ -72,14 +81,17 @@ message Node {
 }
 
 // Metadata provides additional inputs to filters based on matched listeners,
-// filter chains, routes and endpoints. It is structured as a map from filter
-// name (in reverse DNS format) to metadata specific to the filter. Metadata
+// filter chains, routes and endpoints. It is structured as a map, usually from
+// filter name (in reverse DNS format) to metadata specific to the filter. Metadata
 // key-values for a filter are merged as connection and request handling occurs,
 // with later values for the same key overriding earlier values.
 //
 // An example use of metadata is providing additional values to
 // http_connection_manager in the envoy.http_connection_manager.access_log
 // namespace.
+//
+// Another example use of metadata is to per service config info in cluster metadata, which may get
+// consumed by multiple filters.
 //
 // For load balancing, Metadata provides a means to subset cluster endpoints.
 // Endpoints have a Metadata object associated and routes contain a Metadata
@@ -128,29 +140,35 @@ enum RequestMethod {
   CONNECT = 6;
   OPTIONS = 7;
   TRACE = 8;
+  PATCH = 9;
 }
 
 // Header name/value pair.
 message HeaderValue {
   // Header name.
-  string key = 1;
+  string key = 1 [(validate.rules).string = {min_bytes: 1, max_bytes: 16384}];
 
   // Header value.
   //
   // The same :ref:`format specifier <config_access_log_format>` as used for
   // :ref:`HTTP access logging <config_access_log>` applies here, however
   // unknown header values are replaced with the empty string instead of `-`.
-  string value = 2;
+  string value = 2 [(validate.rules).string.max_bytes = 16384];
 }
 
 // Header name/value pair plus option to control append behavior.
 message HeaderValueOption {
   // Header name/value pair that this option applies to.
-  HeaderValue header = 1;
+  HeaderValue header = 1 [(validate.rules).message.required = true];
 
   // Should the value be appended? If true (default), the value is appended to
   // existing values.
   google.protobuf.BoolValue append = 2;
+}
+
+// Wrapper for a set of headers.
+message HeaderMap {
+  repeated HeaderValue headers = 1;
 }
 
 // Data source consisting of either a file or an inline value.
@@ -170,7 +188,7 @@ message DataSource {
 }
 
 // Configuration for transport socket in :ref:`listeners <config_listeners>` and
-// :ref:`clusters <config_cluster_manager_cluster>`. If the configuration is
+// :ref:`clusters <envoy_api_msg_Cluster>`. If the configuration is
 // empty, a default transport socket implementation and configuration will be
 // chosen based on the platform and existence of tls_context.
 message TransportSocket {
@@ -180,5 +198,60 @@ message TransportSocket {
 
   // Implementation specific configuration which depends on the implementation being instantiated.
   // See the supported transport socket implementations for further documentation.
-  google.protobuf.Struct config = 2;
+  oneof config_type {
+    google.protobuf.Struct config = 2;
+
+    google.protobuf.Any typed_config = 3;
+  }
+}
+
+// Generic socket option message. This would be used to set socket options that
+// might not exist in upstream kernels or precompiled Envoy binaries.
+message SocketOption {
+  // An optional name to give this socket option for debugging, etc.
+  // Uniqueness is not required and no special meaning is assumed.
+  string description = 1;
+  // Corresponding to the level value passed to setsockopt, such as IPPROTO_TCP
+  int64 level = 2;
+  // The numeric name as passed to setsockopt
+  int64 name = 3;
+  oneof value {
+    option (validate.required) = true;
+
+    // Because many sockopts take an int value.
+    int64 int_value = 4;
+    // Otherwise it's a byte buffer.
+    bytes buf_value = 5;
+  }
+  enum SocketState {
+    option (gogoproto.goproto_enum_prefix) = false;
+    // Socket options are applied after socket creation but before binding the socket to a port
+    STATE_PREBIND = 0;
+    // Socket options are applied after binding the socket to a port but before calling listen()
+    STATE_BOUND = 1;
+    // Socket options are applied after calling listen()
+    STATE_LISTENING = 2;
+  }
+  // The state in which the option will be applied. When used in BindConfig
+  // STATE_PREBIND is currently the only valid value.
+  SocketState state = 6
+      [(validate.rules).message.required = true, (validate.rules).enum.defined_only = true];
+}
+
+// Runtime derived FractionalPercent with defaults for when the numerator or denominator is not
+// specified via a runtime key.
+message RuntimeFractionalPercent {
+  // Default value if the runtime value's for the numerator/denominator keys are not available.
+  envoy.type.FractionalPercent default_value = 1 [(validate.rules).message.required = true];
+
+  // Runtime key for a YAML representation of a FractionalPercent.
+  string runtime_key = 2;
+}
+
+// Identifies a specific ControlPlane instance that Envoy is connected to.
+message ControlPlane {
+  // An opaque control plane identifier that uniquely identifies an instance
+  // of control plane. This can be used to identify which control plane instance,
+  // the Envoy is connected to.
+  string identifier = 1;
 }

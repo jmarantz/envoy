@@ -1,6 +1,7 @@
 #pragma once
 
 #include "envoy/config/filter/http/transcoder/v2/transcoder.pb.h"
+#include "envoy/config/filter/http/transcoder/v2/transcoder.pb.validate.h"
 
 #include "extensions/filters/http/common/factory_base.h"
 #include "extensions/filters/http/well_known_names.h"
@@ -16,7 +17,7 @@ namespace GrpcJsonTranscoder {
 class GrpcJsonTranscoderFilterConfig
     : public Common::FactoryBase<envoy::config::filter::http::transcoder::v2::GrpcJsonTranscoder> {
 public:
-  GrpcJsonTranscoderFilterConfig() : FactoryBase(HttpFilterNames::get().GRPC_JSON_TRANSCODER) {}
+  GrpcJsonTranscoderFilterConfig() : FactoryBase(HttpFilterNames::get().GrpcJsonTranscoder) {}
 
   Http::FilterFactoryCb
   createFilterFactory(const Json::Object& json_config, const std::string& stats_prefix,

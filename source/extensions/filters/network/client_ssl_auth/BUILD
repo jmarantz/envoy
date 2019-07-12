@@ -1,4 +1,5 @@
 licenses(["notice"])  # Apache 2
+
 # Client SSL authorization L4 network filter
 # Public docs: docs/root/configuration/network_filters/client_ssl_auth_filter.rst
 
@@ -42,8 +43,8 @@ envoy_cc_library(
     deps = [
         ":client_ssl_auth",
         "//include/envoy/registry",
-        "//include/envoy/server:filter_config_interface",
         "//source/common/config:filter_json_lib",
         "//source/extensions/filters/network:well_known_names",
+        "//source/extensions/filters/network/common:factory_base_lib",
     ],
 )

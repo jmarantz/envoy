@@ -20,6 +20,7 @@ using testing::Return;
 
 namespace Envoy {
 namespace Upstream {
+namespace {
 
 static HostSharedPtr newTestHost(Upstream::ClusterInfoConstSharedPtr cluster,
                                  const std::string& url, uint32_t weight = 1,
@@ -29,7 +30,65 @@ static HostSharedPtr newTestHost(Upstream::ClusterInfoConstSharedPtr cluster,
   return HostSharedPtr{
       new HostImpl(cluster, "", Network::Utility::resolveUrl(url),
                    envoy::api::v2::core::Metadata::default_instance(), weight, locality,
-                   envoy::api::v2::endpoint::Endpoint::HealthCheckConfig::default_instance())};
+                   envoy::api::v2::endpoint::Endpoint::HealthCheckConfig::default_instance(), 0,
+                   envoy::api::v2::core::HealthStatus::UNKNOWN)};
+}
+
+// Simulate weighted LR load balancer.
+TEST(DISABLED_LeastRequestLoadBalancerWeightTest, Weight) {
+  const uint64_t num_hosts = 4;
+  const uint64_t weighted_subset_percent = 50;
+  const uint64_t weight = 2;          // weighted_subset_percent of hosts will have this weight.
+  const uint64_t active_requests = 3; // weighted_subset_percent will have this active requests.
+
+  PrioritySetImpl priority_set;
+  std::shared_ptr<MockClusterInfo> info_{new NiceMock<MockClusterInfo>()};
+  HostVector hosts;
+  for (uint64_t i = 0; i < num_hosts; i++) {
+    const bool should_weight = i < num_hosts * (weighted_subset_percent / 100.0);
+    hosts.push_back(makeTestHost(info_, fmt::format("tcp://10.0.{}.{}:6379", i / 256, i % 256),
+                                 should_weight ? weight : 1));
+    if (should_weight) {
+      hosts.back()->stats().rq_active_.set(active_requests);
+    }
+  }
+  HostVectorConstSharedPtr updated_hosts{new HostVector(hosts)};
+  HostsPerLocalitySharedPtr updated_locality_hosts{new HostsPerLocalityImpl(hosts)};
+  priority_set.updateHosts(
+      0,
+      updateHostsParams(updated_hosts, updated_locality_hosts,
+                        std::make_shared<const HealthyHostVector>(*updated_hosts),
+                        updated_locality_hosts),
+      {}, hosts, {}, absl::nullopt);
+
+  Stats::IsolatedStoreImpl stats_store;
+  ClusterStats stats{ClusterInfoImpl::generateStats(stats_store)};
+  stats.max_host_weight_.set(weight);
+  NiceMock<Runtime::MockLoader> runtime;
+  Runtime::RandomGeneratorImpl random;
+  envoy::api::v2::Cluster::LeastRequestLbConfig least_request_lb_config;
+  envoy::api::v2::Cluster::CommonLbConfig common_config;
+  LeastRequestLoadBalancer lb_{
+      priority_set, nullptr, stats, runtime, random, common_config, least_request_lb_config};
+
+  std::unordered_map<HostConstSharedPtr, uint64_t> host_hits;
+  const uint64_t total_requests = 100;
+  for (uint64_t i = 0; i < total_requests; i++) {
+    host_hits[lb_.chooseHost(nullptr)]++;
+  }
+
+  std::unordered_map<uint64_t, double> weight_to_percent;
+  for (const auto& host : host_hits) {
+    std::cout << fmt::format("url:{}, weight:{}, hits:{}, percent_of_total:{}\n",
+                             host.first->address()->asString(), host.first->weight(), host.second,
+                             (static_cast<double>(host.second) / total_requests) * 100);
+    weight_to_percent[host.first->weight()] +=
+        (static_cast<double>(host.second) / total_requests) * 100;
+  }
+
+  for (const auto& weight : weight_to_percent) {
+    std::cout << fmt::format("weight:{}, percent:{}\n", weight.first, weight.second);
+  }
 }
 
 /**
@@ -101,9 +160,12 @@ public:
         per_zone_local.push_back(local_per_zone_hosts->get()[zone]);
       }
       auto per_zone_local_shared = makeHostsPerLocality(std::move(per_zone_local));
-      local_priority_set_->getOrCreateHostSet(0).updateHosts(
-          originating_hosts, originating_hosts, per_zone_local_shared, per_zone_local_shared, {},
-          empty_vector_, empty_vector_);
+      local_priority_set_->updateHosts(
+          0,
+          updateHostsParams(originating_hosts, per_zone_local_shared,
+                            std::make_shared<const HealthyHostVector>(*originating_hosts),
+                            per_zone_local_shared),
+          {}, empty_vector_, empty_vector_, absl::nullopt);
 
       HostConstSharedPtr selected = lb.chooseHost(nullptr);
       hits[selected->address()->asString()]++;
@@ -203,5 +265,6 @@ TEST_F(DISABLED_SimulationTest, unequalZoneDistribution6) {
   run({3U, 2U, 5U}, {3U, 4U, 5U}, {3U, 4U, 5U});
 }
 
+} // namespace
 } // namespace Upstream
 } // namespace Envoy

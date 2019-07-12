@@ -13,15 +13,10 @@ namespace Example {
 
 std::shared_ptr<grpc::ChannelCredentials>
 AccessTokenExampleGrpcCredentialsFactory::getChannelCredentials(
-    const envoy::api::v2::core::GrpcService& grpc_service_config) {
+    const envoy::api::v2::core::GrpcService& grpc_service_config, Api::Api& api) {
   const auto& google_grpc = grpc_service_config.google_grpc();
   std::shared_ptr<grpc::ChannelCredentials> creds =
-      grpc::SslCredentials(grpc::SslCredentialsOptions());
-  if (google_grpc.has_channel_credentials() &&
-      google_grpc.channel_credentials().has_ssl_credentials()) {
-    creds = grpc::SslCredentials(
-        Grpc::buildSslOptionsFromConfig(google_grpc.channel_credentials().ssl_credentials()));
-  }
+      Grpc::CredsUtility::defaultSslChannelCredentials(grpc_service_config, api);
   std::shared_ptr<grpc::CallCredentials> call_creds = nullptr;
   for (const auto& credential : google_grpc.call_credentials()) {
     switch (credential.credential_specifier_case()) {
@@ -62,9 +57,7 @@ StaticHeaderAuthenticator::GetMetadata(grpc::string_ref, grpc::string_ref, const
 /**
  * Static registration for the static header Google gRPC credentials factory. @see RegisterFactory.
  */
-static Registry::RegisterFactory<AccessTokenExampleGrpcCredentialsFactory,
-                                 Grpc::GoogleGrpcCredentialsFactory>
-    access_token_google_grpc_credentials_registered_;
+REGISTER_FACTORY(AccessTokenExampleGrpcCredentialsFactory, Grpc::GoogleGrpcCredentialsFactory);
 
 } // namespace Example
 } // namespace GrpcCredentials

@@ -1,7 +1,7 @@
 #include "extensions/filters/http/ip_tagging/ip_tagging_filter.h"
 
+#include "common/http/header_map_impl.h"
 #include "common/http/headers.h"
-#include "common/http/utility.h"
 
 #include "absl/strings/str_join.h"
 
@@ -28,11 +28,11 @@ Http::FilterHeadersStatus IpTaggingFilter::decodeHeaders(Http::HeaderMap& header
   }
 
   std::vector<std::string> tags =
-      config_->trie().getTags(callbacks_->requestInfo().downstreamRemoteAddress());
+      config_->trie().getData(callbacks_->streamInfo().downstreamRemoteAddress());
 
   if (!tags.empty()) {
     const std::string tags_join = absl::StrJoin(tags, ",");
-    Http::Utility::appendToHeader(headers.insertEnvoyIpTags().value(), tags_join);
+    Http::HeaderMapImpl::appendToHeader(headers.insertEnvoyIpTags().value(), tags_join);
 
     // We must clear the route cache or else we can't match on x-envoy-ip-tags.
     // TODO(rgs): this should either be configurable, because it's expensive, or optimized.

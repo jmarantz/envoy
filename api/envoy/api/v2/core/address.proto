@@ -2,6 +2,12 @@ syntax = "proto3";
 
 package envoy.api.v2.core;
 
+option java_outer_classname = "AddressProto";
+option java_multiple_files = true;
+option java_package = "io.envoyproxy.envoy.api.v2.core";
+
+import "envoy/api/v2/core/base.proto";
+
 import "google/protobuf/wrappers.proto";
 
 import "validate/validate.proto";
@@ -28,14 +34,16 @@ message SocketAddress {
   }
   Protocol protocol = 1 [(validate.rules).enum.defined_only = true];
   // The address for this socket. :ref:`Listeners <config_listeners>` will bind
-  // to the address or outbound connections will be made. An empty address is
-  // not allowed, specify ``0.0.0.0`` or ``::`` to bind any. It's still possible to
-  // distinguish on an address via the prefix/suffix matching in
-  // FilterChainMatch after connection. For :ref:`clusters
-  // <config_cluster_manager_cluster>`, an address may be either an IP or
-  // hostname to be resolved via DNS. If it is a hostname, :ref:`resolver_name
-  // <envoy_api_field_core.SocketAddress.resolver_name>` should be set unless default
-  // (i.e. DNS) resolution is expected.
+  // to the address. An empty address is not allowed. Specify ``0.0.0.0`` or ``::``
+  // to bind to any address. [#comment:TODO(zuercher) reinstate when implemented:
+  // It is possible to distinguish a Listener address via the prefix/suffix matching
+  // in :ref:`FilterChainMatch <envoy_api_msg_listener.FilterChainMatch>`.] When used
+  // within an upstream :ref:`BindConfig <envoy_api_msg_core.BindConfig>`, the address
+  // controls the source address of outbound connections. For :ref:`clusters
+  // <envoy_api_msg_Cluster>`, the cluster type determines whether the
+  // address must be an IP (*STATIC* or *EDS* clusters) or a hostname resolved by DNS
+  // (*STRICT_DNS* or *LOGICAL_DNS* clusters). Address resolution can be customized
+  // via :ref:`resolver_name <envoy_api_field_core.SocketAddress.resolver_name>`.
   string address = 2 [(validate.rules).string.min_bytes = 1];
   oneof port_specifier {
     option (validate.required) = true;
@@ -45,13 +53,14 @@ message SocketAddress {
     // named resolver is capable of named port resolution.
     string named_port = 4;
   }
-  // The name of the resolver. This must have been registered with Envoy. If this is
-  // empty, a context dependent default applies. If address is a hostname this
-  // should be set for resolution other than DNS. If the address is a concrete
-  // IP address, no resolution will occur.
+  // The name of the custom resolver. This must have been registered with Envoy. If
+  // this is empty, a context dependent default applies. If the address is a concrete
+  // IP address, no resolution will occur. If address is a hostname this
+  // should be set for resolution other than DNS. Specifying a custom resolver with
+  // *STRICT_DNS* or *LOGICAL_DNS* will generate an error at runtime.
   string resolver_name = 5;
 
-  // When binding to an IPv6 address above, this enables `IPv4 compatibity
+  // When binding to an IPv6 address above, this enables `IPv4 compatibility
   // <https://tools.ietf.org/html/rfc3493#page-11>`_. Binding to ``::`` will
   // allow both IPv4 and IPv6 connections, with peer IPv4 addresses mapped into
   // IPv6 space as ``::FFFF:<IPv4-address>``.
@@ -85,6 +94,10 @@ message BindConfig {
   // flag is not set (default), the socket is not modified, i.e. the option is
   // neither enabled nor disabled.
   google.protobuf.BoolValue freebind = 2;
+
+  // Additional socket options that may not be present in Envoy source code or
+  // precompiled binaries.
+  repeated SocketOption socket_options = 3;
 }
 
 // Addresses specify either a logical or physical address and port, which are

@@ -1,8 +1,8 @@
-load("//bazel:api_build_system.bzl", "api_proto_library", "api_go_proto_library", "api_go_grpc_library")
+load("@envoy_api//bazel:api_build_system.bzl", "api_go_grpc_library", "api_go_proto_library", "api_proto_library_internal")
 
 licenses(["notice"])  # Apache 2
 
-api_proto_library(
+api_proto_library_internal(
     name = "trace",
     srcs = ["trace.proto"],
     visibility = [
@@ -10,6 +10,7 @@ api_proto_library(
     ],
     deps = [
         "//envoy/api/v2/core:grpc_service",
+        "@opencensus_proto//opencensus/proto/trace/v1:trace_config_proto",
     ],
 )
 
@@ -18,5 +19,6 @@ api_go_proto_library(
     proto = ":trace",
     deps = [
         "//envoy/api/v2/core:grpc_service_go_proto",
+        "@opencensus_proto//opencensus/proto/trace/v1:trace_and_config_proto_go",
     ],
 )

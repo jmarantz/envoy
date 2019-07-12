@@ -9,11 +9,12 @@
 #include "envoy/network/connection.h"
 #include "envoy/network/filter.h"
 #include "envoy/runtime/runtime.h"
+#include "envoy/stats/scope.h"
 #include "envoy/stats/stats_macros.h"
 #include "envoy/upstream/cluster_manager.h"
 
 #include "extensions/filters/common/ext_authz/ext_authz.h"
-#include "extensions/filters/common/ext_authz/ext_authz_impl.h"
+#include "extensions/filters/common/ext_authz/ext_authz_grpc_impl.h"
 
 namespace Envoy {
 namespace Extensions {
@@ -23,16 +24,14 @@ namespace ExtAuthz {
 /**
  * All tcp external authorization stats. @see stats_macros.h
  */
-// clang-format off
-#define ALL_TCP_EXT_AUTHZ_STATS(COUNTER, GAUGE)         \
-  COUNTER(total)                                        \
-  COUNTER(error)                                        \
-  COUNTER(denied)                                       \
-  COUNTER(failure_mode_allowed)                         \
-  COUNTER(ok)                                           \
-  COUNTER(cx_closed)                                    \
-  GAUGE  (active)
-// clang-format on
+#define ALL_TCP_EXT_AUTHZ_STATS(COUNTER, GAUGE)                                                    \
+  COUNTER(cx_closed)                                                                               \
+  COUNTER(denied)                                                                                  \
+  COUNTER(error)                                                                                   \
+  COUNTER(failure_mode_allowed)                                                                    \
+  COUNTER(ok)                                                                                      \
+  COUNTER(total)                                                                                   \
+  GAUGE(active, Accumulate)
 
 /**
  * Struct definition for all external authorization stats. @see stats_macros.h
@@ -60,7 +59,7 @@ private:
   bool failure_mode_allow_;
 };
 
-typedef std::shared_ptr<Config> ConfigSharedPtr;
+using ConfigSharedPtr = std::shared_ptr<Config>;
 
 /**
  * ExtAuthz filter instance. This filter will call the Authorization service with the given
@@ -90,20 +89,29 @@ public:
   void onBelowWriteBufferLowWatermark() override {}
 
   // ExtAuthz::RequestCallbacks
-  void onComplete(Filters::Common::ExtAuthz::CheckStatus status) override;
+  void onComplete(Filters::Common::ExtAuthz::ResponsePtr&&) override;
 
 private:
+  // State of this filter's communication with the external authorization service.
+  // The filter has either not started calling the external service, in the middle of calling
+  // it or has completed.
   enum class Status { NotStarted, Calling, Complete };
+  // FilterReturn is used to capture what the return code should be to the filter chain.
+  // if this filter is either in the middle of calling the external service or the result is denied
+  // then the filter chain should stop. Otherwise the filter chain can continue to the next filter.
+  enum class FilterReturn { Stop, Continue };
   void callCheck();
 
   ConfigSharedPtr config_;
   Filters::Common::ExtAuthz::ClientPtr client_;
   Network::ReadFilterCallbacks* filter_callbacks_{};
   Status status_{Status::NotStarted};
+  FilterReturn filter_return_{FilterReturn::Stop};
+  // Used to identify if the callback to onComplete() is synchronous (on the stack) or asynchronous.
   bool calling_check_{};
-  envoy::service::auth::v2alpha::CheckRequest check_request_{};
+  envoy::service::auth::v2::CheckRequest check_request_{};
 };
-}
+} // namespace ExtAuthz
 } // namespace NetworkFilters
 } // namespace Extensions
 } // namespace Envoy

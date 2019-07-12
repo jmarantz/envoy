@@ -6,3 +6,5 @@ HTTP filters
   :maxdepth: 2
 
   */v2/*
+  */v2alpha/*
+  */v2alpha1/*

@@ -1,4 +1,5 @@
 licenses(["notice"])  # Apache 2
+
 # Trace driver for dynamically loadable C++ OpenTracing drivers (http://opentracing.io/).
 
 load(
@@ -30,6 +31,6 @@ envoy_cc_library(
     deps = [
         ":dynamic_opentracing_driver_lib",
         "//source/extensions/tracers:well_known_names",
-        "//source/server:configuration_lib",
+        "//source/extensions/tracers/common:factory_base_lib",
     ],
 )

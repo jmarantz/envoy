@@ -10,6 +10,7 @@ compromising the response time.
 Configuration
 -------------
 * :ref:`v2 API reference <envoy_api_msg_config.filter.http.gzip.v2.Gzip>`
+* This filter should be configured with the name *envoy.gzip*.
 
 .. attention::
 
@@ -19,6 +20,15 @@ Configuration
   eight does not work as expected. Therefore any number below that will be
   automatically set to 9. This issue might be solved in future releases of
   the library.
+
+Runtime
+-------
+
+The Gzip filter supports the following runtime settings:
+
+gzip.filter_enabled
+    The % of requests for which the filter is enabled. Default is 100.
+
 
 How it works
 ------------
@@ -30,9 +40,14 @@ response and request allow.
 By *default* compression will be *skipped* when:
 
 - A request does NOT contain *accept-encoding* header.
-- A request includes *accept-encoding* header, but it does not contain "gzip".
+- A request includes *accept-encoding* header, but it does not contain "gzip" or "\*".
+- A request includes *accept-encoding* with "gzip" or "\*" with the weight "q=0". Note
+  that the "gzip" will have a higher weight then "\*". For example, if *accept-encoding*
+  is "gzip;q=0,\*;q=1", the filter will not compress. But if the header is set to
+  "\*;q=0,gzip;q=1", the filter will compress.
+- A request whose *accept-encoding* header includes "identity".
 - A response contains a *content-encoding* header.
-- A Response contains a *cache-control* header whose value includes "no-transform".
+- A response contains a *cache-control* header whose value includes "no-transform".
 - A response contains a *transfer-encoding* header whose value includes "gzip".
 - A response does not contain a *content-type* value that matches one of the selected
   mime-types, which default to *application/javascript*, *application/json*,
@@ -41,11 +56,34 @@ By *default* compression will be *skipped* when:
 - Neither *content-length* nor *transfer-encoding* headers are present in
   the response.
 - Response size is smaller than 30 bytes (only applicable when *transfer-encoding*
-  is not chuncked).
+  is not chunked).
 
 When compression is *applied*:
 
 - The *content-length* is removed from response headers.
-- Response headers contain "*transfer-encoding: chunked*" and
-  "*content-encoding: gzip*".
+- Response headers contain "*transfer-encoding: chunked*" and do not contain
+  "*content-encoding*" header.
 - The "*vary: accept-encoding*" header is inserted on every response.
+
+.. _gzip-statistics:
+
+Statistics
+----------
+
+Every configured Gzip filter has statistics rooted at <stat_prefix>.gzip.* with the following:
+
+.. csv-table::
+  :header: Name, Type, Description
+  :widths: 1, 1, 2
+
+  compressed, Counter, Number of requests compressed.
+  not_compressed, Counter, Number of requests not compressed.
+  no_accept_header, Counter, Number of requests with no accept header sent.
+  header_identity, Counter, Number of requests sent with "identity" set as the *accept-encoding*.
+  header_gzip, Counter, Number of requests sent with "gzip" set as the *accept-encoding*.
+  header_wildcard, Counter, Number of requests sent with "\*" set as the *accept-encoding*.
+  header_not_valid, Counter, Number of requests sent with a not valid *accept-encoding* header (aka "q=0" or an unsupported encoding type).
+  total_uncompressed_bytes, Counter, The total uncompressed bytes of all the requests that were marked for compression.
+  total_compressed_bytes, Counter, The total compressed bytes of all the requests that were marked for compression.
+  content_length_too_small, Counter, Number of requests that accepted gzip encoding but did not compress because the payload was too small.
+  not_compressed_etag, Counter, Number of requests that were not compressed due to the etag header. *disable_on_etag_header* must be turned on for this to happen.

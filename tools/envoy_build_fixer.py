@@ -2,26 +2,36 @@
 
 # Enforce license headers on Envoy BUILD files (maybe more later?)
 
+from __future__ import print_function
+
 import sys
 
 LICENSE_STRING = 'licenses(["notice"])  # Apache 2\n'
-ENVOY_PACKAGE_STRING = (
-    'load("//bazel:envoy_build_system.bzl", "envoy_package")\n'
-    '\n'
-    'envoy_package()\n')
+ENVOY_PACKAGE_STRING = ('load("//bazel:envoy_build_system.bzl", "envoy_package")\n'
+                        '\n'
+                        'envoy_package()\n')
 
 
 def FixBuild(path):
   with open(path, 'r') as f:
     outlines = [LICENSE_STRING]
+    first = True
     in_load = False
     seen_ebs = False
     seen_epkg = False
     for line in f:
-      if line.startswith('package(') and not path.endswith(
-          'bazel/BUILD') and not path.endswith(
-          'ci/prebuilt/BUILD') and not path.endswith(
-          'bazel/osx/BUILD') and not path.endswith('bazel/osx/crosstool/BUILD'):
+      if line.startswith('licenses'):
+        continue
+      if first:
+        if line != '\n':
+          outlines.append('\n')
+        first = False
+      if path.startswith('./bazel/external/'):
+        outlines.append(line)
+        continue
+      if line.startswith('package(') and not path.endswith('bazel/BUILD') and not path.endswith(
+          'ci/prebuilt/BUILD') and not path.endswith('bazel/osx/BUILD') and not path.endswith(
+              'bazel/osx/crosstool/BUILD'):
         continue
       if in_load == False and line.startswith('load('):
         in_load = True
@@ -41,8 +51,7 @@ def FixBuild(path):
             outlines.append(line)
             outlines.append(ENVOY_PACKAGE_STRING)
             continue
-      if not line.startswith('licenses'):
-        outlines.append(line)
+      outlines.append(line)
 
   return ''.join(outlines)
 
@@ -56,5 +65,5 @@ if __name__ == '__main__':
     with open(sys.argv[2], 'w') as f:
       f.write(reorderd_source)
     sys.exit(0)
-  print 'Usage: %s <source file path> [<destination file path>]' % sys.argv[0]
+  print('Usage: %s <source file path> [<destination file path>]' % sys.argv[0])
   sys.exit(1)

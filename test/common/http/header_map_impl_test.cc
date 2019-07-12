@@ -1,3 +1,4 @@
+#include <memory>
 #include <string>
 
 #include "common/http/header_map_impl.h"
@@ -7,6 +8,8 @@
 
 #include "gtest/gtest.h"
 
+using ::testing::InSequence;
+
 namespace Envoy {
 namespace Http {
 
@@ -15,28 +18,37 @@ TEST(HeaderStringTest, All) {
   {
     LowerCaseString static_string("hello");
     HeaderString string(static_string);
-    EXPECT_STREQ("hello", string.c_str());
-    EXPECT_EQ(static_string.get().c_str(), string.c_str());
+    EXPECT_EQ("hello", string.getStringView());
+    EXPECT_EQ(static_string.get(), string.getStringView());
     EXPECT_EQ(5U, string.size());
+  }
+
+  // Static LowerCaseString operators
+  {
+    LowerCaseString banana("banana");
+    LowerCaseString lemon("lemon");
+    EXPECT_TRUE(banana < lemon);
+    EXPECT_TRUE(banana != lemon);
+    EXPECT_TRUE(banana == banana);
   }
 
   // Static std::string constructor
   {
     std::string static_string("HELLO");
     HeaderString string(static_string);
-    EXPECT_STREQ("HELLO", string.c_str());
-    EXPECT_EQ(static_string.c_str(), string.c_str());
+    EXPECT_EQ("HELLO", string.getStringView());
+    EXPECT_EQ(static_string, string.getStringView());
     EXPECT_EQ(5U, string.size());
   }
 
-  // Static move contructor
+  // Static move constructor
   {
     std::string static_string("HELLO");
     HeaderString string1(static_string);
     HeaderString string2(std::move(string1));
-    EXPECT_STREQ("HELLO", string2.c_str());
-    EXPECT_EQ(static_string.c_str(), string1.c_str());
-    EXPECT_EQ(static_string.c_str(), string2.c_str());
+    EXPECT_EQ("HELLO", string2.getStringView());
+    EXPECT_EQ(static_string, string1.getStringView()); // NOLINT(bugprone-use-after-move)
+    EXPECT_EQ(static_string, string2.getStringView());
     EXPECT_EQ(5U, string1.size());
     EXPECT_EQ(5U, string2.size());
   }
@@ -47,13 +59,13 @@ TEST(HeaderStringTest, All) {
     string.setCopy("hello", 5);
     EXPECT_EQ(HeaderString::Type::Inline, string.type());
     HeaderString string2(std::move(string));
-    EXPECT_TRUE(string.empty());
+    EXPECT_TRUE(string.empty()); // NOLINT(bugprone-use-after-move)
     EXPECT_EQ(HeaderString::Type::Inline, string.type());
     EXPECT_EQ(HeaderString::Type::Inline, string2.type());
     string.append("world", 5);
-    EXPECT_STREQ("world", string.c_str());
+    EXPECT_EQ("world", string.getStringView());
     EXPECT_EQ(5UL, string.size());
-    EXPECT_STREQ("hello", string2.c_str());
+    EXPECT_EQ("hello", string2.getStringView());
     EXPECT_EQ(5UL, string2.size());
   }
 
@@ -64,13 +76,13 @@ TEST(HeaderStringTest, All) {
     string.setCopy(large.c_str(), large.size());
     EXPECT_EQ(HeaderString::Type::Dynamic, string.type());
     HeaderString string2(std::move(string));
-    EXPECT_TRUE(string.empty());
+    EXPECT_TRUE(string.empty()); // NOLINT(bugprone-use-after-move)
     EXPECT_EQ(HeaderString::Type::Inline, string.type());
     EXPECT_EQ(HeaderString::Type::Dynamic, string2.type());
     string.append("b", 1);
-    EXPECT_STREQ("b", string.c_str());
+    EXPECT_EQ("b", string.getStringView());
     EXPECT_EQ(1UL, string.size());
-    EXPECT_STREQ(large.c_str(), string2.c_str());
+    EXPECT_EQ(large, string2.getStringView());
     EXPECT_EQ(4096UL, string2.size());
   }
 
@@ -80,7 +92,7 @@ TEST(HeaderStringTest, All) {
     HeaderString string(static_string);
     string.setInteger(5);
     EXPECT_EQ(HeaderString::Type::Inline, string.type());
-    EXPECT_STREQ("5", string.c_str());
+    EXPECT_EQ("5", string.getStringView());
   }
 
   // Static to inline string.
@@ -89,7 +101,7 @@ TEST(HeaderStringTest, All) {
     HeaderString string(static_string);
     string.setCopy(static_string.c_str(), static_string.size());
     EXPECT_EQ(HeaderString::Type::Inline, string.type());
-    EXPECT_STREQ("HELLO", string.c_str());
+    EXPECT_EQ("HELLO", string.getStringView());
   }
 
   // Static clear() does nothing.
@@ -99,7 +111,7 @@ TEST(HeaderStringTest, All) {
     EXPECT_EQ(HeaderString::Type::Reference, string.type());
     string.clear();
     EXPECT_EQ(HeaderString::Type::Reference, string.type());
-    EXPECT_STREQ("HELLO", string.c_str());
+    EXPECT_EQ("HELLO", string.getStringView());
   }
 
   // Static to append.
@@ -108,14 +120,14 @@ TEST(HeaderStringTest, All) {
     HeaderString string(static_string);
     EXPECT_EQ(HeaderString::Type::Reference, string.type());
     string.append("a", 1);
-    EXPECT_STREQ("a", string.c_str());
+    EXPECT_EQ("HELLOa", string.getStringView());
   }
 
   // Copy inline
   {
     HeaderString string;
     string.setCopy("hello", 5);
-    EXPECT_STREQ("hello", string.c_str());
+    EXPECT_EQ("hello", string.getStringView());
     EXPECT_EQ(5U, string.size());
   }
 
@@ -124,8 +136,8 @@ TEST(HeaderStringTest, All) {
     HeaderString string;
     std::string large_value(4096, 'a');
     string.setCopy(large_value.c_str(), large_value.size());
-    EXPECT_STREQ(large_value.c_str(), string.c_str());
-    EXPECT_NE(large_value.c_str(), string.c_str());
+    EXPECT_EQ(large_value, string.getStringView());
+    EXPECT_NE(large_value.c_str(), string.getStringView().data());
     EXPECT_EQ(4096U, string.size());
   }
 
@@ -136,8 +148,8 @@ TEST(HeaderStringTest, All) {
     string.setCopy(large_value1.c_str(), large_value1.size());
     std::string large_value2(2048, 'b');
     string.setCopy(large_value2.c_str(), large_value2.size());
-    EXPECT_STREQ(large_value2.c_str(), string.c_str());
-    EXPECT_NE(large_value2.c_str(), string.c_str());
+    EXPECT_EQ(large_value2, string.getStringView());
+    EXPECT_NE(large_value2.c_str(), string.getStringView().data());
     EXPECT_EQ(2048U, string.size());
   }
 
@@ -148,8 +160,8 @@ TEST(HeaderStringTest, All) {
     string.setCopy(large_value1.c_str(), large_value1.size());
     std::string large_value2(16384, 'b');
     string.setCopy(large_value2.c_str(), large_value2.size());
-    EXPECT_STREQ(large_value2.c_str(), string.c_str());
-    EXPECT_NE(large_value2.c_str(), string.c_str());
+    EXPECT_EQ(large_value2, string.getStringView());
+    EXPECT_NE(large_value2.c_str(), string.getStringView().data());
     EXPECT_EQ(16384U, string.size());
   }
 
@@ -160,81 +172,157 @@ TEST(HeaderStringTest, All) {
     string.setCopy(large_value1.c_str(), large_value1.size());
     std::string large_value2(16384, 'b');
     string.setCopy(large_value2.c_str(), large_value2.size());
-    EXPECT_STREQ(large_value2.c_str(), string.c_str());
-    EXPECT_NE(large_value2.c_str(), string.c_str());
+    EXPECT_EQ(large_value2, string.getStringView());
+    EXPECT_NE(large_value2.c_str(), string.getStringView().data());
     EXPECT_EQ(16384U, string.size());
+  }
+
+  // Copy, exactly filling inline capacity
+  //
+  // ASAN does not catch the clobber in the case where the code writes one past the
+  // end of the inline buffer. To ensure coverage the next block checks that setCopy
+  // is not introducing a NUL in a way that does not rely on an actual clobber getting
+  // detected.
+  {
+    HeaderString string;
+    std::string large(128, 'z');
+    string.setCopy(large.c_str(), large.size());
+    EXPECT_EQ(string.type(), HeaderString::Type::Inline);
+    EXPECT_EQ(string.getStringView(), large);
+  }
+
+  // Ensure setCopy does not add NUL.
+  {
+    HeaderString string;
+    std::string large(128, 'z');
+    string.setCopy(large.c_str(), large.size());
+    EXPECT_EQ(string.type(), HeaderString::Type::Inline);
+    EXPECT_EQ(string.getStringView(), large);
+    std::string small(1, 'a');
+    string.setCopy(small.c_str(), small.size());
+    EXPECT_EQ(string.type(), HeaderString::Type::Inline);
+    EXPECT_EQ(string.getStringView(), small);
+    // If we peek past the valid first character of the
+    // header string_view it should still be 'z' and not '\0'.
+    // We know this peek is OK since the memory is much larger
+    // than two bytes.
+    EXPECT_EQ(string.getStringView().data()[1], 'z');
+  }
+
+  // Copy, exactly filling dynamic capacity
+  //
+  // ASAN should catch a write one past the end of the dynamic buffer. This test
+  // forces a dynamic buffer with one copy and then fills it with the next.
+  {
+    HeaderString string;
+    // Force Dynamic with setCopy of inline buffer size + 1.
+    std::string large1(129, 'z');
+    string.setCopy(large1.c_str(), large1.size());
+    EXPECT_EQ(string.type(), HeaderString::Type::Dynamic);
+    const void* dynamic_buffer_address = string.getStringView().data();
+    // Dynamic capacity in setCopy is 2x required by the size.
+    // So to fill it exactly setCopy with a total of 258 chars.
+    std::string large2(258, 'z');
+    string.setCopy(large2.c_str(), large2.size());
+    EXPECT_EQ(string.type(), HeaderString::Type::Dynamic);
+    // The actual buffer address should be the same as it was after
+    // setCopy(large1), ensuring no reallocation occurred.
+    EXPECT_EQ(string.getStringView().data(), dynamic_buffer_address);
+    EXPECT_EQ(string.getStringView(), large2);
   }
 
   // Append, small buffer to dynamic
   {
     HeaderString string;
-    std::string test(127, 'a');
+    std::string test(128, 'a');
     string.append(test.c_str(), test.size());
     EXPECT_EQ(HeaderString::Type::Inline, string.type());
     string.append("a", 1);
     EXPECT_EQ(HeaderString::Type::Dynamic, string.type());
     test += 'a';
-    EXPECT_STREQ(test.c_str(), string.c_str());
+    EXPECT_EQ(test, string.getStringView());
   }
 
   // Append into inline twice, then shift to dynamic.
   {
     HeaderString string;
     string.append("hello", 5);
-    EXPECT_STREQ("hello", string.c_str());
+    EXPECT_EQ("hello", string.getStringView());
     EXPECT_EQ(5U, string.size());
     string.append("world", 5);
-    EXPECT_STREQ("helloworld", string.c_str());
+    EXPECT_EQ("helloworld", string.getStringView());
     EXPECT_EQ(10U, string.size());
     std::string large(4096, 'a');
     string.append(large.c_str(), large.size());
     large = "helloworld" + large;
-    EXPECT_STREQ(large.c_str(), string.c_str());
+    EXPECT_EQ(large, string.getStringView());
     EXPECT_EQ(4106U, string.size());
   }
 
   // Append, realloc dynamic.
   {
     HeaderString string;
-    std::string large(128, 'a');
+    std::string large(129, 'a');
     string.append(large.c_str(), large.size());
     EXPECT_EQ(HeaderString::Type::Dynamic, string.type());
     std::string large2 = large + large;
     string.append(large2.c_str(), large2.size());
     large += large2;
-    EXPECT_STREQ(large.c_str(), string.c_str());
-    EXPECT_EQ(384U, string.size());
+    EXPECT_EQ(large, string.getStringView());
+    EXPECT_EQ(387U, string.size());
   }
 
   // Append, realloc close to limit with small buffer.
   {
     HeaderString string;
-    std::string large(128, 'a');
+    std::string large(129, 'a');
     string.append(large.c_str(), large.size());
     EXPECT_EQ(HeaderString::Type::Dynamic, string.type());
     std::string large2(120, 'b');
     string.append(large2.c_str(), large2.size());
     std::string large3(32, 'c');
     string.append(large3.c_str(), large3.size());
-    EXPECT_STREQ((large + large2 + large3).c_str(), string.c_str());
-    EXPECT_EQ(280U, string.size());
+    EXPECT_EQ((large + large2 + large3), string.getStringView());
+    EXPECT_EQ(281U, string.size());
+  }
+
+  // Append, exactly filling dynamic capacity
+  //
+  // ASAN should catch a write one past the end of the dynamic buffer. This test
+  // forces a dynamic buffer with one copy and then fills it with the next.
+  {
+    HeaderString string;
+    // Force Dynamic with setCopy of inline buffer size + 1.
+    std::string large1(129, 'z');
+    string.setCopy(large1.c_str(), large1.size());
+    EXPECT_EQ(string.type(), HeaderString::Type::Dynamic);
+    const void* dynamic_buffer_address = string.getStringView().data();
+    // Dynamic capacity in setCopy is 2x required by the size.
+    // So to fill it exactly append 129 chars for a total of 258 chars.
+    std::string large2(129, 'z');
+    string.append(large2.c_str(), large2.size());
+    EXPECT_EQ(string.type(), HeaderString::Type::Dynamic);
+    // The actual buffer address should be the same as it was after
+    // setCopy(large1), ensuring no reallocation occurred.
+    EXPECT_EQ(string.getStringView().data(), dynamic_buffer_address);
+    EXPECT_EQ(string.getStringView(), large1 + large2);
   }
 
   // Set integer, inline
   {
     HeaderString string;
     string.setInteger(123456789);
-    EXPECT_STREQ("123456789", string.c_str());
+    EXPECT_EQ("123456789", string.getStringView());
     EXPECT_EQ(9U, string.size());
   }
 
   // Set integer, dynamic
   {
     HeaderString string;
-    std::string large(128, 'a');
+    std::string large(129, 'a');
     string.append(large.c_str(), large.size());
     string.setInteger(123456789);
-    EXPECT_STREQ("123456789", string.c_str());
+    EXPECT_EQ("123456789", string.getStringView());
     EXPECT_EQ(9U, string.size());
     EXPECT_EQ(HeaderString::Type::Dynamic, string.type());
   }
@@ -244,44 +332,19 @@ TEST(HeaderStringTest, All) {
     const std::string static_string = "hello world";
     HeaderString string;
     string.setReference(static_string);
-    EXPECT_EQ(string.c_str(), static_string.c_str());
+    EXPECT_EQ(string.getStringView(), static_string);
     EXPECT_EQ(11U, string.size());
     EXPECT_EQ(HeaderString::Type::Reference, string.type());
 
-    const std::string large(128, 'a');
+    const std::string large(129, 'a');
     string.setCopy(large.c_str(), large.size());
-    EXPECT_NE(string.c_str(), large.c_str());
+    EXPECT_NE(string.getStringView().data(), large.c_str());
     EXPECT_EQ(HeaderString::Type::Dynamic, string.type());
 
     string.setReference(static_string);
-    EXPECT_EQ(string.c_str(), static_string.c_str());
+    EXPECT_EQ(string.getStringView(), static_string);
     EXPECT_EQ(11U, string.size());
     EXPECT_EQ(HeaderString::Type::Reference, string.type());
-  }
-
-  // caseInsensitiveContains
-  {
-    const std::string static_string("keep-alive, Upgrade, close");
-    HeaderString string(static_string);
-    EXPECT_TRUE(string.caseInsensitiveContains("keep-alive"));
-    EXPECT_TRUE(string.caseInsensitiveContains("Keep-alive"));
-    EXPECT_TRUE(string.caseInsensitiveContains("Upgrade"));
-    EXPECT_TRUE(string.caseInsensitiveContains("upgrade"));
-    EXPECT_TRUE(string.caseInsensitiveContains("close"));
-    EXPECT_TRUE(string.caseInsensitiveContains("Close"));
-    EXPECT_FALSE(string.caseInsensitiveContains(""));
-    EXPECT_FALSE(string.caseInsensitiveContains("keep"));
-    EXPECT_FALSE(string.caseInsensitiveContains("alive"));
-    EXPECT_FALSE(string.caseInsensitiveContains("grade"));
-
-    const std::string small("close");
-    string.setCopy(small.c_str(), small.size());
-    EXPECT_FALSE(string.caseInsensitiveContains("keep-alive"));
-
-    const std::string empty("");
-    string.setCopy(empty.c_str(), empty.size());
-    EXPECT_FALSE(string.caseInsensitiveContains("keep-alive"));
-    EXPECT_FALSE(string.caseInsensitiveContains(""));
   }
 
   // getString
@@ -300,22 +363,34 @@ TEST(HeaderStringTest, All) {
 
 TEST(HeaderMapImplTest, InlineInsert) {
   HeaderMapImpl headers;
+  EXPECT_TRUE(headers.empty());
+  EXPECT_EQ(0, headers.size());
   EXPECT_EQ(nullptr, headers.Host());
   headers.insertHost().value(std::string("hello"));
-  EXPECT_STREQ(":authority", headers.Host()->key().c_str());
-  EXPECT_STREQ("hello", headers.Host()->value().c_str());
-  EXPECT_STREQ("hello", headers.get(Headers::get().Host)->value().c_str());
+  EXPECT_FALSE(headers.empty());
+  EXPECT_EQ(1, headers.size());
+  EXPECT_EQ(":authority", headers.Host()->key().getStringView());
+  EXPECT_EQ("hello", headers.Host()->value().getStringView());
+  EXPECT_EQ("hello", headers.get(Headers::get().Host)->value().getStringView());
 }
 
 TEST(HeaderMapImplTest, MoveIntoInline) {
   HeaderMapImpl headers;
   HeaderString key;
-  key.setCopy(Headers::get().Host.get().c_str(), Headers::get().Host.get().size());
+  key.setCopy(Headers::get().CacheControl.get());
   HeaderString value;
   value.setCopy("hello", 5);
   headers.addViaMove(std::move(key), std::move(value));
-  EXPECT_STREQ(":authority", headers.Host()->key().c_str());
-  EXPECT_STREQ("hello", headers.Host()->value().c_str());
+  EXPECT_EQ("cache-control", headers.CacheControl()->key().getStringView());
+  EXPECT_EQ("hello", headers.CacheControl()->value().getStringView());
+
+  HeaderString key2;
+  key2.setCopy(Headers::get().CacheControl.get().c_str(), Headers::get().CacheControl.get().size());
+  HeaderString value2;
+  value2.setCopy("there", 5);
+  headers.addViaMove(std::move(key2), std::move(value2));
+  EXPECT_EQ("cache-control", headers.CacheControl()->key().getStringView());
+  EXPECT_EQ("hello,there", headers.CacheControl()->value().getStringView());
 }
 
 TEST(HeaderMapImplTest, Remove) {
@@ -325,28 +400,34 @@ TEST(HeaderMapImplTest, Remove) {
   LowerCaseString static_key("hello");
   std::string ref_value("value");
   headers.addReference(static_key, ref_value);
-  EXPECT_STREQ("value", headers.get(static_key)->value().c_str());
+  EXPECT_EQ("value", headers.get(static_key)->value().getStringView());
   EXPECT_EQ(HeaderString::Type::Reference, headers.get(static_key)->value().type());
   EXPECT_EQ(1UL, headers.size());
+  EXPECT_FALSE(headers.empty());
   headers.remove(static_key);
   EXPECT_EQ(nullptr, headers.get(static_key));
   EXPECT_EQ(0UL, headers.size());
+  EXPECT_TRUE(headers.empty());
 
   // Add and remove by inline.
   headers.insertContentLength().value(5);
-  EXPECT_STREQ("5", headers.ContentLength()->value().c_str());
+  EXPECT_EQ("5", headers.ContentLength()->value().getStringView());
   EXPECT_EQ(1UL, headers.size());
+  EXPECT_FALSE(headers.empty());
   headers.removeContentLength();
   EXPECT_EQ(nullptr, headers.ContentLength());
   EXPECT_EQ(0UL, headers.size());
+  EXPECT_TRUE(headers.empty());
 
   // Add inline and remove by name.
   headers.insertContentLength().value(5);
-  EXPECT_STREQ("5", headers.ContentLength()->value().c_str());
+  EXPECT_EQ("5", headers.ContentLength()->value().getStringView());
   EXPECT_EQ(1UL, headers.size());
+  EXPECT_FALSE(headers.empty());
   headers.remove(Headers::get().ContentLength);
   EXPECT_EQ(nullptr, headers.ContentLength());
   EXPECT_EQ(0UL, headers.size());
+  EXPECT_TRUE(headers.empty());
 }
 
 TEST(HeaderMapImplTest, RemoveRegex) {
@@ -380,8 +461,9 @@ TEST(HeaderMapImplTest, RemoveRegex) {
 
   // Add inline and remove by regex
   headers.insertContentLength().value(5);
-  EXPECT_STREQ("5", headers.ContentLength()->value().c_str());
+  EXPECT_EQ("5", headers.ContentLength()->value().getStringView());
   EXPECT_EQ(1UL, headers.size());
+  EXPECT_FALSE(headers.empty());
   headers.removePrefix(LowerCaseString("content"));
   EXPECT_EQ(nullptr, headers.ContentLength());
 }
@@ -402,11 +484,12 @@ TEST(HeaderMapImplTest, SetRemovesAllValues) {
   headers.addReference(key1, ref_value3);
   headers.addReference(key1, ref_value4);
 
-  typedef testing::MockFunction<void(const std::string&, const std::string&)> MockCb;
+  using MockCb = testing::MockFunction<void(const std::string&, const std::string&)>;
 
   {
     MockCb cb;
 
+    InSequence seq;
     EXPECT_CALL(cb, Call("hello", "world"));
     EXPECT_CALL(cb, Call("olleh", "planet"));
     EXPECT_CALL(cb, Call("hello", "globe"));
@@ -414,23 +497,26 @@ TEST(HeaderMapImplTest, SetRemovesAllValues) {
 
     headers.iterate(
         [](const Http::HeaderEntry& header, void* cb_v) -> HeaderMap::Iterate {
-          static_cast<MockCb*>(cb_v)->Call(header.key().c_str(), header.value().c_str());
+          static_cast<MockCb*>(cb_v)->Call(std::string(header.key().getStringView()),
+                                           std::string(header.value().getStringView()));
           return HeaderMap::Iterate::Continue;
         },
         &cb);
   }
 
-  headers.setReference(key1, ref_value5);
+  headers.setReference(key1, ref_value5); // set moves key to end
 
   {
     MockCb cb;
 
-    EXPECT_CALL(cb, Call("hello", "blue marble"));
+    InSequence seq;
     EXPECT_CALL(cb, Call("olleh", "planet"));
+    EXPECT_CALL(cb, Call("hello", "blue marble"));
 
     headers.iterate(
         [](const Http::HeaderEntry& header, void* cb_v) -> HeaderMap::Iterate {
-          static_cast<MockCb*>(cb_v)->Call(header.key().c_str(), header.value().c_str());
+          static_cast<MockCb*>(cb_v)->Call(std::string(header.key().getStringView()),
+                                           std::string(header.value().getStringView()));
           return HeaderMap::Iterate::Continue;
         },
         &cb);
@@ -438,18 +524,44 @@ TEST(HeaderMapImplTest, SetRemovesAllValues) {
 }
 
 TEST(HeaderMapImplTest, DoubleInlineAdd) {
-  HeaderMapImpl headers;
-  headers.addReferenceKey(Headers::get().ContentLength, 5);
-  headers.addReferenceKey(Headers::get().ContentLength, 6);
-  EXPECT_STREQ("5", headers.ContentLength()->value().c_str());
-  EXPECT_EQ(1UL, headers.size());
+  {
+    HeaderMapImpl headers;
+    const std::string foo("foo");
+    const std::string bar("bar");
+    headers.addReference(Headers::get().ContentLength, foo);
+    headers.addReference(Headers::get().ContentLength, bar);
+    EXPECT_EQ("foo,bar", headers.ContentLength()->value().getStringView());
+    EXPECT_EQ(1UL, headers.size());
+  }
+  {
+    HeaderMapImpl headers;
+    headers.addReferenceKey(Headers::get().ContentLength, "foo");
+    headers.addReferenceKey(Headers::get().ContentLength, "bar");
+    EXPECT_EQ("foo,bar", headers.ContentLength()->value().getStringView());
+    EXPECT_EQ(1UL, headers.size());
+  }
+  {
+    HeaderMapImpl headers;
+    headers.addReferenceKey(Headers::get().ContentLength, 5);
+    headers.addReferenceKey(Headers::get().ContentLength, 6);
+    EXPECT_EQ("5,6", headers.ContentLength()->value().getStringView());
+    EXPECT_EQ(1UL, headers.size());
+  }
+  {
+    HeaderMapImpl headers;
+    const std::string foo("foo");
+    headers.addReference(Headers::get().ContentLength, foo);
+    headers.addReferenceKey(Headers::get().ContentLength, 6);
+    EXPECT_EQ("foo,6", headers.ContentLength()->value().getStringView());
+    EXPECT_EQ(1UL, headers.size());
+  }
 }
 
 TEST(HeaderMapImplTest, DoubleInlineSet) {
   HeaderMapImpl headers;
   headers.setReferenceKey(Headers::get().ContentType, "blah");
   headers.setReferenceKey(Headers::get().ContentType, "text/html");
-  EXPECT_STREQ("text/html", headers.ContentType()->value().c_str());
+  EXPECT_EQ("text/html", headers.ContentType()->value().getStringView());
   EXPECT_EQ(1UL, headers.size());
 }
 
@@ -457,20 +569,20 @@ TEST(HeaderMapImplTest, AddReferenceKey) {
   HeaderMapImpl headers;
   LowerCaseString foo("hello");
   headers.addReferenceKey(foo, "world");
-  EXPECT_NE("world", headers.get(foo)->value().c_str());
-  EXPECT_STREQ("world", headers.get(foo)->value().c_str());
+  EXPECT_NE("world", headers.get(foo)->value().getStringView().data());
+  EXPECT_EQ("world", headers.get(foo)->value().getStringView());
 }
 
 TEST(HeaderMapImplTest, SetReferenceKey) {
   HeaderMapImpl headers;
   LowerCaseString foo("hello");
   headers.setReferenceKey(foo, "world");
-  EXPECT_NE("world", headers.get(foo)->value().c_str());
-  EXPECT_STREQ("world", headers.get(foo)->value().c_str());
+  EXPECT_NE("world", headers.get(foo)->value().getStringView().data());
+  EXPECT_EQ("world", headers.get(foo)->value().getStringView());
 
   headers.setReferenceKey(foo, "monde");
-  EXPECT_NE("monde", headers.get(foo)->value().c_str());
-  EXPECT_STREQ("monde", headers.get(foo)->value().c_str());
+  EXPECT_NE("monde", headers.get(foo)->value().getStringView().data());
+  EXPECT_EQ("monde", headers.get(foo)->value().getStringView());
 }
 
 TEST(HeaderMapImplTest, AddCopy) {
@@ -482,16 +594,16 @@ TEST(HeaderMapImplTest, AddCopy) {
 
   const HeaderString& value = headers.get(*lcKeyPtr)->value();
 
-  EXPECT_STREQ("world", value.c_str());
+  EXPECT_EQ("world", value.getStringView());
   EXPECT_EQ(5UL, value.size());
 
   lcKeyPtr.reset();
 
   const HeaderString& value2 = headers.get(LowerCaseString("hello"))->value();
 
-  EXPECT_STREQ("world", value2.c_str());
+  EXPECT_EQ("world", value2.getStringView());
   EXPECT_EQ(5UL, value2.size());
-  EXPECT_EQ(value.c_str(), value2.c_str());
+  EXPECT_EQ(value.getStringView(), value2.getStringView());
   EXPECT_EQ(1UL, headers.size());
 
   // Repeat with an int value.
@@ -502,21 +614,21 @@ TEST(HeaderMapImplTest, AddCopy) {
 
   // Build "hello" with string concatenation to make it unlikely that the
   // compiler is just reusing the same string constant for everything.
-  lcKeyPtr.reset(new LowerCaseString(std::string("he") + "llo"));
+  lcKeyPtr = std::make_unique<LowerCaseString>(std::string("he") + "llo");
   EXPECT_STREQ("hello", lcKeyPtr->get().c_str());
 
   headers.addCopy(*lcKeyPtr, 42);
 
   const HeaderString& value3 = headers.get(*lcKeyPtr)->value();
 
-  EXPECT_STREQ("42", value3.c_str());
+  EXPECT_EQ("42", value3.getStringView());
   EXPECT_EQ(2UL, value3.size());
 
   lcKeyPtr.reset();
 
   const HeaderString& value4 = headers.get(LowerCaseString("hello"))->value();
 
-  EXPECT_STREQ("42", value4.c_str());
+  EXPECT_EQ("42", value4.getStringView());
   EXPECT_EQ(2UL, value4.size());
   EXPECT_EQ(1UL, headers.size());
 
@@ -524,8 +636,22 @@ TEST(HeaderMapImplTest, AddCopy) {
   LowerCaseString lcKey3(std::string("he") + "ll" + "o");
   EXPECT_STREQ("hello", lcKey3.get().c_str());
 
-  EXPECT_STREQ("42", headers.get(lcKey3)->value().c_str());
+  EXPECT_EQ("42", headers.get(lcKey3)->value().getStringView());
   EXPECT_EQ(2UL, headers.get(lcKey3)->value().size());
+
+  LowerCaseString cache_control("cache-control");
+  headers.addCopy(cache_control, "max-age=1345");
+  EXPECT_EQ("max-age=1345", headers.get(cache_control)->value().getStringView());
+  EXPECT_EQ("max-age=1345", headers.CacheControl()->value().getStringView());
+  headers.addCopy(cache_control, "public");
+  EXPECT_EQ("max-age=1345,public", headers.get(cache_control)->value().getStringView());
+  headers.addCopy(cache_control, "");
+  EXPECT_EQ("max-age=1345,public", headers.get(cache_control)->value().getStringView());
+  headers.addCopy(cache_control, 123);
+  EXPECT_EQ("max-age=1345,public,123", headers.get(cache_control)->value().getStringView());
+  headers.addCopy(cache_control, std::numeric_limits<uint64_t>::max());
+  EXPECT_EQ("max-age=1345,public,123,18446744073709551615",
+            headers.get(cache_control)->value().getStringView());
 }
 
 TEST(HeaderMapImplTest, Equality) {
@@ -545,7 +671,7 @@ TEST(HeaderMapImplTest, LargeCharInHeader) {
   LowerCaseString static_key("\x90hello");
   std::string ref_value("value");
   headers.addReference(static_key, ref_value);
-  EXPECT_STREQ("value", headers.get(static_key)->value().c_str());
+  EXPECT_EQ("value", headers.get(static_key)->value().getStringView());
 }
 
 TEST(HeaderMapImplTest, Iterate) {
@@ -556,15 +682,17 @@ TEST(HeaderMapImplTest, Iterate) {
   LowerCaseString foo_key("foo");
   headers.setReferenceKey(foo_key, "bar"); // set moves key to end
 
-  typedef testing::MockFunction<void(const std::string&, const std::string&)> MockCb;
+  using MockCb = testing::MockFunction<void(const std::string&, const std::string&)>;
   MockCb cb;
 
+  InSequence seq;
   EXPECT_CALL(cb, Call("hello", "world"));
   EXPECT_CALL(cb, Call("world", "hello"));
   EXPECT_CALL(cb, Call("foo", "bar"));
   headers.iterate(
       [](const Http::HeaderEntry& header, void* cb_v) -> HeaderMap::Iterate {
-        static_cast<MockCb*>(cb_v)->Call(header.key().c_str(), header.value().c_str());
+        static_cast<MockCb*>(cb_v)->Call(std::string(header.key().getStringView()),
+                                         std::string(header.value().getStringView()));
         return HeaderMap::Iterate::Continue;
       },
       &cb);
@@ -577,16 +705,18 @@ TEST(HeaderMapImplTest, IterateReverse) {
   LowerCaseString world_key("world");
   headers.setReferenceKey(world_key, "hello");
 
-  typedef testing::MockFunction<void(const std::string&, const std::string&)> MockCb;
+  using MockCb = testing::MockFunction<void(const std::string&, const std::string&)>;
   MockCb cb;
 
+  InSequence seq;
   EXPECT_CALL(cb, Call("world", "hello"));
   EXPECT_CALL(cb, Call("foo", "bar"));
   // no "hello"
   headers.iterateReverse(
       [](const Http::HeaderEntry& header, void* cb_v) -> HeaderMap::Iterate {
-        static_cast<MockCb*>(cb_v)->Call(header.key().c_str(), header.value().c_str());
-        if ("foo" != std::string{header.key().c_str()}) {
+        static_cast<MockCb*>(cb_v)->Call(std::string(header.key().getStringView()),
+                                         std::string(header.value().getStringView()));
+        if (header.key().getStringView() != "foo") {
           return HeaderMap::Iterate::Continue;
         } else {
           return HeaderMap::Iterate::Break;
@@ -611,7 +741,7 @@ TEST(HeaderMapImplTest, Lookup) {
   {
     const HeaderEntry* entry;
     EXPECT_EQ(HeaderMap::Lookup::Found, headers.lookup(Headers::get().ContentLength, &entry));
-    EXPECT_STREQ("5", entry->value().c_str());
+    EXPECT_EQ("5", entry->value().getStringView());
   }
 
   // Lookup returns HeaderMap::Lookup::NotFound if a predefined inline header does not exist.
@@ -625,19 +755,290 @@ TEST(HeaderMapImplTest, Lookup) {
 TEST(HeaderMapImplTest, Get) {
   {
     const TestHeaderMapImpl headers{{":path", "/"}, {"hello", "world"}};
-    EXPECT_STREQ("/", headers.get(LowerCaseString(":path"))->value().c_str());
-    EXPECT_STREQ("world", headers.get(LowerCaseString("hello"))->value().c_str());
+    EXPECT_EQ("/", headers.get(LowerCaseString(":path"))->value().getStringView());
+    EXPECT_EQ("world", headers.get(LowerCaseString("hello"))->value().getStringView());
     EXPECT_EQ(nullptr, headers.get(LowerCaseString("foo")));
   }
 
   {
     TestHeaderMapImpl headers{{":path", "/"}, {"hello", "world"}};
     headers.get(LowerCaseString(":path"))->value(std::string("/new_path"));
-    EXPECT_STREQ("/new_path", headers.get(LowerCaseString(":path"))->value().c_str());
+    EXPECT_EQ("/new_path", headers.get(LowerCaseString(":path"))->value().getStringView());
     headers.get(LowerCaseString("hello"))->value(std::string("world2"));
-    EXPECT_STREQ("world2", headers.get(LowerCaseString("hello"))->value().c_str());
+    EXPECT_EQ("world2", headers.get(LowerCaseString("hello"))->value().getStringView());
     EXPECT_EQ(nullptr, headers.get(LowerCaseString("foo")));
   }
+}
+
+TEST(HeaderMapImplTest, TestAppendHeader) {
+  // Test appending to a string with a value.
+  {
+    HeaderString value1;
+    value1.setCopy("some;", 5);
+    HeaderMapImpl::appendToHeader(value1, "test");
+    EXPECT_EQ(value1, "some;,test");
+  }
+
+  // Test appending to an empty string.
+  {
+    HeaderString value2;
+    HeaderMapImpl::appendToHeader(value2, "my tag data");
+    EXPECT_EQ(value2, "my tag data");
+  }
+
+  // Test empty data case.
+  {
+    HeaderString value3;
+    value3.setCopy("empty", 5);
+    HeaderMapImpl::appendToHeader(value3, "");
+    EXPECT_EQ(value3, "empty");
+  }
+  // Regression test for appending to an empty string with a short string, then
+  // setting integer.
+  {
+    const std::string empty;
+    HeaderString value4(empty);
+    HeaderMapImpl::appendToHeader(value4, " ");
+    value4.setInteger(0);
+    EXPECT_EQ("0", value4.getStringView());
+    EXPECT_EQ(1U, value4.size());
+  }
+}
+
+TEST(HeaderMapImplDeathTest, TestHeaderLengthChecks) {
+  HeaderString value;
+  value.setCopy("some;", 5);
+  EXPECT_DEATH_LOG_TO_STDERR(value.append(nullptr, std::numeric_limits<uint32_t>::max()),
+                             "Trying to allocate overly large headers.");
+
+  std::string source("hello");
+  HeaderString reference;
+  reference.setReference(source);
+  EXPECT_DEATH_LOG_TO_STDERR(reference.append(nullptr, std::numeric_limits<uint32_t>::max()),
+                             "Trying to allocate overly large headers.");
+}
+
+TEST(HeaderMapImplTest, PseudoHeaderOrder) {
+  using MockCb = testing::MockFunction<void(const std::string&, const std::string&)>;
+  MockCb cb;
+
+  {
+    LowerCaseString foo("hello");
+    Http::TestHeaderMapImpl headers{};
+    EXPECT_EQ(0UL, headers.size());
+    EXPECT_TRUE(headers.empty());
+
+    headers.addReferenceKey(foo, "world");
+    EXPECT_EQ(1UL, headers.size());
+    EXPECT_FALSE(headers.empty());
+
+    headers.setReferenceKey(Headers::get().ContentType, "text/html");
+    EXPECT_EQ(2UL, headers.size());
+    EXPECT_FALSE(headers.empty());
+
+    // Pseudo header gets inserted before non-pseudo headers
+    headers.setReferenceKey(Headers::get().Method, "PUT");
+    EXPECT_EQ(3UL, headers.size());
+    EXPECT_FALSE(headers.empty());
+
+    InSequence seq;
+    EXPECT_CALL(cb, Call(":method", "PUT"));
+    EXPECT_CALL(cb, Call("hello", "world"));
+    EXPECT_CALL(cb, Call("content-type", "text/html"));
+
+    headers.iterate(
+        [](const Http::HeaderEntry& header, void* cb_v) -> HeaderMap::Iterate {
+          static_cast<MockCb*>(cb_v)->Call(std::string(header.key().getStringView()),
+                                           std::string(header.value().getStringView()));
+          return HeaderMap::Iterate::Continue;
+        },
+        &cb);
+
+    // Removal of the header before which pseudo-headers are inserted
+    headers.remove(foo);
+    EXPECT_EQ(2UL, headers.size());
+    EXPECT_FALSE(headers.empty());
+
+    EXPECT_CALL(cb, Call(":method", "PUT"));
+    EXPECT_CALL(cb, Call("content-type", "text/html"));
+
+    headers.iterate(
+        [](const Http::HeaderEntry& header, void* cb_v) -> HeaderMap::Iterate {
+          static_cast<MockCb*>(cb_v)->Call(std::string(header.key().getStringView()),
+                                           std::string(header.value().getStringView()));
+          return HeaderMap::Iterate::Continue;
+        },
+        &cb);
+
+    // Next pseudo-header goes after other pseudo-headers, but before normal headers
+    headers.setReferenceKey(Headers::get().Path, "/test");
+    EXPECT_EQ(3UL, headers.size());
+    EXPECT_FALSE(headers.empty());
+
+    EXPECT_CALL(cb, Call(":method", "PUT"));
+    EXPECT_CALL(cb, Call(":path", "/test"));
+    EXPECT_CALL(cb, Call("content-type", "text/html"));
+
+    headers.iterate(
+        [](const Http::HeaderEntry& header, void* cb_v) -> HeaderMap::Iterate {
+          static_cast<MockCb*>(cb_v)->Call(std::string(header.key().getStringView()),
+                                           std::string(header.value().getStringView()));
+          return HeaderMap::Iterate::Continue;
+        },
+        &cb);
+
+    // Removing the last normal header
+    headers.remove(Headers::get().ContentType);
+    EXPECT_EQ(2UL, headers.size());
+    EXPECT_FALSE(headers.empty());
+
+    EXPECT_CALL(cb, Call(":method", "PUT"));
+    EXPECT_CALL(cb, Call(":path", "/test"));
+
+    headers.iterate(
+        [](const Http::HeaderEntry& header, void* cb_v) -> HeaderMap::Iterate {
+          static_cast<MockCb*>(cb_v)->Call(std::string(header.key().getStringView()),
+                                           std::string(header.value().getStringView()));
+          return HeaderMap::Iterate::Continue;
+        },
+        &cb);
+
+    // Adding a new pseudo-header after removing the last normal header
+    headers.setReferenceKey(Headers::get().Host, "host");
+    EXPECT_EQ(3UL, headers.size());
+    EXPECT_FALSE(headers.empty());
+
+    EXPECT_CALL(cb, Call(":method", "PUT"));
+    EXPECT_CALL(cb, Call(":path", "/test"));
+    EXPECT_CALL(cb, Call(":authority", "host"));
+
+    headers.iterate(
+        [](const Http::HeaderEntry& header, void* cb_v) -> HeaderMap::Iterate {
+          static_cast<MockCb*>(cb_v)->Call(std::string(header.key().getStringView()),
+                                           std::string(header.value().getStringView()));
+          return HeaderMap::Iterate::Continue;
+        },
+        &cb);
+
+    // Adding the first normal header
+    headers.setReferenceKey(Headers::get().ContentType, "text/html");
+    EXPECT_EQ(4UL, headers.size());
+    EXPECT_FALSE(headers.empty());
+
+    EXPECT_CALL(cb, Call(":method", "PUT"));
+    EXPECT_CALL(cb, Call(":path", "/test"));
+    EXPECT_CALL(cb, Call(":authority", "host"));
+    EXPECT_CALL(cb, Call("content-type", "text/html"));
+
+    headers.iterate(
+        [](const Http::HeaderEntry& header, void* cb_v) -> HeaderMap::Iterate {
+          static_cast<MockCb*>(cb_v)->Call(std::string(header.key().getStringView()),
+                                           std::string(header.value().getStringView()));
+          return HeaderMap::Iterate::Continue;
+        },
+        &cb);
+
+    // Removing all pseudo-headers
+    headers.remove(Headers::get().Path);
+    headers.remove(Headers::get().Method);
+    headers.remove(Headers::get().Host);
+    EXPECT_EQ(1UL, headers.size());
+    EXPECT_FALSE(headers.empty());
+
+    EXPECT_CALL(cb, Call("content-type", "text/html"));
+
+    headers.iterate(
+        [](const Http::HeaderEntry& header, void* cb_v) -> HeaderMap::Iterate {
+          static_cast<MockCb*>(cb_v)->Call(std::string(header.key().getStringView()),
+                                           std::string(header.value().getStringView()));
+          return HeaderMap::Iterate::Continue;
+        },
+        &cb);
+
+    // Removing all headers
+    headers.remove(Headers::get().ContentType);
+    EXPECT_EQ(0UL, headers.size());
+    EXPECT_TRUE(headers.empty());
+
+    // Adding a lone pseudo-header
+    headers.setReferenceKey(Headers::get().Status, "200");
+    EXPECT_EQ(1UL, headers.size());
+    EXPECT_FALSE(headers.empty());
+
+    EXPECT_CALL(cb, Call(":status", "200"));
+
+    headers.iterate(
+        [](const Http::HeaderEntry& header, void* cb_v) -> HeaderMap::Iterate {
+          static_cast<MockCb*>(cb_v)->Call(std::string(header.key().getStringView()),
+                                           std::string(header.value().getStringView()));
+          return HeaderMap::Iterate::Continue;
+        },
+        &cb);
+  }
+
+  // Starting with a normal header
+  {
+    Http::TestHeaderMapImpl headers{{"content-type", "text/plain"},
+                                    {":method", "GET"},
+                                    {":path", "/"},
+                                    {"hello", "world"},
+                                    {":authority", "host"}};
+
+    InSequence seq;
+    EXPECT_CALL(cb, Call(":method", "GET"));
+    EXPECT_CALL(cb, Call(":path", "/"));
+    EXPECT_CALL(cb, Call(":authority", "host"));
+    EXPECT_CALL(cb, Call("content-type", "text/plain"));
+    EXPECT_CALL(cb, Call("hello", "world"));
+
+    headers.iterate(
+        [](const Http::HeaderEntry& header, void* cb_v) -> HeaderMap::Iterate {
+          static_cast<MockCb*>(cb_v)->Call(std::string(header.key().getStringView()),
+                                           std::string(header.value().getStringView()));
+          return HeaderMap::Iterate::Continue;
+        },
+        &cb);
+  }
+
+  // Starting with a pseudo-header
+  {
+    Http::TestHeaderMapImpl headers{{":path", "/"},
+                                    {"content-type", "text/plain"},
+                                    {":method", "GET"},
+                                    {"hello", "world"},
+                                    {":authority", "host"}};
+
+    InSequence seq;
+    EXPECT_CALL(cb, Call(":path", "/"));
+    EXPECT_CALL(cb, Call(":method", "GET"));
+    EXPECT_CALL(cb, Call(":authority", "host"));
+    EXPECT_CALL(cb, Call("content-type", "text/plain"));
+    EXPECT_CALL(cb, Call("hello", "world"));
+
+    headers.iterate(
+        [](const Http::HeaderEntry& header, void* cb_v) -> HeaderMap::Iterate {
+          static_cast<MockCb*>(cb_v)->Call(std::string(header.key().getStringView()),
+                                           std::string(header.value().getStringView()));
+          return HeaderMap::Iterate::Continue;
+        },
+        &cb);
+  }
+}
+
+// Validate that TestHeaderMapImpl copy construction and assignment works. This is a
+// regression for where we were missing a valid copy constructor and had the
+// default (dangerous) move semantics takeover.
+TEST(HeaderMapImplTest, TestHeaderMapImplyCopy) {
+  TestHeaderMapImpl foo;
+  foo.addCopy(LowerCaseString("foo"), "bar");
+  auto headers = std::make_unique<TestHeaderMapImpl>(foo);
+  EXPECT_EQ("bar", headers->get(LowerCaseString("foo"))->value().getStringView());
+  TestHeaderMapImpl baz{{"foo", "baz"}};
+  baz = *headers;
+  EXPECT_EQ("bar", baz.get(LowerCaseString("foo"))->value().getStringView());
+  const TestHeaderMapImpl& baz2 = baz;
+  baz = baz2;
+  EXPECT_EQ("bar", baz.get(LowerCaseString("foo"))->value().getStringView());
 }
 
 } // namespace Http

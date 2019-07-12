@@ -1,4 +1,5 @@
 licenses(["notice"])  # Apache 2
+
 # Lua scripting L7 HTTP filter (https://www.lua.org/, http://luajit.org/)
 # Public docs: docs/root/configuration/http_filters/lua_filter.rst
 
@@ -21,6 +22,7 @@ envoy_cc_library(
         "//include/envoy/upstream:cluster_manager_interface",
         "//source/common/buffer:buffer_lib",
         "//source/common/common:enum_to_int",
+        "//source/common/crypto:utility_lib",
         "//source/common/http:message_lib",
         "//source/extensions/filters/common/lua:lua_lib",
         "//source/extensions/filters/common/lua:wrappers_lib",
@@ -34,7 +36,11 @@ envoy_cc_library(
     hdrs = ["wrappers.h"],
     deps = [
         "//include/envoy/http:header_map_interface",
+        "//include/envoy/stream_info:stream_info_interface",
+        "//source/common/crypto:utility_lib",
+        "//source/common/http:utility_lib",
         "//source/extensions/filters/common/lua:lua_lib",
+        "//source/extensions/filters/common/lua:wrappers_lib",
     ],
 )
 

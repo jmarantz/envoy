@@ -2,6 +2,7 @@
 
 #include <memory>
 
+#include "envoy/stats/store.h"
 #include "envoy/tracing/http_tracer.h"
 
 #include "common/common/logger.h"
@@ -32,14 +33,17 @@ public:
 
   // Tracing::Span
   void finishSpan() override;
-  void setOperation(const std::string& operation) override;
-  void setTag(const std::string& name, const std::string& value) override;
+  void setOperation(absl::string_view operation) override;
+  void setTag(absl::string_view name, const absl::string_view) override;
+  void log(SystemTime timestamp, const std::string& event) override;
   void injectContext(Http::HeaderMap& request_headers) override;
   Tracing::SpanPtr spawnChild(const Tracing::Config& config, const std::string& name,
                               SystemTime start_time) override;
+  void setSampled(bool) override;
 
 private:
   OpenTracingDriver& driver_;
+  opentracing::FinishSpanOptions finish_options_;
   std::unique_ptr<opentracing::Span> span_;
 };
 
@@ -74,7 +78,7 @@ public:
 private:
   OpenTracingTracerStats tracer_stats_;
 };
-}
+} // namespace Ot
 } // namespace Common
 } // namespace Tracers
 } // namespace Extensions

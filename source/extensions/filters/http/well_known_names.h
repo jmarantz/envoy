@@ -13,47 +13,63 @@ namespace HttpFilters {
 class HttpFilterNameValues {
 public:
   // Buffer filter
-  const std::string BUFFER = "envoy.buffer";
+  const std::string Buffer = "envoy.buffer";
   // CORS filter
-  const std::string CORS = "envoy.cors";
+  const std::string Cors = "envoy.cors";
+  // CSRF filter
+  const std::string Csrf = "envoy.csrf";
   // Dynamo filter
-  const std::string DYNAMO = "envoy.http_dynamo_filter";
+  const std::string Dynamo = "envoy.http_dynamo_filter";
   // Fault filter
-  const std::string FAULT = "envoy.fault";
+  const std::string Fault = "envoy.fault";
   // GRPC http1 bridge filter
-  const std::string GRPC_HTTP1_BRIDGE = "envoy.grpc_http1_bridge";
+  const std::string GrpcHttp1Bridge = "envoy.grpc_http1_bridge";
   // GRPC json transcoder filter
-  const std::string GRPC_JSON_TRANSCODER = "envoy.grpc_json_transcoder";
+  const std::string GrpcJsonTranscoder = "envoy.grpc_json_transcoder";
   // GRPC web filter
-  const std::string GRPC_WEB = "envoy.grpc_web";
+  const std::string GrpcWeb = "envoy.grpc_web";
+  // GRPC http1 reverse bridge filter
+  const std::string GrpcHttp1ReverseBridge = "envoy.filters.http.grpc_http1_reverse_bridge";
   // Gzip filter
-  const std::string ENVOY_GZIP = "envoy.gzip";
+  const std::string EnvoyGzip = "envoy.gzip";
   // IP tagging filter
-  const std::string IP_TAGGING = "envoy.ip_tagging";
+  const std::string IpTagging = "envoy.ip_tagging";
   // Rate limit filter
-  const std::string RATE_LIMIT = "envoy.rate_limit";
+  const std::string RateLimit = "envoy.rate_limit";
   // Router filter
-  const std::string ROUTER = "envoy.router";
+  const std::string Router = "envoy.router";
   // Health checking filter
-  const std::string HEALTH_CHECK = "envoy.health_check";
+  const std::string HealthCheck = "envoy.health_check";
   // Lua filter
-  const std::string LUA = "envoy.lua";
+  const std::string Lua = "envoy.lua";
   // Squash filter
-  const std::string SQUASH = "envoy.squash";
+  const std::string Squash = "envoy.squash";
   // External Authorization filter
-  const std::string EXT_AUTHORIZATION = "envoy.ext_authz";
+  const std::string ExtAuthorization = "envoy.ext_authz";
+  // RBAC HTTP Authorization filter
+  const std::string Rbac = "envoy.filters.http.rbac";
+  // JWT authentication filter
+  const std::string JwtAuthn = "envoy.filters.http.jwt_authn";
+  // Header to metadata filter
+  const std::string HeaderToMetadata = "envoy.filters.http.header_to_metadata";
+  // Tap filter
+  const std::string Tap = "envoy.filters.http.tap";
+  // Original Src Filter
+  const std::string OriginalSrc = "envoy.filters.http.original_src";
+  // Dynamic forward proxy filter
+  const std::string DynamicForwardProxy = "envoy.filters.http.dynamic_forward_proxy";
 
   // Converts names from v1 to v2
   const Config::V1Converter v1_converter_;
 
   // NOTE: Do not add any new filters to this list. All future filters are v2 only.
   HttpFilterNameValues()
-      : v1_converter_({BUFFER, CORS, DYNAMO, FAULT, GRPC_HTTP1_BRIDGE, GRPC_JSON_TRANSCODER,
-                       GRPC_WEB, HEALTH_CHECK, IP_TAGGING, RATE_LIMIT, ROUTER, LUA,
-                       EXT_AUTHORIZATION}) {}
+      : v1_converter_({Buffer, Cors, Dynamo, Fault, GrpcHttp1Bridge, GrpcJsonTranscoder, GrpcWeb,
+                       HeaderToMetadata, HealthCheck, IpTagging, RateLimit, Router, Lua,
+                       ExtAuthorization}) {}
 };
 
-typedef ConstSingleton<HttpFilterNameValues> HttpFilterNames;
+using HttpFilterNames = ConstSingleton<HttpFilterNameValues>;
 
 } // namespace HttpFilters
 } // namespace Extensions

@@ -12,16 +12,14 @@
 #include "common/common/assert.h"
 #include "common/common/fmt.h"
 #include "common/config/rds_json.h"
-#include "common/config/subscription_factory.h"
 #include "common/config/utility.h"
 #include "common/protobuf/utility.h"
 #include "common/router/config_impl.h"
-#include "common/router/rds_subscription.h"
 
 namespace Envoy {
 namespace Router {
 
-RouteConfigProviderSharedPtr RouteConfigProviderUtil::create(
+RouteConfigProviderPtr RouteConfigProviderUtil::create(
     const envoy::config::filter::network::http_connection_manager::v2::HttpConnectionManager&
         config,
     Server::Configuration::FactoryContext& factory_context, const std::string& stat_prefix,
@@ -29,116 +27,174 @@ RouteConfigProviderSharedPtr RouteConfigProviderUtil::create(
   switch (config.route_specifier_case()) {
   case envoy::config::filter::network::http_connection_manager::v2::HttpConnectionManager::
       kRouteConfig:
-    return route_config_provider_manager.getStaticRouteConfigProvider(config.route_config(),
-                                                                      factory_context);
+    return route_config_provider_manager.createStaticRouteConfigProvider(config.route_config(),
+                                                                         factory_context);
   case envoy::config::filter::network::http_connection_manager::v2::HttpConnectionManager::kRds:
-    return route_config_provider_manager.getRdsRouteConfigProvider(config.rds(), factory_context,
-                                                                   stat_prefix);
+    return route_config_provider_manager.createRdsRouteConfigProvider(config.rds(), factory_context,
+                                                                      stat_prefix);
   default:
-    NOT_REACHED;
+    NOT_REACHED_GCOVR_EXCL_LINE;
   }
 }
 
 StaticRouteConfigProviderImpl::StaticRouteConfigProviderImpl(
     const envoy::api::v2::RouteConfiguration& config,
-    Server::Configuration::FactoryContext& factory_context)
-    : config_(new ConfigImpl(config, factory_context, true)), route_config_proto_{config} {}
-
-// TODO(htuch): If support for multiple clusters is added per #1170 cluster_name_
-// initialization needs to be fixed.
-RdsRouteConfigProviderImpl::RdsRouteConfigProviderImpl(
-    const envoy::config::filter::network::http_connection_manager::v2::Rds& rds,
-    const std::string& manager_identifier, Server::Configuration::FactoryContext& factory_context,
-    const std::string& stat_prefix, RouteConfigProviderManagerImpl& route_config_provider_manager)
-    : factory_context_(factory_context), tls_(factory_context.threadLocal().allocateSlot()),
-      route_config_name_(rds.route_config_name()),
-      scope_(factory_context.scope().createScope(stat_prefix + "rds." + route_config_name_ + ".")),
-      stats_({ALL_RDS_STATS(POOL_COUNTER(*scope_))}),
-      route_config_provider_manager_(route_config_provider_manager),
-      manager_identifier_(manager_identifier) {
-  ::Envoy::Config::Utility::checkLocalInfo("rds", factory_context.localInfo());
-
-  ConfigConstSharedPtr initial_config(new NullConfigImpl());
-  tls_->set([initial_config](Event::Dispatcher&) -> ThreadLocal::ThreadLocalObjectSharedPtr {
-    return std::make_shared<ThreadLocalConfig>(initial_config);
-  });
-  subscription_ = Envoy::Config::SubscriptionFactory::subscriptionFromConfigSource<
-      envoy::api::v2::RouteConfiguration>(
-      rds.config_source(), factory_context.localInfo().node(), factory_context.dispatcher(),
-      factory_context.clusterManager(), factory_context.random(), *scope_,
-      [this, &rds,
-       &factory_context]() -> Envoy::Config::Subscription<envoy::api::v2::RouteConfiguration>* {
-        return new RdsSubscription(Envoy::Config::Utility::generateStats(*scope_), rds,
-                                   factory_context.clusterManager(), factory_context.dispatcher(),
-                                   factory_context.random(), factory_context.localInfo());
-      },
-      "envoy.api.v2.RouteDiscoveryService.FetchRoutes",
-      "envoy.api.v2.RouteDiscoveryService.StreamRoutes");
-  config_source_ = MessageUtil::getJsonStringFromMessage(rds.config_source(), true);
+    Server::Configuration::FactoryContext& factory_context,
+    RouteConfigProviderManagerImpl& route_config_provider_manager)
+    : config_(new ConfigImpl(config, factory_context, true)), route_config_proto_{config},
+      last_updated_(factory_context.timeSource().systemTime()),
+      route_config_provider_manager_(route_config_provider_manager) {
+  route_config_provider_manager_.static_route_config_providers_.insert(this);
 }
 
-RdsRouteConfigProviderImpl::~RdsRouteConfigProviderImpl() {
+StaticRouteConfigProviderImpl::~StaticRouteConfigProviderImpl() {
+  route_config_provider_manager_.static_route_config_providers_.erase(this);
+}
+
+// TODO(htuch): If support for multiple clusters is added per #1170 cluster_name_
+RdsRouteConfigSubscription::RdsRouteConfigSubscription(
+    const envoy::config::filter::network::http_connection_manager::v2::Rds& rds,
+    const uint64_t manager_identifier, Server::Configuration::FactoryContext& factory_context,
+    const std::string& stat_prefix,
+    Envoy::Router::RouteConfigProviderManagerImpl& route_config_provider_manager)
+    : route_config_name_(rds.route_config_name()), factory_context_(factory_context),
+      init_target_(fmt::format("RdsRouteConfigSubscription {}", route_config_name_),
+                   [this]() { subscription_->start({route_config_name_}); }),
+      scope_(factory_context.scope().createScope(stat_prefix + "rds." + route_config_name_ + ".")),
+      stat_prefix_(stat_prefix), stats_({ALL_RDS_STATS(POOL_COUNTER(*scope_))}),
+      route_config_provider_manager_(route_config_provider_manager),
+      manager_identifier_(manager_identifier),
+      validation_visitor_(factory_context_.messageValidationVisitor()) {
+  subscription_ =
+      factory_context.clusterManager().subscriptionFactory().subscriptionFromConfigSource(
+          rds.config_source(),
+          Grpc::Common::typeUrl(envoy::api::v2::RouteConfiguration().GetDescriptor()->full_name()),
+          *scope_, *this);
+
+  config_update_info_ = std::make_unique<RouteConfigUpdateReceiverImpl>(
+      factory_context.timeSource(), factory_context.messageValidationVisitor());
+}
+
+RdsRouteConfigSubscription::~RdsRouteConfigSubscription() {
   // If we get destroyed during initialization, make sure we signal that we "initialized".
-  runInitializeCallbackIfAny();
+  init_target_.ready();
 
   // The ownership of RdsRouteConfigProviderImpl is shared among all HttpConnectionManagers that
   // hold a shared_ptr to it. The RouteConfigProviderManager holds weak_ptrs to the
   // RdsRouteConfigProviders. Therefore, the map entry for the RdsRouteConfigProvider has to get
   // cleaned by the RdsRouteConfigProvider's destructor.
-  route_config_provider_manager_.route_config_providers_.erase(manager_identifier_);
+  route_config_provider_manager_.route_config_subscriptions_.erase(manager_identifier_);
+}
+
+void RdsRouteConfigSubscription::onConfigUpdate(
+    const Protobuf::RepeatedPtrField<ProtobufWkt::Any>& resources,
+    const std::string& version_info) {
+  if (!validateUpdateSize(resources.size())) {
+    return;
+  }
+  auto route_config = MessageUtil::anyConvert<envoy::api::v2::RouteConfiguration>(
+      resources[0], validation_visitor_);
+  MessageUtil::validate(route_config);
+  if (route_config.name() != route_config_name_) {
+    throw EnvoyException(fmt::format("Unexpected RDS configuration (expecting {}): {}",
+                                     route_config_name_, route_config.name()));
+  }
+
+  if (config_update_info_->onRdsUpdate(route_config, version_info)) {
+    stats_.config_reload_.inc();
+
+    if (config_update_info_->routeConfiguration().has_vhds()) {
+      ENVOY_LOG(debug, "rds: vhds configuration present, starting vhds: config_name={} hash={}",
+                route_config_name_, config_update_info_->configHash());
+      // TODO(dmitri-d): It's unsafe to depend directly on factory context here,
+      // the listener might have been torn down, need to remove this.
+      vhds_subscription_ = std::make_unique<VhdsSubscription>(
+          config_update_info_, factory_context_, stat_prefix_, route_config_providers_);
+      vhds_subscription_->registerInitTargetWithInitManager(factory_context_.initManager());
+    } else {
+      ENVOY_LOG(debug, "rds: loading new configuration: config_name={} hash={}", route_config_name_,
+                config_update_info_->configHash());
+
+      for (auto* provider : route_config_providers_) {
+        provider->onConfigUpdate();
+      }
+      vhds_subscription_.release();
+    }
+  }
+
+  init_target_.ready();
+}
+
+void RdsRouteConfigSubscription::onConfigUpdate(
+    const Protobuf::RepeatedPtrField<envoy::api::v2::Resource>& added_resources,
+    const Protobuf::RepeatedPtrField<std::string>& removed_resources, const std::string&) {
+  if (!removed_resources.empty()) {
+    // TODO(#2500) when on-demand resource loading is supported, an RDS removal may make sense (see
+    // discussion in #6879), and so we should do something other than ignoring here.
+    ENVOY_LOG(
+        error,
+        "Server sent a delta RDS update attempting to remove a resource (name: {}). Ignoring.",
+        removed_resources[0]);
+  }
+  if (!added_resources.empty()) {
+    Protobuf::RepeatedPtrField<ProtobufWkt::Any> unwrapped_resource;
+    *unwrapped_resource.Add() = added_resources[0].resource();
+    onConfigUpdate(unwrapped_resource, added_resources[0].version());
+  }
+}
+
+void RdsRouteConfigSubscription::onConfigUpdateFailed(const EnvoyException*) {
+  // We need to allow server startup to continue, even if we have a bad
+  // config.
+  init_target_.ready();
+}
+
+bool RdsRouteConfigSubscription::validateUpdateSize(int num_resources) {
+  if (num_resources == 0) {
+    ENVOY_LOG(debug, "Missing RouteConfiguration for {} in onConfigUpdate()", route_config_name_);
+    stats_.update_empty_.inc();
+    init_target_.ready();
+    return false;
+  }
+  if (num_resources != 1) {
+    throw EnvoyException(fmt::format("Unexpected RDS resource length: {}", num_resources));
+    // (would be a return false here)
+  }
+  return true;
+}
+
+RdsRouteConfigProviderImpl::RdsRouteConfigProviderImpl(
+    RdsRouteConfigSubscriptionSharedPtr&& subscription,
+    Server::Configuration::FactoryContext& factory_context)
+    : subscription_(std::move(subscription)),
+      config_update_info_(subscription_->routeConfigUpdate()), factory_context_(factory_context),
+      tls_(factory_context.threadLocal().allocateSlot()) {
+  ConfigConstSharedPtr initial_config;
+  if (config_update_info_->configInfo().has_value()) {
+    initial_config = std::make_shared<ConfigImpl>(config_update_info_->routeConfiguration(),
+                                                  factory_context_, false);
+  } else {
+    initial_config = std::make_shared<NullConfigImpl>();
+  }
+  tls_->set([initial_config](Event::Dispatcher&) -> ThreadLocal::ThreadLocalObjectSharedPtr {
+    return std::make_shared<ThreadLocalConfig>(initial_config);
+  });
+  subscription_->routeConfigProviders().insert(this);
+}
+
+RdsRouteConfigProviderImpl::~RdsRouteConfigProviderImpl() {
+  subscription_->routeConfigProviders().erase(this);
 }
 
 Router::ConfigConstSharedPtr RdsRouteConfigProviderImpl::config() {
   return tls_->getTyped<ThreadLocalConfig>().config_;
 }
 
-void RdsRouteConfigProviderImpl::onConfigUpdate(const ResourceVector& resources,
-                                                const std::string& version_info) {
-  if (resources.empty()) {
-    ENVOY_LOG(debug, "Missing RouteConfiguration for {} in onConfigUpdate()", route_config_name_);
-    stats_.update_empty_.inc();
-    runInitializeCallbackIfAny();
-    return;
-  }
-  if (resources.size() != 1) {
-    throw EnvoyException(fmt::format("Unexpected RDS resource length: {}", resources.size()));
-  }
-  const auto& route_config = resources[0];
-  MessageUtil::validate(route_config);
-  // TODO(PiotrSikora): Remove this hack once fixed internally.
-  if (!(route_config.name() == route_config_name_)) {
-    throw EnvoyException(fmt::format("Unexpected RDS configuration (expecting {}): {}",
-                                     route_config_name_, route_config.name()));
-  }
-  const uint64_t new_hash = MessageUtil::hash(route_config);
-  if (!config_info_ || new_hash != config_info_.value().last_config_hash_) {
-    ConfigConstSharedPtr new_config(new ConfigImpl(route_config, factory_context_, false));
-    config_info_ = {new_hash, version_info};
-    stats_.config_reload_.inc();
-    ENVOY_LOG(debug, "rds: loading new configuration: config_name={} hash={}", route_config_name_,
-              new_hash);
-    tls_->runOnAllThreads(
-        [this, new_config]() -> void { tls_->getTyped<ThreadLocalConfig>().config_ = new_config; });
-    route_config_proto_ = route_config;
-  }
-  runInitializeCallbackIfAny();
-}
-
-void RdsRouteConfigProviderImpl::onConfigUpdateFailed(const EnvoyException*) {
-  // We need to allow server startup to continue, even if we have a bad
-  // config.
-  runInitializeCallbackIfAny();
-}
-
-void RdsRouteConfigProviderImpl::runInitializeCallbackIfAny() {
-  if (initialize_callback_) {
-    initialize_callback_();
-    initialize_callback_ = nullptr;
-  }
-}
-
-void RdsRouteConfigProviderImpl::registerInitTarget(Init::Manager& init_manager) {
-  init_manager.registerTarget(*this);
+void RdsRouteConfigProviderImpl::onConfigUpdate() {
+  ConfigConstSharedPtr new_config(
+      new ConfigImpl(config_update_info_->routeConfiguration(), factory_context_, false));
+  tls_->runOnAllThreads(
+      [this, new_config]() -> void { tls_->getTyped<ThreadLocalConfig>().config_ = new_config; });
 }
 
 RouteConfigProviderManagerImpl::RouteConfigProviderManagerImpl(Server::Admin& admin) {
@@ -146,101 +202,82 @@ RouteConfigProviderManagerImpl::RouteConfigProviderManagerImpl(Server::Admin& ad
       admin.getConfigTracker().add("routes", [this] { return dumpRouteConfigs(); });
   // ConfigTracker keys must be unique. We are asserting that no one has stolen the "routes" key
   // from us, since the returned entry will be nullptr if the key already exists.
-  RELEASE_ASSERT(config_tracker_entry_);
+  RELEASE_ASSERT(config_tracker_entry_, "");
 }
 
-std::vector<RouteConfigProviderSharedPtr>
-RouteConfigProviderManagerImpl::getRdsRouteConfigProviders() {
-  std::vector<RouteConfigProviderSharedPtr> ret;
-  ret.reserve(route_config_providers_.size());
-  for (const auto& element : route_config_providers_) {
-    // Because the RouteConfigProviderManager's weak_ptrs only get cleaned up
-    // in the RdsRouteConfigProviderImpl destructor, and the single threaded nature
-    // of this code, locking the weak_ptr will not fail.
-    RouteConfigProviderSharedPtr provider = element.second.lock();
-    ASSERT(provider);
-    ret.push_back(provider);
-  }
-  return ret;
-};
-
-std::vector<RouteConfigProviderSharedPtr>
-RouteConfigProviderManagerImpl::getStaticRouteConfigProviders() {
-  std::vector<RouteConfigProviderSharedPtr> providers_strong;
-  // Collect non-expired providers.
-  for (const auto& weak_provider : static_route_config_providers_) {
-    const auto strong_provider = weak_provider.lock();
-    if (strong_provider != nullptr) {
-      providers_strong.push_back(strong_provider);
-    }
-  }
-
-  // Replace our stored list of weak_ptrs with the filtered list.
-  static_route_config_providers_.assign(providers_strong.begin(), providers_strong.end());
-
-  return providers_strong;
-};
-
-Router::RouteConfigProviderSharedPtr RouteConfigProviderManagerImpl::getRdsRouteConfigProvider(
+Router::RouteConfigProviderPtr RouteConfigProviderManagerImpl::createRdsRouteConfigProvider(
     const envoy::config::filter::network::http_connection_manager::v2::Rds& rds,
     Server::Configuration::FactoryContext& factory_context, const std::string& stat_prefix) {
 
-  // RdsRouteConfigProviders are unique based on their serialized RDS config.
-  // TODO(htuch): Full serialization here gives large IDs, could get away with a
-  // strong hash instead.
-  const std::string manager_identifier = rds.SerializeAsString();
+  // RdsRouteConfigSubscriptions are unique based on their serialized RDS config.
+  const uint64_t manager_identifier = MessageUtil::hash(rds);
 
-  auto it = route_config_providers_.find(manager_identifier);
-  if (it == route_config_providers_.end()) {
+  RdsRouteConfigSubscriptionSharedPtr subscription;
+
+  auto it = route_config_subscriptions_.find(manager_identifier);
+  if (it == route_config_subscriptions_.end()) {
     // std::make_shared does not work for classes with private constructors. There are ways
     // around it. However, since this is not a performance critical path we err on the side
     // of simplicity.
-    std::shared_ptr<RdsRouteConfigProviderImpl> new_provider{new RdsRouteConfigProviderImpl(
-        rds, manager_identifier, factory_context, stat_prefix, *this)};
+    subscription.reset(new RdsRouteConfigSubscription(rds, manager_identifier, factory_context,
+                                                      stat_prefix, *this));
 
-    new_provider->registerInitTarget(factory_context.initManager());
+    factory_context.initManager().add(subscription->init_target_);
 
-    route_config_providers_.insert({manager_identifier, new_provider});
-
-    return new_provider;
+    route_config_subscriptions_.insert({manager_identifier, subscription});
+  } else {
+    // Because the RouteConfigProviderManager's weak_ptrs only get cleaned up
+    // in the RdsRouteConfigSubscription destructor, and the single threaded nature
+    // of this code, locking the weak_ptr will not fail.
+    subscription = it->second.lock();
   }
+  ASSERT(subscription);
 
-  // Because the RouteConfigProviderManager's weak_ptrs only get cleaned up
-  // in the RdsRouteConfigProviderImpl destructor, and the single threaded nature
-  // of this code, locking the weak_ptr will not fail.
-  Router::RouteConfigProviderSharedPtr new_provider = it->second.lock();
-  ASSERT(new_provider);
+  Router::RouteConfigProviderPtr new_provider{
+      new RdsRouteConfigProviderImpl(std::move(subscription), factory_context)};
   return new_provider;
-};
+}
 
-RouteConfigProviderSharedPtr RouteConfigProviderManagerImpl::getStaticRouteConfigProvider(
+RouteConfigProviderPtr RouteConfigProviderManagerImpl::createStaticRouteConfigProvider(
     const envoy::api::v2::RouteConfiguration& route_config,
     Server::Configuration::FactoryContext& factory_context) {
   auto provider =
-      std::make_shared<StaticRouteConfigProviderImpl>(std::move(route_config), factory_context);
-  static_route_config_providers_.push_back(provider);
+      std::make_unique<StaticRouteConfigProviderImpl>(route_config, factory_context, *this);
+  static_route_config_providers_.insert(provider.get());
   return provider;
 }
 
-ProtobufTypes::MessagePtr RouteConfigProviderManagerImpl::dumpRouteConfigs() {
+std::unique_ptr<envoy::admin::v2alpha::RoutesConfigDump>
+RouteConfigProviderManagerImpl::dumpRouteConfigs() const {
   auto config_dump = std::make_unique<envoy::admin::v2alpha::RoutesConfigDump>();
 
-  for (const auto& provider : getRdsRouteConfigProviders()) {
-    auto config_info = provider->configInfo();
-    if (config_info) {
+  for (const auto& element : route_config_subscriptions_) {
+    // Because the RouteConfigProviderManager's weak_ptrs only get cleaned up
+    // in the RdsRouteConfigSubscription destructor, and the single threaded nature
+    // of this code, locking the weak_ptr will not fail.
+    auto subscription = element.second.lock();
+    ASSERT(subscription);
+    ASSERT(!subscription->route_config_providers_.empty());
+
+    if (subscription->routeConfigUpdate()->configInfo()) {
       auto* dynamic_config = config_dump->mutable_dynamic_route_configs()->Add();
-      dynamic_config->set_version_info(config_info.value().version_);
-      dynamic_config->mutable_route_config()->MergeFrom(config_info.value().config_);
+      dynamic_config->set_version_info(subscription->routeConfigUpdate()->configVersion());
+      dynamic_config->mutable_route_config()->MergeFrom(
+          subscription->routeConfigUpdate()->routeConfiguration());
+      TimestampUtil::systemClockToTimestamp(subscription->routeConfigUpdate()->lastUpdated(),
+                                            *dynamic_config->mutable_last_updated());
     }
   }
 
-  for (const auto& provider : getStaticRouteConfigProviders()) {
+  for (const auto& provider : static_route_config_providers_) {
     ASSERT(provider->configInfo());
-    config_dump->mutable_static_route_configs()->Add()->MergeFrom(
-        provider->configInfo().value().config_);
+    auto* static_config = config_dump->mutable_static_route_configs()->Add();
+    static_config->mutable_route_config()->MergeFrom(provider->configInfo().value().config_);
+    TimestampUtil::systemClockToTimestamp(provider->lastUpdated(),
+                                          *static_config->mutable_last_updated());
   }
 
-  return ProtobufTypes::MessagePtr{std::move(config_dump)};
+  return config_dump;
 }
 
 } // namespace Router

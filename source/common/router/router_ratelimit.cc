@@ -40,7 +40,8 @@ bool RequestHeadersAction::populateDescriptor(const Router::RouteEntry&,
     return false;
   }
 
-  descriptor.entries_.push_back({descriptor_key_, header_value->value().c_str()});
+  descriptor.entries_.push_back(
+      {descriptor_key_, std::string(header_value->value().getStringView())});
   return true;
 }
 
@@ -108,7 +109,7 @@ RateLimitPolicyEntryImpl::RateLimitPolicyEntryImpl(const envoy::api::v2::route::
       actions_.emplace_back(new HeaderValueMatchAction(action.header_value_match()));
       break;
     default:
-      NOT_REACHED;
+      NOT_REACHED_GCOVR_EXCL_LINE;
     }
   }
 }

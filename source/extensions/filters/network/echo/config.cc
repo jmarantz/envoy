@@ -34,15 +34,13 @@ public:
     return ProtobufTypes::MessagePtr{new Envoy::ProtobufWkt::Empty()};
   }
 
-  std::string name() override { return NetworkFilterNames::get().ECHO; }
+  std::string name() override { return NetworkFilterNames::get().Echo; }
 };
 
 /**
  * Static registration for the echo filter. @see RegisterFactory.
  */
-static Registry::RegisterFactory<EchoConfigFactory,
-                                 Server::Configuration::NamedNetworkFilterConfigFactory>
-    registered_;
+REGISTER_FACTORY(EchoConfigFactory, Server::Configuration::NamedNetworkFilterConfigFactory);
 
 } // namespace Echo
 } // namespace NetworkFilters

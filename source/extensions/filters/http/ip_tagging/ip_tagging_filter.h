@@ -9,6 +9,7 @@
 #include "envoy/config/filter/http/ip_tagging/v2/ip_tagging.pb.h"
 #include "envoy/http/filter.h"
 #include "envoy/runtime/runtime.h"
+#include "envoy/stats/scope.h"
 
 #include "common/network/cidr_range.h"
 #include "common/network/lc_trie.h"
@@ -66,13 +67,13 @@ public:
       ip_tag_pair.second = cidr_set;
       tag_data.emplace_back(ip_tag_pair);
     }
-    trie_.reset(new Network::LcTrie::LcTrie(tag_data));
+    trie_ = std::make_unique<Network::LcTrie::LcTrie<std::string>>(tag_data);
   }
 
   Runtime::Loader& runtime() { return runtime_; }
   Stats::Scope& scope() { return scope_; }
   FilterRequestType requestType() const { return request_type_; }
-  const Network::LcTrie::LcTrie& trie() const { return *trie_; }
+  const Network::LcTrie::LcTrie<std::string>& trie() const { return *trie_; }
   const std::string& statsPrefix() const { return stats_prefix_; }
 
 private:
@@ -86,7 +87,7 @@ private:
     case envoy::config::filter::http::ip_tagging::v2::IPTagging_RequestType_EXTERNAL:
       return FilterRequestType::EXTERNAL;
     default:
-      NOT_REACHED;
+      NOT_REACHED_GCOVR_EXCL_LINE;
     }
   }
 
@@ -94,10 +95,10 @@ private:
   Stats::Scope& scope_;
   Runtime::Loader& runtime_;
   const std::string stats_prefix_;
-  std::unique_ptr<Network::LcTrie::LcTrie> trie_;
+  std::unique_ptr<Network::LcTrie::LcTrie<std::string>> trie_;
 };
 
-typedef std::shared_ptr<IpTaggingFilterConfig> IpTaggingFilterConfigSharedPtr;
+using IpTaggingFilterConfigSharedPtr = std::shared_ptr<IpTaggingFilterConfig>;
 
 /**
  * A filter that gets all tags associated with a request's downstream remote address and

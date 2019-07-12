@@ -1,5 +1,6 @@
 #pragma once
 
+#include "envoy/api/api.h"
 #include "envoy/api/v2/core/base.pb.h"
 #include "envoy/config/bootstrap/v2/bootstrap.pb.h"
 #include "envoy/config/filter/network/http_connection_manager/v2/http_connection_manager.pb.h"
@@ -8,7 +9,10 @@
 #include "envoy/json/json_object.h"
 #include "envoy/local_info/local_info.h"
 #include "envoy/registry/registry.h"
-#include "envoy/stats/stats.h"
+#include "envoy/server/filter_config.h"
+#include "envoy/stats/scope.h"
+#include "envoy/stats/stats_matcher.h"
+#include "envoy/stats/tag_producer.h"
 #include "envoy/upstream/cluster_manager.h"
 
 #include "common/common/assert.h"
@@ -27,34 +31,32 @@ namespace Config {
  */
 class ApiTypeValues {
 public:
-  const std::string RestLegacy{"REST_LEGACY"};
+  const std::string UnsupportedRestLegacy{"REST_LEGACY"};
   const std::string Rest{"REST"};
   const std::string Grpc{"GRPC"};
 };
 
-typedef ConstSingleton<ApiTypeValues> ApiType;
+/**
+ * RateLimitSettings for discovery requests.
+ */
+struct RateLimitSettings {
+  // Default Max Tokens.
+  static const uint32_t DefaultMaxTokens = 100;
+  // Default Fill Rate.
+  static constexpr double DefaultFillRate = 10;
+
+  uint32_t max_tokens_{DefaultMaxTokens};
+  double fill_rate_{DefaultFillRate};
+  bool enabled_{false};
+};
+
+using ApiType = ConstSingleton<ApiTypeValues>;
 
 /**
  * General config API utilities.
  */
 class Utility {
 public:
-  /**
-   * Extract typed resources from a DiscoveryResponse.
-   * @param response reference to DiscoveryResponse.
-   * @return Protobuf::RepatedPtrField<ResourceType> vector of typed resources in response.
-   */
-  template <class ResourceType>
-  static Protobuf::RepeatedPtrField<ResourceType>
-  getTypedResources(const envoy::api::v2::DiscoveryResponse& response) {
-    Protobuf::RepeatedPtrField<ResourceType> typed_resources;
-    for (const auto& resource : response.resources()) {
-      auto* typed_resource = typed_resources.Add();
-      resource.UnpackTo(typed_resource);
-    }
-    return typed_resources;
-  }
-
   /**
    * Legacy APIs uses JSON and do not have an explicit version.
    * @param input the input to hash.
@@ -75,6 +77,22 @@ public:
   apiConfigSourceRefreshDelay(const envoy::api::v2::core::ApiConfigSource& api_config_source);
 
   /**
+   * Extract request_timeout as a std::chrono::milliseconds from
+   * envoy::api::v2::core::ApiConfigSource. If request_timeout isn't set in the config source, a
+   * default value of 1s will be returned.
+   */
+  static std::chrono::milliseconds
+  apiConfigSourceRequestTimeout(const envoy::api::v2::core::ApiConfigSource& api_config_source);
+
+  /**
+   * Extract initial_fetch_timeout as a std::chrono::milliseconds from
+   * envoy::api::v2::core::ConfigSource. If request_timeout isn't set in the config source, a
+   * default value of 0s will be returned.
+   */
+  static std::chrono::milliseconds
+  configSourceInitialFetchTimeout(const envoy::api::v2::core::ConfigSource& config_source);
+
+  /**
    * Populate an envoy::api::v2::core::ApiConfigSource.
    * @param cluster supplies the cluster name for the ApiConfigSource.
    * @param refresh_delay_ms supplies the refresh delay for the ApiConfigSource in ms.
@@ -92,7 +110,7 @@ public:
    * @param cluster_name supplies the cluster name to check.
    * @param cm supplies the cluster manager.
    */
-  static void checkCluster(const std::string& error_prefix, const std::string& cluster_name,
+  static void checkCluster(absl::string_view error_prefix, absl::string_view cluster_name,
                            Upstream::ClusterManager& cm);
 
   /**
@@ -102,9 +120,8 @@ public:
    * @param cm supplies the cluster manager.
    * @param local_info supplies the local info.
    */
-  static void checkClusterAndLocalInfo(const std::string& error_prefix,
-                                       const std::string& cluster_name,
-                                       Upstream::ClusterManager& cm,
+  static void checkClusterAndLocalInfo(absl::string_view error_prefix,
+                                       absl::string_view cluster_name, Upstream::ClusterManager& cm,
                                        const LocalInfo::LocalInfo& local_info);
 
   /**
@@ -112,14 +129,15 @@ public:
    * @param error_prefix supplies the prefix to use in error messages.
    * @param local_info supplies the local info.
    */
-  static void checkLocalInfo(const std::string& error_prefix,
+  static void checkLocalInfo(absl::string_view error_prefix,
                              const LocalInfo::LocalInfo& local_info);
 
   /**
    * Check the existence of a path for a filesystem subscription. Throws on error.
    * @param path the path to validate.
+   * @param api reference to the Api object
    */
-  static void checkFilesystemSubscriptionBackingPath(const std::string& path);
+  static void checkFilesystemSubscriptionBackingPath(const std::string& path, Api::Api& api);
 
   /**
    * Check the grpc_services and cluster_names for API config sanity. Throws on error.
@@ -150,22 +168,6 @@ public:
       const envoy::api::v2::core::ApiConfigSource& api_config_source);
 
   /**
-   * Convert a v1 SDS JSON config to v2 EDS envoy::api::v2::core::ConfigSource.
-   * @param json_config source v1 SDS JSON config.
-   * @param eds_config destination v2 EDS envoy::api::v2::core::ConfigSource.
-   */
-  static void translateEdsConfig(const Json::Object& json_config,
-                                 envoy::api::v2::core::ConfigSource& eds_config);
-
-  /**
-   * Convert a v1 CDS JSON config to v2 CDS envoy::api::v2::core::ConfigSource.
-   * @param json_config source v1 CDS JSON config.
-   * @param cds_config destination v2 CDS envoy::api::v2::core::ConfigSource.
-   */
-  static void translateCdsConfig(const Json::Object& json_config,
-                                 envoy::api::v2::core::ConfigSource& cds_config);
-
-  /**
    * Convert a v1 RDS JSON config to v2 RDS
    * envoy::config::filter::network::http_connection_manager::v2::Rds.
    * @param json_rds source v1 RDS JSON config.
@@ -176,12 +178,12 @@ public:
                      envoy::config::filter::network::http_connection_manager::v2::Rds& rds);
 
   /**
-   * Convert a v1 LDS JSON config to v2 LDS envoy::api::v2::core::ConfigSource.
-   * @param json_lds source v1 LDS JSON config.
-   * @param lds_config destination v2 LDS envoy::api::v2::core::ConfigSource.
+   * Parses RateLimit configuration from envoy::api::v2::core::ApiConfigSource to RateLimitSettings.
+   * @param api_config_source ApiConfigSource.
+   * @return RateLimitSettings.
    */
-  static void translateLdsConfig(const Json::Object& json_lds,
-                                 envoy::api::v2::core::ConfigSource& lds_config);
+  static RateLimitSettings
+  parseRateLimitSettings(const envoy::api::v2::core::ApiConfigSource& api_config_source);
 
   /**
    * Generate a SubscriptionStats object from stats scope.
@@ -198,7 +200,7 @@ public:
    * @param name string identifier for the particular implementation. Note: this is a proto string
    * because it is assumed that this value will be pulled directly from the configuration proto.
    */
-  template <class Factory> static Factory& getAndCheckFactory(const ProtobufTypes::String& name) {
+  template <class Factory> static Factory& getAndCheckFactory(const std::string& name) {
     if (name.empty()) {
       throw EnvoyException("Provided name for static registration lookup was empty.");
     }
@@ -218,42 +220,23 @@ public:
    * @param enclosing_message proto that contains a field 'config'. Note: the enclosing proto is
    * provided because for statically registered implementations, a custom config is generally
    * optional, which means the conversion must be done conditionally.
+   * @param validation_visitor message validation visitor instance.
    * @param factory implementation factory with the method 'createEmptyConfigProto' to produce a
    * proto to be filled with the translated configuration.
    */
   template <class ProtoMessage, class Factory>
-  static ProtobufTypes::MessagePtr translateToFactoryConfig(const ProtoMessage& enclosing_message,
-                                                            Factory& factory) {
+  static ProtobufTypes::MessagePtr
+  translateToFactoryConfig(const ProtoMessage& enclosing_message,
+                           ProtobufMessage::ValidationVisitor& validation_visitor,
+                           Factory& factory) {
     ProtobufTypes::MessagePtr config = factory.createEmptyConfigProto();
 
     // Fail in an obvious way if a plugin does not return a proto.
-    RELEASE_ASSERT(config != nullptr);
+    RELEASE_ASSERT(config != nullptr, "");
 
-    if (enclosing_message.has_config()) {
-      MessageUtil::jsonConvert(enclosing_message.config(), *config);
-    }
+    translateOpaqueConfig(enclosing_message.typed_config(), enclosing_message.config(),
+                          validation_visitor, *config);
 
-    return config;
-  }
-
-  /**
-   * Translate a nested config into a route-specific proto message provided by
-   * the implementation factory.
-   * @param source a message that contains the opaque config for the given factory's route-local
-   *        configuration.
-   * @param factory implementation factory with the method
-   *        'createEmptyRouteConfigProto' to produce a proto to be filled with
-   *        the translated configuration.
-   */
-  template <class Factory>
-  static ProtobufTypes::MessagePtr translateToFactoryRouteConfig(const Protobuf::Message& source,
-                                                                 Factory& factory) {
-    ProtobufTypes::MessagePtr config = factory.createEmptyRouteConfigProto();
-
-    // Fail in an obvious way if a plugin does not return a proto.
-    RELEASE_ASSERT(config != nullptr);
-
-    MessageUtil::jsonConvert(source, *config);
     return config;
   }
 
@@ -267,12 +250,10 @@ public:
   createTagProducer(const envoy::config::bootstrap::v2::Bootstrap& bootstrap);
 
   /**
-   * Check user supplied name in RDS/CDS/LDS for sanity.
-   * It should be within the configured length limit. Throws on error.
-   * @param error_prefix supplies the prefix to use in error messages.
-   * @param name supplies the name to check for length limits.
+   * Create StatsMatcher instance.
    */
-  static void checkObjNameLength(const std::string& error_prefix, const std::string& name);
+  static Stats::StatsMatcherPtr
+  createStatsMatcher(const envoy::config::bootstrap::v2::Bootstrap& bootstrap);
 
   /**
    * Obtain gRPC async client factory from a envoy::api::v2::core::ApiConfigSource.
@@ -284,6 +265,32 @@ public:
   factoryForGrpcApiConfigSource(Grpc::AsyncClientManager& async_client_manager,
                                 const envoy::api::v2::core::ApiConfigSource& api_config_source,
                                 Stats::Scope& scope);
+
+  /**
+   * Translate a set of cluster's hosts into a load assignment configuration.
+   * @param hosts cluster's list of hosts.
+   * @return envoy::api::v2::ClusterLoadAssignment a load assignment configuration.
+   */
+  static envoy::api::v2::ClusterLoadAssignment
+  translateClusterHosts(const Protobuf::RepeatedPtrField<envoy::api::v2::core::Address>& hosts);
+
+  /**
+   * Translate opaque config from google.protobuf.Any or google.protobuf.Struct to defined proto
+   * message.
+   * @param typed_config opaque config packed in google.protobuf.Any
+   * @param config the deprecated google.protobuf.Struct config, empty struct if doesn't exist.
+   * @param validation_visitor message validation visitor instance.
+   * @param out_proto the proto message instantiated by extensions
+   */
+  static void translateOpaqueConfig(const ProtobufWkt::Any& typed_config,
+                                    const ProtobufWkt::Struct& config,
+                                    ProtobufMessage::ValidationVisitor& validation_visitor,
+                                    Protobuf::Message& out_proto);
+
+  /**
+   * Return whether v1-style JSON filter config loading is allowed via 'deprecated_v1: true'.
+   */
+  static bool allowDeprecatedV1Config(Runtime::Loader& runtime, const Json::Object& config);
 };
 
 } // namespace Config

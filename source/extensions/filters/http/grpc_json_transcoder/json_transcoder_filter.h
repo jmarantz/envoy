@@ -1,5 +1,6 @@
 #pragma once
 
+#include "envoy/api/api.h"
 #include "envoy/buffer/buffer.h"
 #include "envoy/config/filter/http/transcoder/v2/transcoder.pb.h"
 #include "envoy/http/filter.h"
@@ -7,6 +8,7 @@
 #include "envoy/json/json_object.h"
 
 #include "common/common/logger.h"
+#include "common/grpc/codec.h"
 #include "common/protobuf/protobuf.h"
 
 #include "extensions/filters/http/grpc_json_transcoder/transcoder_input_stream_impl.h"
@@ -33,9 +35,9 @@ struct VariableBinding {
   // The location of the field in the protobuf message, where the value
   // needs to be inserted, e.g. "shelf.theme" would mean the "theme" field
   // of the nested "shelf" message of the request protobuf message.
-  std::vector<ProtobufTypes::String> field_path;
+  std::vector<std::string> field_path;
   // The value to be inserted.
-  ProtobufTypes::String value;
+  std::string value;
 };
 
 /**
@@ -48,7 +50,8 @@ public:
    * and construct a path matcher for HTTP path bindings.
    */
   JsonTranscoderConfig(
-      const envoy::config::filter::http::transcoder::v2::GrpcJsonTranscoder& proto_config);
+      const envoy::config::filter::http::transcoder::v2::GrpcJsonTranscoder& proto_config,
+      Api::Api& api);
 
   /**
    * Create an instance of Transcoder interface based on incoming request
@@ -88,7 +91,7 @@ private:
   bool match_incoming_request_route_{false};
 };
 
-typedef std::shared_ptr<JsonTranscoderConfig> JsonTranscoderConfigSharedPtr;
+using JsonTranscoderConfigSharedPtr = std::shared_ptr<JsonTranscoderConfig>;
 
 /**
  * The filter instance for gRPC JSON transcoder.
@@ -110,6 +113,9 @@ public:
   Http::FilterHeadersStatus encodeHeaders(Http::HeaderMap& headers, bool end_stream) override;
   Http::FilterDataStatus encodeData(Buffer::Instance& data, bool end_stream) override;
   Http::FilterTrailersStatus encodeTrailers(Http::HeaderMap& trailers) override;
+  Http::FilterMetadataStatus encodeMetadata(Http::MetadataMap&) override {
+    return Http::FilterMetadataStatus::Continue;
+  }
   void setEncoderFilterCallbacks(Http::StreamEncoderFilterCallbacks& callbacks) override;
 
   // Http::StreamFilterBase
@@ -117,6 +123,8 @@ public:
 
 private:
   bool readToBuffer(Protobuf::io::ZeroCopyInputStream& stream, Buffer::Instance& data);
+  void buildResponseFromHttpBodyOutput(Http::HeaderMap& response_headers, Buffer::Instance& data);
+  bool hasHttpBodyAsOutputType();
 
   JsonTranscoderConfig& config_;
   std::unique_ptr<google::grpc::transcoding::Transcoder> transcoder_;
@@ -126,8 +134,10 @@ private:
   Http::StreamEncoderFilterCallbacks* encoder_callbacks_{nullptr};
   const Protobuf::MethodDescriptor* method_{nullptr};
   Http::HeaderMap* response_headers_{nullptr};
+  Grpc::Decoder decoder_;
 
   bool error_{false};
+  bool has_http_body_output_{false};
 };
 
 } // namespace GrpcJsonTranscoder

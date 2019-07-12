@@ -23,6 +23,7 @@
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
+using testing::_;
 using testing::AtMost;
 using testing::Invoke;
 using testing::InvokeWithoutArgs;
@@ -32,10 +33,10 @@ using testing::Ref;
 using testing::Return;
 using testing::SaveArg;
 using testing::Throw;
-using testing::_;
 
 namespace Envoy {
 namespace Http {
+namespace {
 
 class CodecClientTest : public testing::Test {
 public:
@@ -53,8 +54,8 @@ public:
 
     Network::ClientConnectionPtr connection{connection_};
     EXPECT_CALL(dispatcher_, createTimer_(_));
-    client_.reset(
-        new CodecClientForTest(std::move(connection), codec_, nullptr, host_, dispatcher_));
+    client_ = std::make_unique<CodecClientForTest>(std::move(connection), codec_, nullptr, host_,
+                                                   dispatcher_);
   }
 
   ~CodecClientTest() { EXPECT_EQ(0U, client_->numActiveRequests()); }
@@ -125,7 +126,7 @@ TEST_F(CodecClientTest, DisconnectBeforeHeaders) {
 
   // When we get a remote close with an active request we should try to send zero bytes through
   // the codec.
-  EXPECT_CALL(callbacks, onResetStream(StreamResetReason::ConnectionTermination));
+  EXPECT_CALL(callbacks, onResetStream(StreamResetReason::ConnectionTermination, _));
   EXPECT_CALL(*codec_, dispatch(_));
   connection_cb_->onEvent(Network::ConnectionEvent::Connected);
   connection_cb_->onEvent(Network::ConnectionEvent::RemoteClose);
@@ -179,7 +180,7 @@ TEST_F(CodecClientTest, IdleTimerClientRemoteCloseWithActiveRequests) {
 
   // When we get a remote close with an active request validate idleTimer is reset after client
   // close
-  EXPECT_CALL(callbacks, onResetStream(StreamResetReason::ConnectionTermination));
+  EXPECT_CALL(callbacks, onResetStream(StreamResetReason::ConnectionTermination, _));
   EXPECT_CALL(*codec_, dispatch(_));
   EXPECT_NE(client_->numActiveRequests(), 0);
   connection_cb_->onEvent(Network::ConnectionEvent::Connected);
@@ -202,7 +203,7 @@ TEST_F(CodecClientTest, IdleTimerClientLocalCloseWithActiveRequests) {
   request_encoder.getStream().addCallbacks(callbacks);
 
   // When we get a local close with an active request validate idleTimer is reset after client close
-  EXPECT_CALL(callbacks, onResetStream(StreamResetReason::ConnectionTermination));
+  EXPECT_CALL(callbacks, onResetStream(StreamResetReason::ConnectionTermination, _));
   connection_cb_->onEvent(Network::ConnectionEvent::Connected);
   // TODO(ramaraochavali): Use default connection mock handlers for raising events.
   client_->close();
@@ -259,8 +260,8 @@ TEST_F(CodecClientTest, WatermarkPassthrough) {
 // Test the codec getting input from a real TCP connection.
 class CodecNetworkTest : public testing::TestWithParam<Network::Address::IpVersion> {
 public:
-  CodecNetworkTest() {
-    dispatcher_.reset(new Event::DispatcherImpl);
+  CodecNetworkTest() : api_(Api::createApiForTest()) {
+    dispatcher_ = api_->allocateDispatcher();
     upstream_listener_ = dispatcher_->createListener(socket_, listener_callbacks_, true, false);
     Network::ClientConnectionPtr client_connection = dispatcher_->createClientConnection(
         socket_.localAddress(), source_address_, Network::Test::createRawBufferSocket(), nullptr);
@@ -268,8 +269,8 @@ public:
     client_connection_->addConnectionCallbacks(client_callbacks_);
 
     codec_ = new Http::MockClientConnection();
-    client_.reset(
-        new CodecClientForTest(std::move(client_connection), codec_, nullptr, host_, *dispatcher_));
+    client_ = std::make_unique<CodecClientForTest>(std::move(client_connection), codec_, nullptr,
+                                                   host_, *dispatcher_);
 
     EXPECT_CALL(listener_callbacks_, onAccept_(_, _))
         .WillOnce(Invoke([&](Network::ConnectionSocketPtr& socket, bool) -> void {
@@ -326,12 +327,12 @@ public:
   }
 
 protected:
+  Api::ApiPtr api_;
   Event::DispatcherPtr dispatcher_;
   Network::ListenerPtr upstream_listener_;
   Network::MockListenerCallbacks listener_callbacks_;
   Network::MockConnectionHandler connection_handler_;
   Network::Address::InstanceConstSharedPtr source_address_;
-  Stats::IsolatedStoreImpl stats_store_;
   Network::TcpListenSocket socket_{Network::Test::getAnyAddress(GetParam()), nullptr, true};
   Http::MockClientConnection* codec_;
   std::unique_ptr<CodecClientForTest> client_;
@@ -354,7 +355,7 @@ TEST_P(CodecNetworkTest, SendData) {
   Buffer::OwnedImpl data(full_data);
   upstream_connection_->write(data, false);
   EXPECT_CALL(*codec_, dispatch(_)).WillOnce(Invoke([&](Buffer::Instance& data) -> void {
-    EXPECT_EQ(full_data, TestUtility::bufferToString(data));
+    EXPECT_EQ(full_data, data.toString());
     dispatcher_->exit();
   }));
   dispatcher_->run(Event::Dispatcher::RunType::Block);
@@ -375,19 +376,16 @@ TEST_P(CodecNetworkTest, SendHeadersAndClose) {
   upstream_connection_->close(Network::ConnectionCloseType::FlushWrite);
   EXPECT_CALL(*codec_, dispatch(_))
       .Times(2)
-      .WillOnce(Invoke([&](Buffer::Instance& data) -> void {
-        EXPECT_EQ(full_data, TestUtility::bufferToString(data));
-      }))
-      .WillOnce(Invoke([&](Buffer::Instance& data) -> void {
-        EXPECT_EQ("", TestUtility::bufferToString(data));
-      }));
+      .WillOnce(
+          Invoke([&](Buffer::Instance& data) -> void { EXPECT_EQ(full_data, data.toString()); }))
+      .WillOnce(Invoke([&](Buffer::Instance& data) -> void { EXPECT_EQ("", data.toString()); }));
   // Because the headers are not complete, the disconnect will reset the stream.
   // Note even if the final \r\n were appended to the header data, enough of the
   // codec state is mocked out that the data would not be framed and the stream
   // would not be finished.
   EXPECT_CALL(inner_encoder_.stream_, resetStream(_)).WillOnce(InvokeWithoutArgs([&]() -> void {
     for (auto callbacks : inner_encoder_.stream_.callbacks_) {
-      callbacks->onResetStream(StreamResetReason::RemoteReset);
+      callbacks->onResetStream(StreamResetReason::RemoteReset, absl::string_view());
     }
     dispatcher_->exit();
   }));
@@ -411,24 +409,22 @@ TEST_P(CodecNetworkTest, SendHeadersAndCloseUnderReadDisable) {
 
   EXPECT_CALL(*codec_, dispatch(_))
       .Times(2)
-      .WillOnce(Invoke([&](Buffer::Instance& data) -> void {
-        EXPECT_EQ(full_data, TestUtility::bufferToString(data));
-      }))
-      .WillOnce(Invoke([&](Buffer::Instance& data) -> void {
-        EXPECT_EQ("", TestUtility::bufferToString(data));
-      }));
+      .WillOnce(
+          Invoke([&](Buffer::Instance& data) -> void { EXPECT_EQ(full_data, data.toString()); }))
+      .WillOnce(Invoke([&](Buffer::Instance& data) -> void { EXPECT_EQ("", data.toString()); }));
   EXPECT_CALL(inner_encoder_.stream_, resetStream(_)).WillOnce(InvokeWithoutArgs([&]() -> void {
     for (auto callbacks : inner_encoder_.stream_.callbacks_) {
-      callbacks->onResetStream(StreamResetReason::RemoteReset);
+      callbacks->onResetStream(StreamResetReason::RemoteReset, absl::string_view());
     }
     dispatcher_->exit();
   }));
   dispatcher_->run(Event::Dispatcher::RunType::Block);
 }
 
-INSTANTIATE_TEST_CASE_P(IpVersions, CodecNetworkTest,
-                        testing::ValuesIn(TestEnvironment::getIpVersionsForTest()),
-                        TestUtility::ipTestParamsToString);
+INSTANTIATE_TEST_SUITE_P(IpVersions, CodecNetworkTest,
+                         testing::ValuesIn(TestEnvironment::getIpVersionsForTest()),
+                         TestUtility::ipTestParamsToString);
 
+} // namespace
 } // namespace Http
 } // namespace Envoy

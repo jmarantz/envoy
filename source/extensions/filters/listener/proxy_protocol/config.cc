@@ -28,15 +28,14 @@ public:
     return std::make_unique<Envoy::ProtobufWkt::Empty>();
   }
 
-  std::string name() override { return ListenerFilterNames::get().PROXY_PROTOCOL; }
+  std::string name() override { return ListenerFilterNames::get().ProxyProtocol; }
 };
 
 /**
  * Static registration for the proxy protocol filter. @see RegisterFactory.
  */
-static Registry::RegisterFactory<ProxyProtocolConfigFactory,
-                                 Server::Configuration::NamedListenerFilterConfigFactory>
-    registered_;
+REGISTER_FACTORY(ProxyProtocolConfigFactory,
+                 Server::Configuration::NamedListenerFilterConfigFactory);
 
 } // namespace ProxyProtocol
 } // namespace ListenerFilters

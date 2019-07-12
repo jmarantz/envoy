@@ -22,7 +22,7 @@ namespace Bson {
  */
 class BufferHelper {
 public:
-  static int32_t peakInt32(Buffer::Instance& data);
+  static int32_t peekInt32(Buffer::Instance& data);
   static uint8_t removeByte(Buffer::Instance& data);
   static void removeBytes(Buffer::Instance& data, uint8_t* out, size_t out_len);
   static std::string removeCString(Buffer::Instance& data);
@@ -85,6 +85,11 @@ public:
 
   const std::string& asString() const override {
     checkType(Type::STRING);
+    return value_.string_value_;
+  }
+
+  const std::string& asSymbol() const override {
+    checkType(Type::SYMBOL);
     return value_.string_value_;
   }
 
@@ -191,6 +196,11 @@ public:
 
   DocumentSharedPtr addString(const std::string& key, std::string&& value) override {
     fields_.emplace_back(new FieldImpl(Field::Type::STRING, key, std::move(value)));
+    return shared_from_this();
+  }
+
+  DocumentSharedPtr addSymbol(const std::string& key, std::string&& value) override {
+    fields_.emplace_back(new FieldImpl(Field::Type::SYMBOL, key, std::move(value)));
     return shared_from_this();
   }
 

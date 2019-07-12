@@ -18,12 +18,12 @@ Network::ClientConnectionPtr ValidationDispatcher::createClientConnection(
 
 Network::DnsResolverSharedPtr ValidationDispatcher::createDnsResolver(
     const std::vector<Network::Address::InstanceConstSharedPtr>&) {
-  NOT_IMPLEMENTED;
+  return dns_resolver_;
 }
 
 Network::ListenerPtr ValidationDispatcher::createListener(Network::Socket&,
                                                           Network::ListenerCallbacks&, bool, bool) {
-  NOT_IMPLEMENTED;
+  NOT_IMPLEMENTED_GCOVR_EXCL_LINE;
 }
 
 } // namespace Event

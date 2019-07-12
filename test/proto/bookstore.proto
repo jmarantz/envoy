@@ -3,6 +3,7 @@ syntax = "proto3";
 package bookstore;
 
 import "google/api/annotations.proto";
+import "google/api/httpbody.proto";
 import "google/protobuf/empty.proto";
 
 // A simple Bookstore API.
@@ -19,6 +20,13 @@ service Bookstore {
   rpc CreateShelf(CreateShelfRequest) returns (Shelf) {
     option (google.api.http) = {
       post: "/shelf"
+      body: "shelf"
+    };
+  }
+  // Creates a new shelf in the bookstore via a mapped package.service.method as its HTTP path.
+  rpc CreateShelfWithPackageServiceAndMethod(CreateShelfRequest) returns (Shelf) {
+    option (google.api.http) = {
+      post: "/bookstore.Bookstore/CreateShelfWithPackageServiceAndMethod"
       body: "shelf"
     };
   }
@@ -68,16 +76,18 @@ service Bookstore {
   }
   rpc BookstoreOptions(GetShelfRequest) returns (google.protobuf.Empty) {
     option (google.api.http) = {
-      custom {
-        kind: "OPTIONS"
-        path: "/shelves/{shelf}"
-      }
+      custom {kind: "OPTIONS" path: "/shelves/{shelf}"}
     };
   }
   // Returns a specific author.
   rpc GetAuthor(GetAuthorRequest) returns (Author) {
     option (google.api.http) = {
       get: "/authors/{author}"
+    };
+  }
+  rpc GetIndex(google.protobuf.Empty) returns (google.api.HttpBody) {
+    option (google.api.http) = {
+      get: "/index"
     };
   }
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "envoy/config/filter/http/squash/v2/squash.pb.h"
+#include "envoy/config/filter/http/squash/v2/squash.pb.validate.h"
 
 #include "extensions/filters/http/common/factory_base.h"
 #include "extensions/filters/http/well_known_names.h"
@@ -16,7 +17,7 @@ namespace Squash {
 class SquashFilterConfigFactory
     : public Common::FactoryBase<envoy::config::filter::http::squash::v2::Squash> {
 public:
-  SquashFilterConfigFactory() : FactoryBase(HttpFilterNames::get().SQUASH) {}
+  SquashFilterConfigFactory() : FactoryBase(HttpFilterNames::get().Squash) {}
 
   Http::FilterFactoryCb
   createFilterFactory(const Json::Object& json_config, const std::string&,

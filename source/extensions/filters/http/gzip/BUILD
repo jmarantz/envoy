@@ -1,4 +1,5 @@
 licenses(["notice"])  # Apache 2
+
 # HTTP L7 filter that performs gzip compression
 # Public docs: docs/root/configuration/http_filters/gzip_filter.rst
 
@@ -17,6 +18,7 @@ envoy_cc_library(
     deps = [
         "//include/envoy/http:filter_interface",
         "//include/envoy/json:json_object_interface",
+        "//include/envoy/runtime:runtime_interface",
         "//source/common/buffer:buffer_lib",
         "//source/common/compressor:compressor_lib",
         "//source/common/http:header_map_lib",

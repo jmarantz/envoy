@@ -3,6 +3,8 @@
 #include "extensions/filters/common/lua/wrappers.h"
 
 #include "test/extensions/filters/common/lua/lua_wrappers.h"
+#include "test/mocks/network/mocks.h"
+#include "test/mocks/ssl/mocks.h"
 #include "test/test_common/utility.h"
 
 namespace Envoy {
@@ -10,6 +12,7 @@ namespace Extensions {
 namespace Filters {
 namespace Common {
 namespace Lua {
+namespace {
 
 class LuaBufferWrapperTest : public LuaWrappersTestBase<BufferWrapper> {};
 
@@ -22,9 +25,45 @@ public:
 
   envoy::api::v2::core::Metadata parseMetadataFromYaml(const std::string& yaml_string) {
     envoy::api::v2::core::Metadata metadata;
-    MessageUtil::loadFromYaml(yaml_string, metadata);
+    TestUtility::loadFromYaml(yaml_string, metadata);
     return metadata;
   }
+};
+
+class LuaConnectionWrapperTest : public LuaWrappersTestBase<ConnectionWrapper> {
+public:
+  virtual void setup(const std::string& script) {
+    LuaWrappersTestBase<ConnectionWrapper>::setup(script);
+    state_->registerType<SslConnectionWrapper>();
+  }
+
+protected:
+  void expectSecureConnection(const bool secure) {
+    const std::string SCRIPT{R"EOF(
+      function callMe(object)
+        if object:ssl() == nil then
+          testPrint("plain")
+        else
+          testPrint("secure")
+        end
+        testPrint(type(object:ssl()))
+      end
+    )EOF"};
+    testing::InSequence s;
+    setup(SCRIPT);
+
+    // Setup secure connection if required.
+    EXPECT_CALL(Const(connection_), ssl()).WillOnce(Return(secure ? &ssl_ : nullptr));
+
+    ConnectionWrapper::create(coroutine_->luaState(), &connection_);
+    EXPECT_CALL(*this, testPrint(secure ? "secure" : "plain"));
+    EXPECT_CALL(Const(connection_), ssl()).WillOnce(Return(secure ? &ssl_ : nullptr));
+    EXPECT_CALL(*this, testPrint(secure ? "userdata" : "nil"));
+    start("callMe");
+  }
+
+  NiceMock<Envoy::Network::MockConnection> connection_;
+  NiceMock<Envoy::Ssl::MockConnectionInfo> ssl_;
 };
 
 // Basic buffer wrapper methods test.
@@ -224,6 +263,12 @@ TEST_F(LuaMetadataMapWrapperTest, DontFinishIteration) {
       "[string \"...\"]:5: cannot create a second iterator before completing the first");
 }
 
+TEST_F(LuaConnectionWrapperTest, Secure) {
+  expectSecureConnection(true);
+  expectSecureConnection(false);
+}
+
+} // namespace
 } // namespace Lua
 } // namespace Common
 } // namespace Filters

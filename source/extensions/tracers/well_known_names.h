@@ -1,4 +1,5 @@
 #pragma once
+#include <string>
 
 #include "common/singleton/const_singleton.h"
 
@@ -13,14 +14,18 @@ namespace Tracers {
 class TracerNameValues {
 public:
   // Lightstep tracer
-  const std::string LIGHTSTEP = "envoy.lightstep";
+  const std::string Lightstep = "envoy.lightstep";
   // Zipkin tracer
-  const std::string ZIPKIN = "envoy.zipkin";
+  const std::string Zipkin = "envoy.zipkin";
   // Dynamic tracer
-  const std::string DYNAMIC_OT = "envoy.dynamic.ot";
+  const std::string DynamicOt = "envoy.dynamic.ot";
+  // Datadog tracer
+  const std::string Datadog = "envoy.tracers.datadog";
+  // OpenCensus tracer
+  const std::string OpenCensus = "envoy.tracers.opencensus";
 };
 
-typedef ConstSingleton<TracerNameValues> TracerNames;
+using TracerNames = ConstSingleton<TracerNameValues>;
 
 } // namespace Tracers
 } // namespace Extensions

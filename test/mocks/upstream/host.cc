@@ -2,10 +2,10 @@
 
 #include "common/network/utility.h"
 
+using testing::_;
 using testing::Invoke;
 using testing::Return;
 using testing::ReturnRef;
-using testing::_;
 
 namespace Envoy {
 namespace Upstream {
@@ -46,6 +46,7 @@ MockHost::MockHost() {
   ON_CALL(*this, cluster()).WillByDefault(ReturnRef(cluster_));
   ON_CALL(*this, outlierDetector()).WillByDefault(ReturnRef(outlier_detector_));
   ON_CALL(*this, stats()).WillByDefault(ReturnRef(stats_));
+  ON_CALL(*this, warmed()).WillByDefault(Return(true));
 }
 
 MockHost::~MockHost() {}

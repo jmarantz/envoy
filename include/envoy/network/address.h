@@ -8,7 +8,9 @@
 #include <memory>
 #include <string>
 
+#include "envoy/api/os_sys_calls.h"
 #include "envoy/common/pure.h"
+#include "envoy/network/io_handle.h"
 
 #include "absl/numeric/int128.h"
 
@@ -21,7 +23,7 @@ namespace Address {
  */
 class Ipv4 {
 public:
-  virtual ~Ipv4() {}
+  virtual ~Ipv4() = default;
 
   /**
    * @return the 32-bit IPv4 address in network byte order.
@@ -34,7 +36,7 @@ public:
  */
 class Ipv6 {
 public:
-  virtual ~Ipv6() {}
+  virtual ~Ipv6() = default;
 
   /**
    * @return the absl::uint128 IPv6 address in network byte order.
@@ -49,7 +51,7 @@ enum class IpVersion { v4, v6 };
  */
 class Ip {
 public:
-  virtual ~Ip() {}
+  virtual ~Ip() = default;
 
   /**
    * @return the address as a string. E.g., "1.2.3.4" for an IPv4 address.
@@ -78,8 +80,9 @@ public:
   virtual const Ipv6* ipv6() const PURE;
 
   /**
-   * @return the port associated with the address. Port may be zero if not specified or applicable.
-   *         The port is in host byte order.
+   * @return the port associated with the address. Port may be zero if not specified, not
+   * determinable before socket creation, or not applicable.
+   * The port is in host byte order.
    */
   virtual uint32_t port() const PURE;
 
@@ -97,16 +100,17 @@ enum class SocketType { Stream, Datagram };
  */
 class Instance {
 public:
-  virtual ~Instance() {}
+  virtual ~Instance() = default;
 
   virtual bool operator==(const Instance& rhs) const PURE;
   bool operator!=(const Instance& rhs) const { return !operator==(rhs); }
 
   /**
    * @return a human readable string for the address that represents the
-   * physical/resolved address.
+   * physical/resolved address. (This will not necessarily include port
+   * information, if applicable, since that may not be resolved until bind()).
    *
-   * This string will be in the following format:
+   * This string will be compatible with the following example formats:
    * For IPv4 addresses: "1.2.3.4:80"
    * For IPv6 addresses: "[1234:5678::9]:443"
    * For pipe addresses: "/foo"
@@ -126,17 +130,19 @@ public:
    * Bind a socket to this address. The socket should have been created with a call to socket() on
    * an Instance of the same address family.
    * @param fd supplies the platform socket handle.
-   * @return the platform error code.
+   * @return a Api::SysCallIntResult with rc_ = 0 for success and rc_ = -1 for failure. If the call
+   *   is successful, errno_ shouldn't be used.
    */
-  virtual int bind(int fd) const PURE;
+  virtual Api::SysCallIntResult bind(int fd) const PURE;
 
   /**
    * Connect a socket to this address. The socket should have been created with a call to socket()
    * on this object.
    * @param fd supplies the platform socket handle.
-   * @return the platform error code.
+   * @return a Api::SysCallIntResult with rc_ = 0 for success and rc_ = -1 for failure. If the call
+   *   is successful, errno_ shouldn't be used.
    */
-  virtual int connect(int fd) const PURE;
+  virtual Api::SysCallIntResult connect(int fd) const PURE;
 
   /**
    * @return the IP address information IFF type() == Type::Ip, otherwise nullptr.
@@ -146,9 +152,10 @@ public:
   /**
    * Create a socket for this address.
    * @param type supplies the socket type to create.
-   * @return the platform error code.
+   * @return the IoHandlePtr naming the socket. In case of a failure, the program would be
+   *   aborted.
    */
-  virtual int socket(SocketType type) const PURE;
+  virtual IoHandlePtr socket(SocketType type) const PURE;
 
   /**
    * @return the type of address.
@@ -156,7 +163,7 @@ public:
   virtual Type type() const PURE;
 };
 
-typedef std::shared_ptr<const Instance> InstanceConstSharedPtr;
+using InstanceConstSharedPtr = std::shared_ptr<const Instance>;
 
 } // namespace Address
 } // namespace Network

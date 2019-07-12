@@ -4,6 +4,8 @@
 
 #include "common/event/dispatcher_impl.h"
 
+#include "dns.h"
+
 namespace Envoy {
 namespace Event {
 
@@ -14,6 +16,9 @@ namespace Event {
  */
 class ValidationDispatcher : public DispatcherImpl {
 public:
+  ValidationDispatcher(Api::Api& api, Event::TimeSystem& time_system)
+      : DispatcherImpl(api, time_system) {}
+
   Network::ClientConnectionPtr
   createClientConnection(Network::Address::InstanceConstSharedPtr,
                          Network::Address::InstanceConstSharedPtr, Network::TransportSocketPtr&&,
@@ -23,6 +28,10 @@ public:
   Network::ListenerPtr createListener(Network::Socket&, Network::ListenerCallbacks&,
                                       bool bind_to_port,
                                       bool hand_off_restored_destination_connections) override;
+
+protected:
+  std::shared_ptr<Network::ValidationDnsResolver> dns_resolver_{
+      std::make_shared<Network::ValidationDnsResolver>()};
 };
 
 } // namespace Event

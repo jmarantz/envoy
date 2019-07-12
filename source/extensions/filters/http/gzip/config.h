@@ -1,6 +1,7 @@
 #pragma once
 
 #include "envoy/config/filter/http/gzip/v2/gzip.pb.h"
+#include "envoy/config/filter/http/gzip/v2/gzip.pb.validate.h"
 
 #include "extensions/filters/http/common/factory_base.h"
 #include "extensions/filters/http/well_known_names.h"
@@ -15,7 +16,7 @@ namespace Gzip {
  */
 class GzipFilterFactory : public Common::FactoryBase<envoy::config::filter::http::gzip::v2::Gzip> {
 public:
-  GzipFilterFactory() : FactoryBase(HttpFilterNames::get().ENVOY_GZIP) {}
+  GzipFilterFactory() : FactoryBase(HttpFilterNames::get().EnvoyGzip) {}
 
 private:
   Http::FilterFactoryCb

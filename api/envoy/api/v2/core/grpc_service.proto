@@ -2,8 +2,13 @@ syntax = "proto3";
 
 package envoy.api.v2.core;
 
+option java_outer_classname = "GrpcServiceProto";
+option java_multiple_files = true;
+option java_package = "io.envoyproxy.envoy.api.v2.core";
+
 import "envoy/api/v2/core/base.proto";
 
+import "google/protobuf/any.proto";
 import "google/protobuf/duration.proto";
 import "google/protobuf/struct.proto";
 import "google/protobuf/empty.proto";
@@ -14,7 +19,6 @@ import "gogoproto/gogo.proto";
 option (gogoproto.equal_all) = true;
 
 // [#protodoc-title: gRPC services]
-// [#proto-status: draft]
 
 // gRPC service configuration. This is used by :ref:`ApiConfigSource
 // <envoy_api_msg_core.ApiConfigSource>` and filter configurations.
@@ -26,6 +30,7 @@ message GrpcService {
     string cluster_name = 1 [(validate.rules).string.min_bytes = 1];
   }
 
+  // [#proto-status: draft]
   message GoogleGrpc {
     // The target URI when using the `Google C++ gRPC client
     // <https://github.com/grpc/grpc>`_. SSL credentials will be supplied in
@@ -44,6 +49,11 @@ message GrpcService {
       DataSource cert_chain = 3;
     }
 
+    // Local channel credentials. Only UDS is supported for now.
+    // See https://github.com/grpc/grpc/pull/15909.
+    message GoogleLocalCredentials {
+    }
+
     // See https://grpc.io/docs/guides/auth.html#credential-types to understand Channel and Call
     // credential types.
     message ChannelCredentials {
@@ -53,6 +63,8 @@ message GrpcService {
 
         // https://grpc.io/grpc/cpp/namespacegrpc.html#a6beb3ac70ff94bd2ebbd89b8f21d1f61
         google.protobuf.Empty google_default = 2;
+
+        GoogleLocalCredentials local_credentials = 3;
       }
     }
 
@@ -71,7 +83,11 @@ message GrpcService {
 
       message MetadataCredentialsFromPlugin {
         string name = 1;
-        google.protobuf.Struct config = 2;
+        oneof config_type {
+          google.protobuf.Struct config = 2;
+
+          google.protobuf.Any typed_config = 3;
+        }
       }
 
       oneof credential_specifier {
@@ -83,28 +99,23 @@ message GrpcService {
 
         // Google Compute Engine credentials.
         // https://grpc.io/grpc/cpp/namespacegrpc.html#a6beb3ac70ff94bd2ebbd89b8f21d1f61
-        // [#not-implemented-hide:]
         google.protobuf.Empty google_compute_engine = 2;
 
         // Google refresh token credentials.
         // https://grpc.io/grpc/cpp/namespacegrpc.html#a96901c997b91bc6513b08491e0dca37c.
-        // [#not-implemented-hide:]
         string google_refresh_token = 3;
 
         // Service Account JWT Access credentials.
         // https://grpc.io/grpc/cpp/namespacegrpc.html#a92a9f959d6102461f66ee973d8e9d3aa.
-        // [#not-implemented-hide:]
         ServiceAccountJWTAccessCredentials service_account_jwt_access = 4;
 
         // Google IAM credentials.
         // https://grpc.io/grpc/cpp/namespacegrpc.html#a9fc1fc101b41e680d47028166e76f9d0.
-        // [#not-implemented-hide:]
         GoogleIAMCredentials google_iam = 5;
 
         // Custom authenticator credentials.
         // https://grpc.io/grpc/cpp/namespacegrpc.html#a823c6a4b19ffc71fb33e90154ee2ad07.
         // https://grpc.io/docs/guides/auth.html#extending-grpc-to-support-other-authentication-mechanisms.
-        // [#not-implemented-hide:]
         MetadataCredentialsFromPlugin from_plugin = 6;
       }
     }

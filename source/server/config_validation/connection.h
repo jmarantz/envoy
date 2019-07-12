@@ -1,4 +1,8 @@
+#pragma once
+
 #include "common/network/connection_impl.h"
+
+#include "server/config_validation/dispatcher.h"
 
 namespace Envoy {
 namespace Network {
@@ -24,7 +28,7 @@ public:
 
   // connect may be called in config verification mode.
   // It is redefined as no-op. Calling parent's method triggers connection to upstream host.
-  virtual void connect() override {}
+  void connect() override {}
 };
 
 } // namespace Network

@@ -16,7 +16,7 @@ namespace Http {
 
 envoy::api::v2::route::HeaderMatcher parseHeaderMatcherFromYaml(const std::string& yaml) {
   envoy::api::v2::route::HeaderMatcher header_matcher;
-  MessageUtil::loadFromYaml(yaml, header_matcher);
+  TestUtility::loadFromYaml(yaml, header_matcher);
   return header_matcher;
 }
 
@@ -40,37 +40,7 @@ name: test-header
       HeaderUtility::HeaderData(parseHeaderMatcherFromYaml(yaml));
 
   EXPECT_EQ("test-header", header_data.name_.get());
-  EXPECT_EQ(HeaderUtility::HeaderMatchType::Value, header_data.header_match_type_);
-  EXPECT_EQ("", header_data.value_);
-}
-
-TEST(HeaderDataConstructorTest, ValueSet) {
-  const std::string yaml = R"EOF(
-name: test-header
-value: value
-  )EOF";
-
-  HeaderUtility::HeaderData header_data =
-      HeaderUtility::HeaderData(parseHeaderMatcherFromYaml(yaml));
-
-  EXPECT_EQ("test-header", header_data.name_.get());
-  EXPECT_EQ(HeaderUtility::HeaderMatchType::Value, header_data.header_match_type_);
-  EXPECT_EQ("value", header_data.value_);
-}
-
-TEST(HeaderDataConstructorTest, ValueAndRegexFlagSet) {
-  const std::string yaml = R"EOF(
-name: test-header
-value: value
-regex: true
-  )EOF";
-
-  HeaderUtility::HeaderData header_data =
-      HeaderUtility::HeaderData(parseHeaderMatcherFromYaml(yaml));
-
-  EXPECT_EQ("test-header", header_data.name_.get());
-  EXPECT_EQ(HeaderUtility::HeaderMatchType::Regex, header_data.header_match_type_);
-  EXPECT_EQ("", header_data.value_);
+  EXPECT_EQ(HeaderUtility::HeaderMatchType::Present, header_data.header_match_type_);
 }
 
 TEST(HeaderDataConstructorTest, ExactMatchSpecifier) {
@@ -117,6 +87,64 @@ range_match:
   EXPECT_EQ("", header_data.value_);
   EXPECT_EQ(0, header_data.range_.start());
   EXPECT_EQ(-10, header_data.range_.end());
+}
+
+TEST(HeaderDataConstructorTest, PresentMatchSpecifier) {
+  const std::string yaml = R"EOF(
+name: test-header
+present_match: true
+  )EOF";
+
+  HeaderUtility::HeaderData header_data =
+      HeaderUtility::HeaderData(parseHeaderMatcherFromYaml(yaml));
+
+  EXPECT_EQ("test-header", header_data.name_.get());
+  EXPECT_EQ(HeaderUtility::HeaderMatchType::Present, header_data.header_match_type_);
+  EXPECT_EQ("", header_data.value_);
+}
+
+TEST(HeaderDataConstructorTest, PrefixMatchSpecifier) {
+  const std::string yaml = R"EOF(
+name: test-header
+prefix_match: value
+  )EOF";
+
+  HeaderUtility::HeaderData header_data =
+      HeaderUtility::HeaderData(parseHeaderMatcherFromYaml(yaml));
+
+  EXPECT_EQ("test-header", header_data.name_.get());
+  EXPECT_EQ(HeaderUtility::HeaderMatchType::Prefix, header_data.header_match_type_);
+  EXPECT_EQ("value", header_data.value_);
+}
+
+TEST(HeaderDataConstructorTest, SuffixMatchSpecifier) {
+  const std::string yaml = R"EOF(
+name: test-header
+suffix_match: value
+  )EOF";
+
+  HeaderUtility::HeaderData header_data =
+      HeaderUtility::HeaderData(parseHeaderMatcherFromYaml(yaml));
+
+  EXPECT_EQ("test-header", header_data.name_.get());
+  EXPECT_EQ(HeaderUtility::HeaderMatchType::Suffix, header_data.header_match_type_);
+  EXPECT_EQ("value", header_data.value_);
+}
+
+TEST(HeaderDataConstructorTest, InvertMatchSpecifier) {
+  const std::string yaml = R"EOF(
+name: test-header
+exact_match: value
+invert_match: true
+)EOF";
+
+  HeaderUtility::HeaderData header_data =
+      HeaderUtility::HeaderData(parseHeaderMatcherFromYaml(yaml));
+
+  EXPECT_EQ("test-header", header_data.name_.get());
+  EXPECT_EQ(HeaderUtility::HeaderMatchType::Value, header_data.header_match_type_);
+  EXPECT_EQ("value", header_data.value_);
+  EXPECT_EQ(true, header_data.invert_match_);
 }
 
 TEST(MatchHeadersTest, MayMatchOneOrMoreRequestHeader) {
@@ -193,12 +221,45 @@ exact_match: match-value
   EXPECT_FALSE(HeaderUtility::matchHeaders(unmatching_headers, header_data));
 }
 
+TEST(MatchHeadersTest, HeaderExactMatchInverse) {
+  TestHeaderMapImpl matching_headers{{"match-header", "other-value"},
+                                     {"other-header", "match-value"}};
+  TestHeaderMapImpl unmatching_headers{{"match-header", "match-value"}};
+
+  const std::string yaml = R"EOF(
+name: match-header
+exact_match: match-value
+invert_match: true
+  )EOF";
+
+  std::vector<HeaderUtility::HeaderData> header_data;
+  header_data.push_back(HeaderUtility::HeaderData(parseHeaderMatcherFromYaml(yaml)));
+  EXPECT_TRUE(HeaderUtility::matchHeaders(matching_headers, header_data));
+  EXPECT_FALSE(HeaderUtility::matchHeaders(unmatching_headers, header_data));
+}
+
 TEST(MatchHeadersTest, HeaderRegexMatch) {
   TestHeaderMapImpl matching_headers{{"match-header", "123"}};
   TestHeaderMapImpl unmatching_headers{{"match-header", "1234"}, {"match-header", "123.456"}};
   const std::string yaml = R"EOF(
 name: match-header
 regex_match: \d{3}
+  )EOF";
+
+  std::vector<HeaderUtility::HeaderData> header_data;
+  header_data.push_back(HeaderUtility::HeaderData(parseHeaderMatcherFromYaml(yaml)));
+  EXPECT_TRUE(HeaderUtility::matchHeaders(matching_headers, header_data));
+  EXPECT_FALSE(HeaderUtility::matchHeaders(unmatching_headers, header_data));
+}
+
+TEST(MatchHeadersTest, HeaderRegexInverseMatch) {
+  TestHeaderMapImpl matching_headers{{"match-header", "1234"}, {"match-header", "123.456"}};
+  TestHeaderMapImpl unmatching_headers{{"match-header", "123"}};
+
+  const std::string yaml = R"EOF(
+name: match-header
+regex_match: \d{3}
+invert_match: true
   )EOF";
 
   std::vector<HeaderUtility::HeaderData> header_data;
@@ -224,6 +285,138 @@ range_match:
   header_data.push_back(HeaderUtility::HeaderData(parseHeaderMatcherFromYaml(yaml)));
   EXPECT_TRUE(HeaderUtility::matchHeaders(matching_headers, header_data));
   EXPECT_FALSE(HeaderUtility::matchHeaders(unmatching_headers, header_data));
+}
+
+TEST(MatchHeadersTest, HeaderRangeInverseMatch) {
+  TestHeaderMapImpl matching_headers{{"match-header", "0"},
+                                     {"match-header", "somestring"},
+                                     {"match-header", "10.9"},
+                                     {"match-header", "-1somestring"}};
+  TestHeaderMapImpl unmatching_headers{{"match-header", "-1"}};
+
+  const std::string yaml = R"EOF(
+name: match-header
+range_match:
+  start: -10
+  end: 0
+invert_match: true
+  )EOF";
+
+  std::vector<HeaderUtility::HeaderData> header_data;
+  header_data.push_back(HeaderUtility::HeaderData(parseHeaderMatcherFromYaml(yaml)));
+  EXPECT_TRUE(HeaderUtility::matchHeaders(matching_headers, header_data));
+  EXPECT_FALSE(HeaderUtility::matchHeaders(unmatching_headers, header_data));
+}
+
+TEST(MatchHeadersTest, HeaderPresentMatch) {
+  TestHeaderMapImpl matching_headers{{"match-header", "123"}};
+  TestHeaderMapImpl unmatching_headers{{"nonmatch-header", "1234"},
+                                       {"other-nonmatch-header", "123.456"}};
+
+  const std::string yaml = R"EOF(
+name: match-header
+present_match: true
+  )EOF";
+
+  std::vector<HeaderUtility::HeaderData> header_data;
+  header_data.push_back(HeaderUtility::HeaderData(parseHeaderMatcherFromYaml(yaml)));
+  EXPECT_TRUE(HeaderUtility::matchHeaders(matching_headers, header_data));
+  EXPECT_FALSE(HeaderUtility::matchHeaders(unmatching_headers, header_data));
+}
+
+TEST(MatchHeadersTest, HeaderPresentInverseMatch) {
+  TestHeaderMapImpl unmatching_headers{{"match-header", "123"}};
+  TestHeaderMapImpl matching_headers{{"nonmatch-header", "1234"},
+                                     {"other-nonmatch-header", "123.456"}};
+
+  const std::string yaml = R"EOF(
+name: match-header
+present_match: true
+invert_match: true
+  )EOF";
+
+  std::vector<HeaderUtility::HeaderData> header_data;
+  header_data.push_back(HeaderUtility::HeaderData(parseHeaderMatcherFromYaml(yaml)));
+  EXPECT_TRUE(HeaderUtility::matchHeaders(matching_headers, header_data));
+  EXPECT_FALSE(HeaderUtility::matchHeaders(unmatching_headers, header_data));
+}
+
+TEST(MatchHeadersTest, HeaderPrefixMatch) {
+  TestHeaderMapImpl matching_headers{{"match-header", "value123"}};
+  TestHeaderMapImpl unmatching_headers{{"match-header", "123value"}};
+
+  const std::string yaml = R"EOF(
+name: match-header
+prefix_match: value
+  )EOF";
+
+  std::vector<HeaderUtility::HeaderData> header_data;
+  header_data.push_back(HeaderUtility::HeaderData(parseHeaderMatcherFromYaml(yaml)));
+  EXPECT_TRUE(HeaderUtility::matchHeaders(matching_headers, header_data));
+  EXPECT_FALSE(HeaderUtility::matchHeaders(unmatching_headers, header_data));
+}
+
+TEST(MatchHeadersTest, HeaderPrefixInverseMatch) {
+  TestHeaderMapImpl unmatching_headers{{"match-header", "value123"}};
+  TestHeaderMapImpl matching_headers{{"match-header", "123value"}};
+
+  const std::string yaml = R"EOF(
+name: match-header
+prefix_match: value
+invert_match: true
+  )EOF";
+
+  std::vector<HeaderUtility::HeaderData> header_data;
+  header_data.push_back(HeaderUtility::HeaderData(parseHeaderMatcherFromYaml(yaml)));
+  EXPECT_TRUE(HeaderUtility::matchHeaders(matching_headers, header_data));
+  EXPECT_FALSE(HeaderUtility::matchHeaders(unmatching_headers, header_data));
+}
+
+TEST(MatchHeadersTest, HeaderSuffixMatch) {
+  TestHeaderMapImpl matching_headers{{"match-header", "123value"}};
+  TestHeaderMapImpl unmatching_headers{{"match-header", "value123"}};
+
+  const std::string yaml = R"EOF(
+name: match-header
+suffix_match: value
+  )EOF";
+
+  std::vector<HeaderUtility::HeaderData> header_data;
+  header_data.push_back(HeaderUtility::HeaderData(parseHeaderMatcherFromYaml(yaml)));
+  EXPECT_TRUE(HeaderUtility::matchHeaders(matching_headers, header_data));
+  EXPECT_FALSE(HeaderUtility::matchHeaders(unmatching_headers, header_data));
+}
+
+TEST(MatchHeadersTest, HeaderSuffixInverseMatch) {
+  TestHeaderMapImpl unmatching_headers{{"match-header", "123value"}};
+  TestHeaderMapImpl matching_headers{{"match-header", "value123"}};
+
+  const std::string yaml = R"EOF(
+name: match-header
+suffix_match: value
+invert_match: true
+  )EOF";
+
+  std::vector<HeaderUtility::HeaderData> header_data;
+  header_data.push_back(HeaderUtility::HeaderData(parseHeaderMatcherFromYaml(yaml)));
+  EXPECT_TRUE(HeaderUtility::matchHeaders(matching_headers, header_data));
+  EXPECT_FALSE(HeaderUtility::matchHeaders(unmatching_headers, header_data));
+}
+
+TEST(HeaderAddTest, HeaderAdd) {
+  TestHeaderMapImpl headers{{"myheader1", "123value"}};
+  TestHeaderMapImpl headers_to_add{{"myheader2", "456value"}};
+
+  HeaderUtility::addHeaders(headers, headers_to_add);
+
+  headers_to_add.iterate(
+      [](const Http::HeaderEntry& entry, void* context) -> Http::HeaderMap::Iterate {
+        TestHeaderMapImpl* headers = static_cast<TestHeaderMapImpl*>(context);
+        Http::LowerCaseString lower_key{std::string(entry.key().getStringView())};
+        EXPECT_EQ(entry.value().getStringView(), headers->get(lower_key)->value().getStringView());
+        return Http::HeaderMap::Iterate::Continue;
+      },
+      &headers);
 }
 
 } // namespace Http

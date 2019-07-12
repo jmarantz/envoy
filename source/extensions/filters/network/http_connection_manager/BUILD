@@ -1,4 +1,5 @@
 licenses(["notice"])  # Apache 2
+
 # L4 network filter that implements HTTP protocol handling and filtering. This filter internally
 # drives all of the L7 HTTP filters.
 # Public docs: docs/root/configuration/http_conn_man/http_conn_man.rst
@@ -16,12 +17,12 @@ envoy_cc_library(
     srcs = ["config.cc"],
     hdrs = ["config.h"],
     deps = [
+        "//include/envoy/config:config_provider_manager_interface",
         "//include/envoy/filesystem:filesystem_interface",
         "//include/envoy/http:filter_interface",
         "//include/envoy/registry",
         "//include/envoy/router:route_config_provider_manager_interface",
         "//include/envoy/server:admin_interface",
-        "//include/envoy/server:filter_config_interface",
         "//include/envoy/server:options_interface",
         "//include/envoy/stats:stats_interface",
         "//source/common/access_log:access_log_lib",
@@ -36,6 +37,8 @@ envoy_cc_library(
         "//source/common/json:json_loader_lib",
         "//source/common/protobuf:utility_lib",
         "//source/common/router:rds_lib",
+        "//source/common/router:scoped_rds_lib",
         "//source/extensions/filters/network:well_known_names",
+        "//source/extensions/filters/network/common:factory_base_lib",
     ],
 )

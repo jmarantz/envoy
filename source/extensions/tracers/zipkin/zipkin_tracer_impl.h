@@ -50,7 +50,7 @@ public:
    * This method sets the operation name on the span.
    * @param operation the operation name
    */
-  void setOperation(const std::string& operation) override;
+  void setOperation(absl::string_view operation) override;
 
   /**
    * This function adds a Zipkin "string" binary annotation to this span.
@@ -60,11 +60,15 @@ public:
    * Note that Tracing::HttpTracerUtility::finalizeSpan() makes several calls to this function,
    * associating several key-value pairs with this span.
    */
-  void setTag(const std::string& name, const std::string& value) override;
+  void setTag(absl::string_view name, absl::string_view value) override;
+
+  void log(SystemTime timestamp, const std::string& event) override;
 
   void injectContext(Http::HeaderMap& request_headers) override;
   Tracing::SpanPtr spawnChild(const Tracing::Config&, const std::string& name,
                               SystemTime start_time) override;
+
+  void setSampled(bool sampled) override;
 
   /**
    * @return a reference to the Zipkin::Span object.
@@ -76,7 +80,7 @@ private:
   Zipkin::Tracer& tracer_;
 };
 
-typedef std::unique_ptr<ZipkinSpan> ZipkinSpanPtr;
+using ZipkinSpanPtr = std::unique_ptr<ZipkinSpan>;
 
 /**
  * Class for a Zipkin-specific Driver.
@@ -87,9 +91,11 @@ public:
    * Constructor. It adds itself and a newly-created Zipkin::Tracer object to a thread-local store.
    * Also, it associates the given random-number generator to the Zipkin::Tracer object it creates.
    */
-  Driver(const Json::Object& config, Upstream::ClusterManager& cluster_manager, Stats::Store& stats,
+  Driver(const envoy::config::trace::v2::ZipkinConfig& zipkin_config,
+         Upstream::ClusterManager& cluster_manager, Stats::Store& stats,
          ThreadLocal::SlotAllocator& tls, Runtime::Loader& runtime,
-         const LocalInfo::LocalInfo& localinfo, Runtime::RandomGenerator& random_generator);
+         const LocalInfo::LocalInfo& localinfo, Runtime::RandomGenerator& random_generator,
+         TimeSource& time_source);
 
   /**
    * This function is inherited from the abstract Driver class.
@@ -128,6 +134,7 @@ private:
   ThreadLocal::SlotPtr tls_;
   Runtime::Loader& runtime_;
   const LocalInfo::LocalInfo& local_info_;
+  TimeSource& time_source_;
 };
 
 /**
@@ -202,7 +209,7 @@ private:
   SpanBuffer span_buffer_;
   const std::string collector_endpoint_;
 };
-}
+} // namespace Zipkin
 } // namespace Tracers
 } // namespace Extensions
 } // namespace Envoy

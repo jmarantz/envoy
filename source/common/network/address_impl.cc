@@ -1,7 +1,7 @@
 #include "common/network/address_impl.h"
 
 #include <arpa/inet.h>
-#include <netinet/ip.h>
+#include <netinet/in.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 
@@ -11,9 +11,11 @@
 
 #include "envoy/common/exception.h"
 
+#include "common/api/os_sys_calls_impl.h"
 #include "common/common/assert.h"
 #include "common/common/fmt.h"
 #include "common/common/utility.h"
+#include "common/network/io_socket_handle_impl.h"
 
 namespace Envoy {
 namespace Network {
@@ -21,19 +23,10 @@ namespace Address {
 
 namespace {
 
-// Check if an IP family is supported on this machine.
-bool ipFamilySupported(int domain) {
-  const int fd = ::socket(domain, SOCK_STREAM, 0);
-  if (fd >= 0) {
-    RELEASE_ASSERT(::close(fd) == 0);
-  }
-  return fd != -1;
-}
-
 // Validate that IPv4 is supported on this platform, raise an exception for the
 // given address if not.
 void validateIpv4Supported(const std::string& address) {
-  static const bool supported = ipFamilySupported(AF_INET);
+  static const bool supported = Network::Address::ipFamilySupported(AF_INET);
   if (!supported) {
     throw EnvoyException(
         fmt::format("IPv4 addresses are not supported on this machine: {}", address));
@@ -43,7 +36,7 @@ void validateIpv4Supported(const std::string& address) {
 // Validate that IPv6 is supported on this platform, raise an exception for the
 // given address if not.
 void validateIpv6Supported(const std::string& address) {
-  static const bool supported = ipFamilySupported(AF_INET6);
+  static const bool supported = Network::Address::ipFamilySupported(AF_INET6);
   if (!supported) {
     throw EnvoyException(
         fmt::format("IPv6 addresses are not supported on this machine: {}", address));
@@ -52,30 +45,37 @@ void validateIpv6Supported(const std::string& address) {
 
 } // namespace
 
+// Check if an IP family is supported on this machine.
+bool ipFamilySupported(int domain) {
+  Api::OsSysCalls& os_sys_calls = Api::OsSysCallsSingleton::get();
+  const Api::SysCallIntResult result = os_sys_calls.socket(domain, SOCK_STREAM, 0);
+  if (result.rc_ >= 0) {
+    RELEASE_ASSERT(os_sys_calls.close(result.rc_).rc_ == 0, "");
+  }
+  return result.rc_ != -1;
+}
+
 Address::InstanceConstSharedPtr addressFromSockAddr(const sockaddr_storage& ss, socklen_t ss_len,
                                                     bool v6only) {
-  RELEASE_ASSERT(ss_len == 0 || ss_len >= sizeof(sa_family_t));
+  RELEASE_ASSERT(ss_len == 0 || static_cast<unsigned int>(ss_len) >= sizeof(sa_family_t), "");
   switch (ss.ss_family) {
   case AF_INET: {
-    RELEASE_ASSERT(ss_len == 0 || ss_len == sizeof(sockaddr_in));
+    RELEASE_ASSERT(ss_len == 0 || static_cast<unsigned int>(ss_len) == sizeof(sockaddr_in), "");
     const struct sockaddr_in* sin = reinterpret_cast<const struct sockaddr_in*>(&ss);
     ASSERT(AF_INET == sin->sin_family);
     return std::make_shared<Address::Ipv4Instance>(sin);
   }
   case AF_INET6: {
-    RELEASE_ASSERT(ss_len == 0 || ss_len == sizeof(sockaddr_in6));
+    RELEASE_ASSERT(ss_len == 0 || static_cast<unsigned int>(ss_len) == sizeof(sockaddr_in6), "");
     const struct sockaddr_in6* sin6 = reinterpret_cast<const struct sockaddr_in6*>(&ss);
     ASSERT(AF_INET6 == sin6->sin6_family);
     if (!v6only && IN6_IS_ADDR_V4MAPPED(&sin6->sin6_addr)) {
-#ifndef s6_addr32
-#ifdef __APPLE__
-#define s6_addr32 __u6_addr.__u6_addr32
+#if defined(__APPLE__)
+      struct sockaddr_in sin = {
+          {}, AF_INET, sin6->sin6_port, {sin6->sin6_addr.__u6_addr.__u6_addr32[3]}, {}};
+#else
+      struct sockaddr_in sin = {AF_INET, sin6->sin6_port, {sin6->sin6_addr.s6_addr32[3]}, {}};
 #endif
-#endif
-      struct sockaddr_in sin = {.sin_family = AF_INET,
-                                .sin_port = sin6->sin6_port,
-                                .sin_addr = {.s_addr = sin6->sin6_addr.s6_addr32[3]},
-                                .sin_zero = {}};
       return std::make_shared<Address::Ipv4Instance>(&sin);
     } else {
       return std::make_shared<Address::Ipv6Instance>(*sin6, v6only);
@@ -84,13 +84,15 @@ Address::InstanceConstSharedPtr addressFromSockAddr(const sockaddr_storage& ss, 
   case AF_UNIX: {
     const struct sockaddr_un* sun = reinterpret_cast<const struct sockaddr_un*>(&ss);
     ASSERT(AF_UNIX == sun->sun_family);
-    RELEASE_ASSERT(ss_len == 0 || ss_len >= offsetof(struct sockaddr_un, sun_path) + 1);
+    RELEASE_ASSERT(ss_len == 0 || static_cast<unsigned int>(ss_len) >=
+                                      offsetof(struct sockaddr_un, sun_path) + 1,
+                   "");
     return std::make_shared<Address::PipeInstance>(sun, ss_len);
   }
   default:
     throw EnvoyException(fmt::format("Unexpected sockaddr family: {}", ss.ss_family));
   }
-  NOT_REACHED;
+  NOT_REACHED_GCOVR_EXCL_LINE;
 }
 
 InstanceConstSharedPtr addressFromFd(int fd) {
@@ -104,7 +106,7 @@ InstanceConstSharedPtr addressFromFd(int fd) {
   int socket_v6only = 0;
   if (ss.ss_family == AF_INET6) {
     socklen_t size_int = sizeof(socket_v6only);
-    RELEASE_ASSERT(::getsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &socket_v6only, &size_int) == 0);
+    RELEASE_ASSERT(::getsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &socket_v6only, &size_int) == 0, "");
   }
   return addressFromSockAddr(ss, ss_len, rc == 0 && socket_v6only);
 }
@@ -133,7 +135,7 @@ InstanceConstSharedPtr peerAddressFromFd(int fd) {
   return addressFromSockAddr(ss, ss_len);
 }
 
-int InstanceBase::socketFromSocketType(SocketType socketType) const {
+IoHandlePtr InstanceBase::socketFromSocketType(SocketType socketType) const {
 #if defined(__APPLE__)
   int flags = 0;
 #else
@@ -160,23 +162,29 @@ int InstanceBase::socketFromSocketType(SocketType socketType) const {
     domain = AF_UNIX;
   }
 
-  int fd = ::socket(domain, flags, 0);
-  RELEASE_ASSERT(fd != -1);
+  const Api::SysCallIntResult result = Api::OsSysCallsSingleton::get().socket(domain, flags, 0);
+  RELEASE_ASSERT(result.rc_ != -1,
+                 fmt::format("socket(2) failed, got error: {}", strerror(result.errno_)));
+  IoHandlePtr io_handle = std::make_unique<IoSocketHandleImpl>(result.rc_);
 
 #ifdef __APPLE__
   // Cannot set SOCK_NONBLOCK as a ::socket flag.
-  RELEASE_ASSERT(fcntl(fd, F_SETFL, O_NONBLOCK) != -1);
+  RELEASE_ASSERT(fcntl(io_handle->fd(), F_SETFL, O_NONBLOCK) != -1, "");
 #endif
 
-  return fd;
+  return io_handle;
 }
 
 Ipv4Instance::Ipv4Instance(const sockaddr_in* address) : InstanceBase(Type::Ip) {
   ip_.ipv4_.address_ = *address;
-  char str[INET_ADDRSTRLEN];
-  inet_ntop(AF_INET, &address->sin_addr, str, INET_ADDRSTRLEN);
-  friendly_name_ = fmt::format("{}:{}", str, ntohs(address->sin_port));
-  ip_.friendly_address_ = str;
+  ip_.friendly_address_ = sockaddrToString(*address);
+
+  // Based on benchmark testing, this reserve+append implementation runs faster than absl::StrCat.
+  fmt::format_int port(ntohs(address->sin_port));
+  friendly_name_.reserve(ip_.friendly_address_.size() + 1 + port.size());
+  friendly_name_.append(ip_.friendly_address_);
+  friendly_name_.push_back(':');
+  friendly_name_.append(port.data(), port.size());
   validateIpv4Supported(friendly_name_);
 }
 
@@ -206,17 +214,49 @@ Ipv4Instance::Ipv4Instance(uint32_t port) : InstanceBase(Type::Ip) {
   ip_.friendly_address_ = "0.0.0.0";
 }
 
-int Ipv4Instance::bind(int fd) const {
-  return ::bind(fd, reinterpret_cast<const sockaddr*>(&ip_.ipv4_.address_),
-                sizeof(ip_.ipv4_.address_));
+bool Ipv4Instance::operator==(const Instance& rhs) const {
+  const Ipv4Instance* rhs_casted = dynamic_cast<const Ipv4Instance*>(&rhs);
+  return (rhs_casted && (ip_.ipv4_.address() == rhs_casted->ip_.ipv4_.address()) &&
+          (ip_.port() == rhs_casted->ip_.port()));
 }
 
-int Ipv4Instance::connect(int fd) const {
-  return ::connect(fd, reinterpret_cast<const sockaddr*>(&ip_.ipv4_.address_),
-                   sizeof(ip_.ipv4_.address_));
+Api::SysCallIntResult Ipv4Instance::bind(int fd) const {
+  auto& os_syscalls = Api::OsSysCallsSingleton::get();
+  return os_syscalls.bind(fd, sockAddr(), sockAddrLen());
 }
 
-int Ipv4Instance::socket(SocketType type) const { return socketFromSocketType(type); }
+Api::SysCallIntResult Ipv4Instance::connect(int fd) const {
+  const int rc = ::connect(fd, sockAddr(), sockAddrLen());
+  return {rc, errno};
+}
+
+IoHandlePtr Ipv4Instance::socket(SocketType type) const { return socketFromSocketType(type); }
+
+std::string Ipv4Instance::sockaddrToString(const sockaddr_in& addr) {
+  static constexpr size_t BufferSize = 16; // enough space to hold an IPv4 address in string form
+  char str[BufferSize];
+  // Write backwards from the end of the buffer for simplicity.
+  char* start = str + BufferSize;
+  uint32_t ipv4_addr = ntohl(addr.sin_addr.s_addr);
+  for (unsigned i = 4; i != 0; i--, ipv4_addr >>= 8) {
+    uint32_t octet = ipv4_addr & 0xff;
+    if (octet == 0) {
+      ASSERT(start > str);
+      *--start = '0';
+    } else {
+      do {
+        ASSERT(start > str);
+        *--start = '0' + (octet % 10);
+        octet /= 10;
+      } while (octet != 0);
+    }
+    if (i != 1) {
+      ASSERT(start > str);
+      *--start = '.';
+    }
+  }
+  return std::string(start, str + BufferSize - start);
+}
 
 absl::uint128 Ipv6Instance::Ipv6Helper::address() const {
   absl::uint128 result{0};
@@ -263,23 +303,29 @@ Ipv6Instance::Ipv6Instance(const std::string& address, uint32_t port) : Instance
 
 Ipv6Instance::Ipv6Instance(uint32_t port) : Ipv6Instance("", port) {}
 
-int Ipv6Instance::bind(int fd) const {
-  return ::bind(fd, reinterpret_cast<const sockaddr*>(&ip_.ipv6_.address_),
-                sizeof(ip_.ipv6_.address_));
+bool Ipv6Instance::operator==(const Instance& rhs) const {
+  const auto* rhs_casted = dynamic_cast<const Ipv6Instance*>(&rhs);
+  return (rhs_casted && (ip_.ipv6_.address() == rhs_casted->ip_.ipv6_.address()) &&
+          (ip_.port() == rhs_casted->ip_.port()));
 }
 
-int Ipv6Instance::connect(int fd) const {
-  return ::connect(fd, reinterpret_cast<const sockaddr*>(&ip_.ipv6_.address_),
-                   sizeof(ip_.ipv6_.address_));
+Api::SysCallIntResult Ipv6Instance::bind(int fd) const {
+  auto& os_syscalls = Api::OsSysCallsSingleton::get();
+  return os_syscalls.bind(fd, sockAddr(), sockAddrLen());
 }
 
-int Ipv6Instance::socket(SocketType type) const {
-  const int fd = socketFromSocketType(type);
+Api::SysCallIntResult Ipv6Instance::connect(int fd) const {
+  const int rc = ::connect(fd, sockAddr(), sockAddrLen());
+  return {rc, errno};
+}
 
-  // Setting IPV6_V6ONLY resticts the IPv6 socket to IPv6 connections only.
+IoHandlePtr Ipv6Instance::socket(SocketType type) const {
+  IoHandlePtr io_handle = socketFromSocketType(type);
+  // Setting IPV6_V6ONLY restricts the IPv6 socket to IPv6 connections only.
   const int v6only = ip_.v6only_;
-  RELEASE_ASSERT(::setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &v6only, sizeof(v6only)) != -1);
-  return fd;
+  RELEASE_ASSERT(
+      ::setsockopt(io_handle->fd(), IPPROTO_IPV6, IPV6_V6ONLY, &v6only, sizeof(v6only)) != -1, "");
+  return io_handle;
 }
 
 PipeInstance::PipeInstance(const sockaddr_un* address, socklen_t ss_len)
@@ -288,7 +334,8 @@ PipeInstance::PipeInstance(const sockaddr_un* address, socklen_t ss_len)
 #if !defined(__linux__)
     throw EnvoyException("Abstract AF_UNIX sockets are only supported on linux.");
 #endif
-    RELEASE_ASSERT(ss_len >= offsetof(struct sockaddr_un, sun_path) + 1);
+    RELEASE_ASSERT(static_cast<unsigned int>(ss_len) >= offsetof(struct sockaddr_un, sun_path) + 1,
+                   "");
     abstract_namespace_ = true;
     address_length_ = ss_len - offsetof(struct sockaddr_un, sun_path);
   }
@@ -319,27 +366,25 @@ PipeInstance::PipeInstance(const std::string& pipe_path) : InstanceBase(Type::Pi
   }
 }
 
-int PipeInstance::bind(int fd) const {
-  if (abstract_namespace_) {
-    return ::bind(fd, reinterpret_cast<const sockaddr*>(&address_),
-                  offsetof(struct sockaddr_un, sun_path) + address_length_);
+bool PipeInstance::operator==(const Instance& rhs) const { return asString() == rhs.asString(); }
+
+Api::SysCallIntResult PipeInstance::bind(int fd) const {
+  if (!abstract_namespace_) {
+    // Try to unlink an existing filesystem object at the requested path. Ignore
+    // errors -- it's fine if the path doesn't exist, and if it exists but can't
+    // be unlinked then `::bind()` will generate a reasonable errno.
+    unlink(address_.sun_path);
   }
-  // Try to unlink an existing filesystem object at the requested path. Ignore
-  // errors -- it's fine if the path doesn't exist, and if it exists but can't
-  // be unlinked then `::bind()` will generate a reasonable errno.
-  unlink(address_.sun_path);
-  return ::bind(fd, reinterpret_cast<const sockaddr*>(&address_), sizeof(address_));
+  auto& os_syscalls = Api::OsSysCallsSingleton::get();
+  return os_syscalls.bind(fd, sockAddr(), sockAddrLen());
 }
 
-int PipeInstance::connect(int fd) const {
-  if (abstract_namespace_) {
-    return ::connect(fd, reinterpret_cast<const sockaddr*>(&address_),
-                     offsetof(struct sockaddr_un, sun_path) + address_length_);
-  }
-  return ::connect(fd, reinterpret_cast<const sockaddr*>(&address_), sizeof(address_));
+Api::SysCallIntResult PipeInstance::connect(int fd) const {
+  const int rc = ::connect(fd, sockAddr(), sockAddrLen());
+  return {rc, errno};
 }
 
-int PipeInstance::socket(SocketType type) const { return socketFromSocketType(type); }
+IoHandlePtr PipeInstance::socket(SocketType type) const { return socketFromSocketType(type); }
 
 } // namespace Address
 } // namespace Network

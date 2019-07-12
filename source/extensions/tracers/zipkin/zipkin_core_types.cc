@@ -93,7 +93,7 @@ const std::string Annotation::toJson() {
 
   if (endpoint_) {
     Util::mergeJsons(json_string, static_cast<Endpoint>(endpoint_.value()).toJson(),
-                     ZipkinJsonFieldNames::get().ANNOTATION_ENDPOINT.c_str());
+                     ZipkinJsonFieldNames::get().ANNOTATION_ENDPOINT);
   }
 
   return json_string;
@@ -133,7 +133,7 @@ const std::string BinaryAnnotation::toJson() {
 
   if (endpoint_) {
     Util::mergeJsons(json_string, static_cast<Endpoint>(endpoint_.value()).toJson(),
-                     ZipkinJsonFieldNames::get().BINARY_ANNOTATION_ENDPOINT.c_str());
+                     ZipkinJsonFieldNames::get().BINARY_ANNOTATION_ENDPOINT);
   }
 
   return json_string;
@@ -141,8 +141,11 @@ const std::string BinaryAnnotation::toJson() {
 
 const std::string Span::EMPTY_HEX_STRING_ = "0000000000000000";
 
-Span::Span(const Span& span) {
+Span::Span(const Span& span) : time_source_(span.time_source_) {
   trace_id_ = span.traceId();
+  if (span.isSetTraceIdHigh()) {
+    trace_id_high_ = span.traceIdHigh();
+  }
   name_ = span.name();
   id_ = span.id();
   if (span.isSetParentId()) {
@@ -157,9 +160,6 @@ Span::Span(const Span& span) {
   }
   if (span.isSetDuration()) {
     duration_ = span.duration();
-  }
-  if (span.isSetTraceIdHigh()) {
-    trace_id_high_ = span.traceIdHigh();
   }
   monotonic_start_time_ = span.startTime();
   tracer_ = span.tracer();
@@ -176,7 +176,7 @@ const std::string Span::toJson() {
   rapidjson::Writer<rapidjson::StringBuffer> writer(s);
   writer.StartObject();
   writer.Key(ZipkinJsonFieldNames::get().SPAN_TRACE_ID.c_str());
-  writer.String(Hex::uint64ToHex(trace_id_).c_str());
+  writer.String(traceIdAsHexString().c_str());
   writer.Key(ZipkinJsonFieldNames::get().SPAN_NAME.c_str());
   writer.String(name_.c_str());
   writer.Key(ZipkinJsonFieldNames::get().SPAN_ID.c_str());
@@ -207,14 +207,14 @@ const std::string Span::toJson() {
     annotation_json_vector.push_back(it->toJson());
   }
   Util::addArrayToJson(json_string, annotation_json_vector,
-                       ZipkinJsonFieldNames::get().SPAN_ANNOTATIONS.c_str());
+                       ZipkinJsonFieldNames::get().SPAN_ANNOTATIONS);
 
   std::vector<std::string> binary_annotation_json_vector;
   for (auto it = binary_annotations_.begin(); it != binary_annotations_.end(); it++) {
     binary_annotation_json_vector.push_back(it->toJson());
   }
   Util::addArrayToJson(json_string, binary_annotation_json_vector,
-                       ZipkinJsonFieldNames::get().SPAN_BINARY_ANNOTATIONS.c_str());
+                       ZipkinJsonFieldNames::get().SPAN_BINARY_ANNOTATIONS);
 
   return json_string;
 }
@@ -227,25 +227,23 @@ void Span::finish() {
     Annotation ss;
     ss.setEndpoint(annotations_[0].endpoint());
     ss.setTimestamp(std::chrono::duration_cast<std::chrono::microseconds>(
-                        ProdSystemTimeSource::instance_.currentTime().time_since_epoch())
+                        time_source_.systemTime().time_since_epoch())
                         .count());
     ss.setValue(ZipkinCoreConstants::get().SERVER_SEND);
     annotations_.push_back(std::move(ss));
   } else if (annotations_[0].value() == ZipkinCoreConstants::get().CLIENT_SEND) {
     // Need to set the CR annotation
     Annotation cr;
-    const uint64_t stop_timestamp =
-        std::chrono::duration_cast<std::chrono::microseconds>(
-            ProdSystemTimeSource::instance_.currentTime().time_since_epoch())
-            .count();
+    const uint64_t stop_timestamp = std::chrono::duration_cast<std::chrono::microseconds>(
+                                        time_source_.systemTime().time_since_epoch())
+                                        .count();
     cr.setEndpoint(annotations_[0].endpoint());
     cr.setTimestamp(stop_timestamp);
     cr.setValue(ZipkinCoreConstants::get().CLIENT_RECV);
     annotations_.push_back(std::move(cr));
-    const int64_t monotonic_stop_time =
-        std::chrono::duration_cast<std::chrono::microseconds>(
-            ProdMonotonicTimeSource::instance_.currentTime().time_since_epoch())
-            .count();
+    const int64_t monotonic_stop_time = std::chrono::duration_cast<std::chrono::microseconds>(
+                                            time_source_.monotonicTime().time_since_epoch())
+                                            .count();
     setDuration(monotonic_stop_time - monotonic_start_time_);
   }
 
@@ -254,10 +252,18 @@ void Span::finish() {
   }
 }
 
-void Span::setTag(const std::string& name, const std::string& value) {
-  if (name.size() > 0 && value.size() > 0) {
+void Span::setTag(absl::string_view name, absl::string_view value) {
+  if (!name.empty() && !value.empty()) {
     addBinaryAnnotation(BinaryAnnotation(name, value));
   }
+}
+
+void Span::log(SystemTime timestamp, const std::string& event) {
+  Annotation annotation;
+  annotation.setTimestamp(
+      std::chrono::duration_cast<std::chrono::microseconds>(timestamp.time_since_epoch()).count());
+  annotation.setValue(event);
+  addAnnotation(std::move(annotation));
 }
 
 } // namespace Zipkin

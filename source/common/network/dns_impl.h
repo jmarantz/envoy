@@ -39,8 +39,9 @@ private:
   friend class DnsResolverImplPeer;
   struct PendingResolution : public ActiveDnsQuery {
     // Network::ActiveDnsQuery
-    PendingResolution(ResolveCb callback, ares_channel channel, const std::string& dns_name)
-        : callback_(callback), channel_(channel), dns_name_(dns_name) {}
+    PendingResolution(ResolveCb callback, Event::Dispatcher& dispatcher, ares_channel channel,
+                      const std::string& dns_name)
+        : callback_(callback), dispatcher_(dispatcher), channel_(channel), dns_name_(dns_name) {}
 
     void cancel() override {
       // c-ares only supports channel-wide cancellation, so we just allow the
@@ -49,20 +50,22 @@ private:
     }
 
     /**
-     * c-ares ares_gethostbyname() query callback.
-     * @param status return status of call to ares_gethostbyname.
+     * ares_getaddrinfo query callback.
+     * @param status return status of call to ares_getaddrinfo.
      * @param timeouts the number of times the request timed out.
-     * @param hostent structure that stores information about a given host.
+     * @param addrinfo structure to store address info.
      */
-    void onAresHostCallback(int status, int timeouts, hostent* hostent);
+    void onAresGetAddrInfoCallback(int status, int timeouts, ares_addrinfo* addrinfo);
     /**
-     * wrapper function of call to ares_gethostbyname.
+     * wrapper function of call to ares_getaddrinfo.
      * @param family currently AF_INET and AF_INET6 are supported.
      */
-    void getHostByName(int family);
+    void getAddrInfo(int family);
 
     // Caller supplied callback to invoke on query completion or error.
     const ResolveCb callback_;
+    // Dispatcher to post any callback_ exceptions to.
+    Event::Dispatcher& dispatcher_;
     // Does the object own itself? Resource reclamation occurs via self-deleting
     // on query completion or error.
     bool owned_ = false;

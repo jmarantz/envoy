@@ -1,4 +1,5 @@
 licenses(["notice"])  # Apache 2
+
 # Redis custom health checker.
 
 load(
@@ -15,6 +16,7 @@ envoy_cc_library(
     hdrs = ["redis.h"],
     deps = [
         "//source/common/upstream:health_checker_base_lib",
+        "//source/extensions/filters/network/common/redis:client_lib",
         "//source/extensions/filters/network/redis_proxy:conn_pool_lib",
         "@envoy_api//envoy/api/v2/core:health_check_cc",
         "@envoy_api//envoy/config/health_checker/redis/v2:redis_cc",
@@ -39,6 +41,8 @@ envoy_cc_library(
     name = "utility",
     hdrs = ["utility.h"],
     deps = [
+        "//source/common/protobuf",
+        "//source/common/protobuf:utility_lib",
         "@envoy_api//envoy/api/v2/core:health_check_cc",
         "@envoy_api//envoy/config/health_checker/redis/v2:redis_cc",
     ],

@@ -1,4 +1,5 @@
 licenses(["notice"])  # Apache 2
+
 # HTTP L7 filter that injects faults into the request flow
 # Public docs: docs/root/configuration/http_filters/fault_filter.rst
 
@@ -22,13 +23,16 @@ envoy_cc_library(
         "//include/envoy/runtime:runtime_interface",
         "//include/envoy/stats:stats_interface",
         "//include/envoy/stats:stats_macros",
+        "//source/common/buffer:watermark_buffer_lib",
         "//source/common/common:assert_lib",
         "//source/common/common:empty_string",
+        "//source/common/common:token_bucket_impl_lib",
         "//source/common/http:codes_lib",
         "//source/common/http:header_map_lib",
         "//source/common/http:header_utility_lib",
         "//source/common/http:headers_lib",
         "//source/common/protobuf:utility_lib",
+        "//source/extensions/filters/common/fault:fault_config_lib",
         "@envoy_api//envoy/config/filter/http/fault/v2:fault_cc",
     ],
 )

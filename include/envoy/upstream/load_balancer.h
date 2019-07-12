@@ -5,6 +5,7 @@
 
 #include "envoy/common/pure.h"
 #include "envoy/router/router.h"
+#include "envoy/upstream/types.h"
 #include "envoy/upstream/upstream.h"
 
 namespace Envoy {
@@ -16,7 +17,7 @@ namespace Upstream {
  */
 class LoadBalancerContext {
 public:
-  virtual ~LoadBalancerContext() {}
+  virtual ~LoadBalancerContext() = default;
 
   /**
    * Compute and return an optional hash key to use during load balancing. This
@@ -37,6 +38,44 @@ public:
    * balancing.
    */
   virtual const Network::Connection* downstreamConnection() const PURE;
+
+  /**
+   * @return const Http::HeaderMap* the incoming headers or nullptr to use during load
+   * balancing.
+   */
+  virtual const Http::HeaderMap* downstreamHeaders() const PURE;
+
+  /**
+   * Called to retrieve a reference to the priority load data that should be used when selecting a
+   * priority. Implementations may return the provided original reference to make no changes, or
+   * return a reference to alternative PriorityLoad held internally.
+   *
+   * @param priority_state current priority state of the cluster being being load balanced.
+   * @param original_priority_load the cached priority load for the cluster being load balanced.
+   * @return a reference to the priority load data that should be used to select a priority.
+   *
+   */
+  virtual const HealthyAndDegradedLoad&
+  determinePriorityLoad(const PrioritySet& priority_set,
+                        const HealthyAndDegradedLoad& original_priority_load) PURE;
+
+  /**
+   * Called to determine whether we should reperform host selection. The load balancer
+   * will retry host selection until either this function returns true or hostSelectionRetryCount is
+   * reached.
+   */
+  virtual bool shouldSelectAnotherHost(const Host& host) PURE;
+
+  /**
+   * Called to determine how many times host selection should be retried until the filter is
+   * ignored.
+   */
+  virtual uint32_t hostSelectionRetryCount() const PURE;
+
+  /**
+   * Returns the set of socket options which should be applied on upstream connections
+   */
+  virtual Network::Socket::OptionsSharedPtr upstreamSocketOptions() const PURE;
 };
 
 /**
@@ -44,7 +83,7 @@ public:
  */
 class LoadBalancer {
 public:
-  virtual ~LoadBalancer() {}
+  virtual ~LoadBalancer() = default;
 
   /**
    * Ask the load balancer for the next host to use depending on the underlying LB algorithm.
@@ -55,14 +94,14 @@ public:
   virtual HostConstSharedPtr chooseHost(LoadBalancerContext* context) PURE;
 };
 
-typedef std::unique_ptr<LoadBalancer> LoadBalancerPtr;
+using LoadBalancerPtr = std::unique_ptr<LoadBalancer>;
 
 /**
  * Factory for load balancers.
  */
 class LoadBalancerFactory {
 public:
-  virtual ~LoadBalancerFactory() {}
+  virtual ~LoadBalancerFactory() = default;
 
   /**
    * @return LoadBalancerPtr a new load balancer.
@@ -70,7 +109,7 @@ public:
   virtual LoadBalancerPtr create() PURE;
 };
 
-typedef std::shared_ptr<LoadBalancerFactory> LoadBalancerFactorySharedPtr;
+using LoadBalancerFactorySharedPtr = std::shared_ptr<LoadBalancerFactory>;
 
 /**
  * A thread aware load balancer is a load balancer that is global to all workers on behalf of a
@@ -100,7 +139,7 @@ typedef std::shared_ptr<LoadBalancerFactory> LoadBalancerFactorySharedPtr;
  */
 class ThreadAwareLoadBalancer {
 public:
-  virtual ~ThreadAwareLoadBalancer() {}
+  virtual ~ThreadAwareLoadBalancer() = default;
 
   /**
    * @return LoadBalancerFactorySharedPtr the shared factory to use for creating new worker local
@@ -117,7 +156,7 @@ public:
   virtual void initialize() PURE;
 };
 
-typedef std::unique_ptr<ThreadAwareLoadBalancer> ThreadAwareLoadBalancerPtr;
+using ThreadAwareLoadBalancerPtr = std::unique_ptr<ThreadAwareLoadBalancer>;
 
 } // namespace Upstream
 } // namespace Envoy

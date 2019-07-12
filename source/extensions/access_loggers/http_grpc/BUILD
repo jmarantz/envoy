@@ -1,4 +1,5 @@
 licenses(["notice"])  # Apache 2
+
 # Access log implementation that writes to a gRPC service.
 # Public docs: TODO(rodaine): Docs needed.
 
@@ -21,10 +22,23 @@ envoy_cc_library(
         "//include/envoy/singleton:instance_interface",
         "//include/envoy/thread_local:thread_local_interface",
         "//include/envoy/upstream:cluster_manager_interface",
+        "//include/envoy/upstream:upstream_interface",
         "//source/common/grpc:async_client_lib",
+        "//source/common/grpc:typed_async_client_lib",
         "//source/common/network:utility_lib",
         "@envoy_api//envoy/config/accesslog/v2:als_cc",
         "@envoy_api//envoy/config/filter/accesslog/v2:accesslog_cc",
+        "@envoy_api//envoy/service/accesslog/v2:als_cc",
+    ],
+)
+
+envoy_cc_library(
+    name = "grpc_access_log_proto_descriptors_lib",
+    srcs = ["grpc_access_log_proto_descriptors.cc"],
+    hdrs = ["grpc_access_log_proto_descriptors.h"],
+    deps = [
+        "//source/common/common:assert_lib",
+        "//source/common/protobuf",
         "@envoy_api//envoy/service/accesslog/v2:als_cc",
     ],
 )
@@ -36,8 +50,10 @@ envoy_cc_library(
     deps = [
         "//include/envoy/registry",
         "//include/envoy/server:access_log_config_interface",
+        "//source/common/common:assert_lib",
         "//source/common/protobuf",
         "//source/extensions/access_loggers:well_known_names",
         "//source/extensions/access_loggers/http_grpc:grpc_access_log_lib",
+        "//source/extensions/access_loggers/http_grpc:grpc_access_log_proto_descriptors_lib",
     ],
 )

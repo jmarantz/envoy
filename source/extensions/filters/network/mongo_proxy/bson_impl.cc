@@ -16,7 +16,7 @@ namespace NetworkFilters {
 namespace MongoProxy {
 namespace Bson {
 
-int32_t BufferHelper::peakInt32(Buffer::Instance& data) {
+int32_t BufferHelper::peekInt32(Buffer::Instance& data) {
   if (data.length() < sizeof(int32_t)) {
     throw EnvoyException("invalid buffer size");
   }
@@ -77,7 +77,7 @@ double BufferHelper::removeDouble(Buffer::Instance& data) {
 }
 
 int32_t BufferHelper::removeInt32(Buffer::Instance& data) {
-  int32_t ret = peakInt32(data);
+  int32_t ret = peekInt32(data);
   data.drain(sizeof(int32_t));
   return ret;
 }
@@ -96,6 +96,10 @@ int64_t BufferHelper::removeInt64(Buffer::Instance& data) {
 
 std::string BufferHelper::removeString(Buffer::Instance& data) {
   int32_t length = removeInt32(data);
+  if (static_cast<uint32_t>(length) > data.length()) {
+    throw EnvoyException("invalid buffer size");
+  }
+
   char* start = reinterpret_cast<char*>(data.linearize(length));
   std::string ret(start);
   data.drain(length);
@@ -106,6 +110,10 @@ std::string BufferHelper::removeBinary(Buffer::Instance& data) {
   // Read out the subtype but do not store it for now.
   int32_t length = removeInt32(data);
   removeByte(data);
+  if (static_cast<uint32_t>(length) > data.length()) {
+    throw EnvoyException("invalid buffer size");
+  }
+
   char* start = reinterpret_cast<char*>(data.linearize(length));
   std::string ret(start, length);
   data.drain(length);
@@ -157,7 +165,8 @@ int32_t FieldImpl::byteSize() const {
     return total + 8;
   }
 
-  case Type::STRING: {
+  case Type::STRING:
+  case Type::SYMBOL: {
     return total + 4 + value_.string_value_.size() + 1;
   }
 
@@ -191,7 +200,7 @@ int32_t FieldImpl::byteSize() const {
   }
   }
 
-  NOT_REACHED;
+  NOT_REACHED_GCOVR_EXCL_LINE;
 }
 
 void FieldImpl::encode(Buffer::Instance& output) const {
@@ -203,7 +212,8 @@ void FieldImpl::encode(Buffer::Instance& output) const {
     return BufferHelper::writeDouble(output, value_.double_value_);
   }
 
-  case Type::STRING: {
+  case Type::STRING:
+  case Type::SYMBOL: {
     return BufferHelper::writeString(output, value_.string_value_);
   }
 
@@ -244,7 +254,7 @@ void FieldImpl::encode(Buffer::Instance& output) const {
     return BufferHelper::writeInt32(output, value_.int32_value_);
   }
 
-  NOT_REACHED;
+  NOT_REACHED_GCOVR_EXCL_LINE;
 }
 
 bool FieldImpl::operator==(const Field& rhs) const {
@@ -259,6 +269,10 @@ bool FieldImpl::operator==(const Field& rhs) const {
 
   case Type::STRING: {
     return asString() == rhs.asString();
+  }
+
+  case Type::SYMBOL: {
+    return asSymbol() == rhs.asSymbol();
   }
 
   case Type::DOCUMENT: {
@@ -306,7 +320,7 @@ bool FieldImpl::operator==(const Field& rhs) const {
   }
   }
 
-  NOT_REACHED;
+  NOT_REACHED_GCOVR_EXCL_LINE;
 }
 
 std::string FieldImpl::toString() const {
@@ -316,6 +330,7 @@ std::string FieldImpl::toString() const {
   }
 
   case Type::STRING:
+  case Type::SYMBOL:
   case Type::BINARY: {
     return fmt::format("\"{}\"", StringUtil::escape(value_.string_value_));
   }
@@ -354,7 +369,7 @@ std::string FieldImpl::toString() const {
   }
   }
 
-  NOT_REACHED;
+  NOT_REACHED_GCOVR_EXCL_LINE;
 }
 
 void DocumentImpl::fromBuffer(Buffer::Instance& data) {
@@ -394,6 +409,13 @@ void DocumentImpl::fromBuffer(Buffer::Instance& data) {
       std::string value = BufferHelper::removeString(data);
       ENVOY_LOG(trace, "BSON string: {}", value);
       addString(key, std::move(value));
+      break;
+    }
+
+    case Field::Type::SYMBOL: {
+      std::string value = BufferHelper::removeString(data);
+      ENVOY_LOG(trace, "BSON symbol: {}", value);
+      addSymbol(key, std::move(value));
       break;
     }
 

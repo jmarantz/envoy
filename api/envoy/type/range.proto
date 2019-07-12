@@ -1,6 +1,10 @@
 syntax = "proto3";
 
 package envoy.type;
+
+option java_outer_classname = "RangeProto";
+option java_multiple_files = true;
+option java_package = "io.envoyproxy.envoy.type";
 option go_package = "envoy_type";
 
 import "gogoproto/gogo.proto";
@@ -17,4 +21,14 @@ message Int64Range {
 
   // end of the range (exclusive)
   int64 end = 2;
+}
+
+// Specifies the double start and end of the range using half-open interval semantics [start,
+// end).
+message DoubleRange {
+  // start of the range (inclusive)
+  double start = 1;
+
+  // end of the range (exclusive)
+  double end = 2;
 }

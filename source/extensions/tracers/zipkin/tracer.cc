@@ -28,15 +28,17 @@ SpanPtr Tracer::startSpan(const Tracing::Config& config, const std::string& span
   }
 
   // Create an all-new span, with no parent id
-  SpanPtr span_ptr(new Span());
+  SpanPtr span_ptr(new Span(time_source_));
   span_ptr->setName(span_name);
   uint64_t random_number = random_generator_.random();
   span_ptr->setId(random_number);
   span_ptr->setTraceId(random_number);
-  int64_t start_time_micro =
-      std::chrono::duration_cast<std::chrono::microseconds>(
-          ProdMonotonicTimeSource::instance_.currentTime().time_since_epoch())
-          .count();
+  if (trace_id_128bit_) {
+    span_ptr->setTraceIdHigh(random_generator_.random());
+  }
+  int64_t start_time_micro = std::chrono::duration_cast<std::chrono::microseconds>(
+                                 time_source_.monotonicTime().time_since_epoch())
+                                 .count();
   span_ptr->setStartTime(start_time_micro);
 
   // Set the timestamp globally for the span and also for the CS annotation
@@ -55,7 +57,7 @@ SpanPtr Tracer::startSpan(const Tracing::Config& config, const std::string& span
 
 SpanPtr Tracer::startSpan(const Tracing::Config& config, const std::string& span_name,
                           SystemTime timestamp, SpanContext& previous_context) {
-  SpanPtr span_ptr(new Span());
+  SpanPtr span_ptr(new Span(time_source_));
   Annotation annotation;
   uint64_t timestamp_micro;
 
@@ -64,7 +66,7 @@ SpanPtr Tracer::startSpan(const Tracing::Config& config, const std::string& span
 
   span_ptr->setName(span_name);
 
-  if (config.operationName() == Tracing::OperationName::Egress) {
+  if (config.operationName() == Tracing::OperationName::Egress || !shared_span_context_) {
     // We need to create a new span that is a child of the previous span; no shared context
 
     // Create a new span id
@@ -104,14 +106,16 @@ SpanPtr Tracer::startSpan(const Tracing::Config& config, const std::string& span
 
   // Keep the same trace id
   span_ptr->setTraceId(previous_context.trace_id());
+  if (previous_context.is128BitTraceId()) {
+    span_ptr->setTraceIdHigh(previous_context.trace_id_high());
+  }
 
   // Keep the same sampled flag
   span_ptr->setSampled(previous_context.sampled());
 
-  int64_t start_time_micro =
-      std::chrono::duration_cast<std::chrono::microseconds>(
-          ProdMonotonicTimeSource::instance_.currentTime().time_since_epoch())
-          .count();
+  int64_t start_time_micro = std::chrono::duration_cast<std::chrono::microseconds>(
+                                 time_source_.monotonicTime().time_since_epoch())
+                                 .count();
   span_ptr->setStartTime(start_time_micro);
 
   span_ptr->setTracer(this);

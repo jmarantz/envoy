@@ -7,7 +7,12 @@
 #include <linux/netfilter_ipv4.h>
 #endif
 
-#include <netinet/ip.h>
+#ifndef IP6T_SO_ORIGINAL_DST
+// From linux/netfilter_ipv6/ip6_tables.h
+#define IP6T_SO_ORIGINAL_DST 80
+#endif
+
+#include <netinet/in.h>
 #include <sys/socket.h>
 
 #include <cstdint>
@@ -18,24 +23,30 @@
 
 #include "envoy/common/exception.h"
 #include "envoy/network/connection.h"
-#include "envoy/stats/stats.h"
 
+#include "common/api/os_sys_calls_impl.h"
 #include "common/common/assert.h"
+#include "common/common/cleanup.h"
 #include "common/common/utility.h"
 #include "common/network/address_impl.h"
 #include "common/protobuf/protobuf.h"
 
 #include "common/common/fmt.h"
 
+#include "absl/strings/match.h"
+
 namespace Envoy {
 namespace Network {
 
 const std::string Utility::TCP_SCHEME = "tcp://";
+const std::string Utility::UDP_SCHEME = "udp://";
 const std::string Utility::UNIX_SCHEME = "unix://";
 
 Address::InstanceConstSharedPtr Utility::resolveUrl(const std::string& url) {
   if (urlIsTcpScheme(url)) {
     return parseInternetAddressAndPort(url.substr(TCP_SCHEME.size()));
+  } else if (urlIsUdpScheme(url)) {
+    return parseInternetAddressAndPort(url.substr(UDP_SCHEME.size()));
   } else if (urlIsUnixScheme(url)) {
     return Address::InstanceConstSharedPtr{
         new Address::PipeInstance(url.substr(UNIX_SCHEME.size()))};
@@ -44,30 +55,36 @@ Address::InstanceConstSharedPtr Utility::resolveUrl(const std::string& url) {
   }
 }
 
-bool Utility::urlIsTcpScheme(const std::string& url) { return url.find(TCP_SCHEME) == 0; }
+bool Utility::urlIsTcpScheme(const std::string& url) { return absl::StartsWith(url, TCP_SCHEME); }
 
-bool Utility::urlIsUnixScheme(const std::string& url) { return url.find(UNIX_SCHEME) == 0; }
+bool Utility::urlIsUdpScheme(const std::string& url) { return absl::StartsWith(url, UDP_SCHEME); }
 
-std::string Utility::hostFromTcpUrl(const std::string& url) {
-  if (!urlIsTcpScheme(url)) {
-    throw EnvoyException(fmt::format("expected TCP scheme, got: {}", url));
+bool Utility::urlIsUnixScheme(const std::string& url) { return absl::StartsWith(url, UNIX_SCHEME); }
+
+namespace {
+
+std::string hostFromUrl(const std::string& url, const std::string& scheme,
+                        const std::string& scheme_name) {
+  if (!absl::StartsWith(url, scheme)) {
+    throw EnvoyException(fmt::format("expected {} scheme, got: {}", scheme_name, url));
   }
 
-  size_t colon_index = url.find(':', TCP_SCHEME.size());
+  size_t colon_index = url.find(':', scheme.size());
 
   if (colon_index == std::string::npos) {
     throw EnvoyException(fmt::format("malformed url: {}", url));
   }
 
-  return url.substr(TCP_SCHEME.size(), colon_index - TCP_SCHEME.size());
+  return url.substr(scheme.size(), colon_index - scheme.size());
 }
 
-uint32_t Utility::portFromTcpUrl(const std::string& url) {
-  if (!urlIsTcpScheme(url)) {
-    throw EnvoyException(fmt::format("expected TCP scheme, got: {}", url));
+uint32_t portFromUrl(const std::string& url, const std::string& scheme,
+                     const std::string& scheme_name) {
+  if (!absl::StartsWith(url, scheme)) {
+    throw EnvoyException(fmt::format("expected {} scheme, got: {}", scheme_name, url));
   }
 
-  size_t colon_index = url.find(':', TCP_SCHEME.size());
+  size_t colon_index = url.find(':', scheme.size());
 
   if (colon_index == std::string::npos) {
     throw EnvoyException(fmt::format("malformed url: {}", url));
@@ -80,6 +97,24 @@ uint32_t Utility::portFromTcpUrl(const std::string& url) {
   } catch (const std::out_of_range& e) {
     throw EnvoyException(e.what());
   }
+}
+
+} // namespace
+
+std::string Utility::hostFromTcpUrl(const std::string& url) {
+  return hostFromUrl(url, TCP_SCHEME, "TCP");
+}
+
+uint32_t Utility::portFromTcpUrl(const std::string& url) {
+  return portFromUrl(url, TCP_SCHEME, "TCP");
+}
+
+std::string Utility::hostFromUdpUrl(const std::string& url) {
+  return hostFromUrl(url, UDP_SCHEME, "UDP");
+}
+
+uint32_t Utility::portFromUdpUrl(const std::string& url) {
+  return portFromUrl(url, UDP_SCHEME, "UDP");
 }
 
 Address::InstanceConstSharedPtr Utility::parseInternetAddress(const std::string& ip_address,
@@ -98,7 +133,7 @@ Address::InstanceConstSharedPtr Utility::parseInternetAddress(const std::string&
     return std::make_shared<Address::Ipv6Instance>(sa6, v6only);
   }
   throwWithMalformedIp(ip_address);
-  NOT_REACHED;
+  NOT_REACHED_GCOVR_EXCL_LINE;
 }
 
 Address::InstanceConstSharedPtr Utility::parseInternetAddressAndPort(const std::string& ip_address,
@@ -108,14 +143,14 @@ Address::InstanceConstSharedPtr Utility::parseInternetAddressAndPort(const std::
   }
   if (ip_address[0] == '[') {
     // Appears to be an IPv6 address. Find the "]:" that separates the address from the port.
-    auto pos = ip_address.rfind("]:");
+    const auto pos = ip_address.rfind("]:");
     if (pos == std::string::npos) {
       throwWithMalformedIp(ip_address);
     }
     const auto ip_str = ip_address.substr(1, pos - 1);
     const auto port_str = ip_address.substr(pos + 2);
     uint64_t port64 = 0;
-    if (port_str.empty() || !StringUtil::atoul(port_str.c_str(), port64, 10) || port64 > 65535) {
+    if (port_str.empty() || !absl::SimpleAtoi(port_str, &port64) || port64 > 65535) {
       throwWithMalformedIp(ip_address);
     }
     sockaddr_in6 sa6;
@@ -128,14 +163,14 @@ Address::InstanceConstSharedPtr Utility::parseInternetAddressAndPort(const std::
     return std::make_shared<Address::Ipv6Instance>(sa6, v6only);
   }
   // Treat it as an IPv4 address followed by a port.
-  auto pos = ip_address.rfind(":");
+  const auto pos = ip_address.rfind(':');
   if (pos == std::string::npos) {
     throwWithMalformedIp(ip_address);
   }
   const auto ip_str = ip_address.substr(0, pos);
   const auto port_str = ip_address.substr(pos + 1);
   uint64_t port64 = 0;
-  if (port_str.empty() || !StringUtil::atoul(port_str.c_str(), port64, 10) || port64 > 65535) {
+  if (port_str.empty() || !absl::SimpleAtoi(port_str, &port64) || port64 > 65535) {
     throwWithMalformedIp(ip_address);
   }
   sockaddr_in sa4;
@@ -159,7 +194,7 @@ void Utility::throwWithMalformedIp(const std::string& ip_address) {
 }
 
 // TODO(hennna): Currently getLocalAddress does not support choosing between
-// multiple interfaces and addresses not returned by getifaddrs. In additon,
+// multiple interfaces and addresses not returned by getifaddrs. In addition,
 // the default is to return a loopback address of type version. This function may
 // need to be updated in the future. Discussion can be found at Github issue #939.
 Address::InstanceConstSharedPtr Utility::getLocalAddress(const Address::IpVersion version) {
@@ -168,7 +203,7 @@ Address::InstanceConstSharedPtr Utility::getLocalAddress(const Address::IpVersio
   Address::InstanceConstSharedPtr ret;
 
   int rc = getifaddrs(&ifaddr);
-  RELEASE_ASSERT(!rc);
+  RELEASE_ASSERT(!rc, "");
 
   // man getifaddrs(3)
   for (ifa = ifaddr; ifa != nullptr; ifa = ifa->ifa_next) {
@@ -192,7 +227,7 @@ Address::InstanceConstSharedPtr Utility::getLocalAddress(const Address::IpVersio
     freeifaddrs(ifaddr);
   }
 
-  // If the local address is not found above, then return the loopback addresss by default.
+  // If the local address is not found above, then return the loopback address by default.
   if (ret == nullptr) {
     if (version == Address::IpVersion::v4) {
       ret.reset(new Address::Ipv4Instance("127.0.0.1"));
@@ -201,6 +236,49 @@ Address::InstanceConstSharedPtr Utility::getLocalAddress(const Address::IpVersio
     }
   }
   return ret;
+}
+
+bool Utility::isLocalConnection(const Network::ConnectionSocket& socket) {
+  const auto& remote_address = socket.remoteAddress();
+  // Before calling getifaddrs, verify the obvious checks.
+  // Note that there are corner cases, where remote and local address will be the same
+  // while the client is not actually local. Example could be an iptables intercepted
+  // connection. However, this is a rare exception and such assumption results in big
+  // performance optimization.
+  if (remote_address->type() == Envoy::Network::Address::Type::Pipe ||
+      remote_address == socket.localAddress() || isLoopbackAddress(*remote_address)) {
+    return true;
+  }
+
+  struct ifaddrs* ifaddr;
+  const int rc = getifaddrs(&ifaddr);
+  Cleanup ifaddr_cleanup([ifaddr] {
+    if (ifaddr) {
+      freeifaddrs(ifaddr);
+    }
+  });
+  RELEASE_ASSERT(rc == 0, "");
+
+  const auto af_look_up =
+      (remote_address->ip()->version() == Address::IpVersion::v4) ? AF_INET : AF_INET6;
+
+  for (struct ifaddrs* ifa = ifaddr; ifa != nullptr; ifa = ifa->ifa_next) {
+    if (ifa->ifa_addr == nullptr) {
+      continue;
+    }
+
+    if (ifa->ifa_addr->sa_family == af_look_up) {
+      const auto* addr = reinterpret_cast<const struct sockaddr_storage*>(ifa->ifa_addr);
+      const auto local_address = Address::addressFromSockAddr(
+          *addr, (af_look_up == AF_INET) ? sizeof(sockaddr_in) : sizeof(sockaddr_in6));
+
+      if (remote_address == local_address) {
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
 
 bool Utility::isInternalAddress(const Address::Instance& address) {
@@ -250,31 +328,34 @@ bool Utility::isLoopbackAddress(const Address::Instance& address) {
     absl::uint128 addr = address.ip()->ipv6()->address();
     return 0 == memcmp(&addr, &in6addr_loopback, sizeof(in6addr_loopback));
   }
-  NOT_IMPLEMENTED;
+  NOT_IMPLEMENTED_GCOVR_EXCL_LINE;
 }
 
 Address::InstanceConstSharedPtr Utility::getCanonicalIpv4LoopbackAddress() {
-  // Initialized on first call in a thread-safe manner.
-  static Address::InstanceConstSharedPtr loopback(new Address::Ipv4Instance("127.0.0.1", 0));
-  return loopback;
+  CONSTRUCT_ON_FIRST_USE(Address::InstanceConstSharedPtr,
+                         new Address::Ipv4Instance("127.0.0.1", 0));
 }
 
 Address::InstanceConstSharedPtr Utility::getIpv6LoopbackAddress() {
-  // Initialized on first call in a thread-safe manner.
-  static Address::InstanceConstSharedPtr loopback(new Address::Ipv6Instance("::1", 0));
-  return loopback;
+  CONSTRUCT_ON_FIRST_USE(Address::InstanceConstSharedPtr, new Address::Ipv6Instance("::1", 0));
 }
 
 Address::InstanceConstSharedPtr Utility::getIpv4AnyAddress() {
-  // Initialized on first call in a thread-safe manner.
-  static Address::InstanceConstSharedPtr any(new Address::Ipv4Instance(static_cast<uint32_t>(0)));
-  return any;
+  CONSTRUCT_ON_FIRST_USE(Address::InstanceConstSharedPtr,
+                         new Address::Ipv4Instance(static_cast<uint32_t>(0)));
 }
 
 Address::InstanceConstSharedPtr Utility::getIpv6AnyAddress() {
-  // Initialized on first call in a thread-safe manner.
-  static Address::InstanceConstSharedPtr any(new Address::Ipv6Instance(static_cast<uint32_t>(0)));
-  return any;
+  CONSTRUCT_ON_FIRST_USE(Address::InstanceConstSharedPtr,
+                         new Address::Ipv6Instance(static_cast<uint32_t>(0)));
+}
+
+const std::string& Utility::getIpv4CidrCatchAllAddress() {
+  CONSTRUCT_ON_FIRST_USE(std::string, "0.0.0.0/0");
+}
+
+const std::string& Utility::getIpv6CidrCatchAllAddress() {
+  CONSTRUCT_ON_FIRST_USE(std::string, "::/0");
 }
 
 Address::InstanceConstSharedPtr Utility::getAddressWithPort(const Address::Instance& address,
@@ -285,25 +366,48 @@ Address::InstanceConstSharedPtr Utility::getAddressWithPort(const Address::Insta
   case Network::Address::IpVersion::v6:
     return std::make_shared<Address::Ipv6Instance>(address.ip()->addressAsString(), port);
   }
-  NOT_REACHED;
+  NOT_REACHED_GCOVR_EXCL_LINE;
 }
 
 Address::InstanceConstSharedPtr Utility::getOriginalDst(int fd) {
 #ifdef SOL_IP
   sockaddr_storage orig_addr;
   socklen_t addr_len = sizeof(sockaddr_storage);
-  int status = getsockopt(fd, SOL_IP, SO_ORIGINAL_DST, &orig_addr, &addr_len);
+  int socket_domain;
+  socklen_t domain_len = sizeof(socket_domain);
+  auto& os_syscalls = Api::OsSysCallsSingleton::get();
+  const Api::SysCallIntResult result =
+      os_syscalls.getsockopt(fd, SOL_SOCKET, SO_DOMAIN, &socket_domain, &domain_len);
+  int status = result.rc_;
 
-  if (status == 0) {
-    // TODO(mattklein123): IPv6 support. See github issue #1094.
-    ASSERT(orig_addr.ss_family == AF_INET);
-    return Address::InstanceConstSharedPtr{
-        new Address::Ipv4Instance(reinterpret_cast<sockaddr_in*>(&orig_addr))};
+  if (status != 0) {
+    return nullptr;
+  }
+
+  if (socket_domain == AF_INET) {
+    status = os_syscalls.getsockopt(fd, SOL_IP, SO_ORIGINAL_DST, &orig_addr, &addr_len).rc_;
+  } else if (socket_domain == AF_INET6) {
+    status = os_syscalls.getsockopt(fd, SOL_IPV6, IP6T_SO_ORIGINAL_DST, &orig_addr, &addr_len).rc_;
   } else {
     return nullptr;
   }
+
+  if (status != 0) {
+    return nullptr;
+  }
+
+  switch (orig_addr.ss_family) {
+  case AF_INET:
+    return Address::InstanceConstSharedPtr{
+        new Address::Ipv4Instance(reinterpret_cast<sockaddr_in*>(&orig_addr))};
+  case AF_INET6:
+    return Address::InstanceConstSharedPtr{
+        new Address::Ipv6Instance(reinterpret_cast<sockaddr_in6&>(orig_addr))};
+  default:
+    return nullptr;
+  }
 #else
-  // TODO(zuercher): determine if connection redirection is possible under OS X (c.f. pfctl and
+  // TODO(zuercher): determine if connection redirection is possible under macOS (c.f. pfctl and
   // divert), and whether it's possible to find the learn destination address.
   UNREFERENCED_PARAMETER(fd);
   return nullptr;
@@ -312,7 +416,7 @@ Address::InstanceConstSharedPtr Utility::getOriginalDst(int fd) {
 
 void Utility::parsePortRangeList(absl::string_view string, std::list<PortRange>& list) {
   const auto ranges = StringUtil::splitToken(string, ",");
-  for (auto s : ranges) {
+  for (const auto& s : ranges) {
     const std::string s_string{s};
     std::stringstream ss(s_string);
     uint32_t min = 0;
@@ -384,7 +488,7 @@ Utility::protobufAddressToAddress(const envoy::api::v2::core::Address& proto_add
   case envoy::api::v2::core::Address::kPipe:
     return std::make_shared<Address::PipeInstance>(proto_address.pipe().path());
   default:
-    NOT_REACHED;
+    NOT_REACHED_GCOVR_EXCL_LINE;
   }
 }
 
@@ -397,6 +501,27 @@ void Utility::addressToProtobufAddress(const Address::Instance& address,
     auto* socket_address = proto_address.mutable_socket_address();
     socket_address->set_address(address.ip()->addressAsString());
     socket_address->set_port_value(address.ip()->port());
+  }
+}
+
+Address::SocketType
+Utility::protobufAddressSocketType(const envoy::api::v2::core::Address& proto_address) {
+  switch (proto_address.address_case()) {
+  case envoy::api::v2::core::Address::kSocketAddress: {
+    const auto protocol = proto_address.socket_address().protocol();
+    switch (protocol) {
+    case envoy::api::v2::core::SocketAddress::TCP:
+      return Address::SocketType::Stream;
+    case envoy::api::v2::core::SocketAddress::UDP:
+      return Address::SocketType::Datagram;
+    default:
+      NOT_REACHED_GCOVR_EXCL_LINE;
+    }
+  }
+  case envoy::api::v2::core::Address::kPipe:
+    return Address::SocketType::Stream;
+  default:
+    NOT_REACHED_GCOVR_EXCL_LINE;
   }
 }
 
