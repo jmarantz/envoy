@@ -230,6 +230,22 @@ envoy_cc_library(
 )
 
 envoy_cc_library(
+    name = "header_map2_lib",
+    srcs = ["header_map_impl2.cc"],
+    hdrs = ["header_map_impl2.h"],
+    deps = [
+        ":headers_lib",
+        "//include/envoy/http:header_map_interface",
+        "//source/common/common:assert_lib",
+        "//source/common/common:dump_state_utils",
+        "//source/common/common:empty_string",
+        "//source/common/common:non_copyable",
+        "//source/common/common:utility_lib",
+        "//source/common/singleton:const_singleton",
+    ],
+)
+
+envoy_cc_library(
     name = "headers_lib",
     hdrs = ["headers.h"],
     deps = [

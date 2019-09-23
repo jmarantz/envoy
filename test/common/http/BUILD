@@ -250,6 +250,16 @@ envoy_cc_test(
     ],
 )
 
+envoy_cc_test(
+    name = "header_map_impl2_test",
+    srcs = ["header_map_impl2_test.cc"],
+    deps = [
+        "//source/common/http:header_map2_lib",
+        "//source/common/http:header_utility_lib",
+        "//test/test_common:utility_lib",
+    ],
+)
+
 envoy_cc_test_binary(
     name = "header_map_impl_speed_test",
     srcs = ["header_map_impl_speed_test.cc"],
@@ -258,6 +268,18 @@ envoy_cc_test_binary(
     ],
     deps = [
         "//source/common/http:header_map_lib",
+    ],
+)
+
+envoy_cc_test_binary(
+    name = "header_map_impl2_speed_test",
+    srcs = ["header_map_impl2_speed_test.cc"],
+    external_deps = [
+        "benchmark",
+    ],
+    deps = [
+        "//source/common/http:header_map_lib",
+        "//source/common/http:header_map2_lib",
     ],
 )
 

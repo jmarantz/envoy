@@ -440,6 +440,55 @@ bool TestHeaderMapImpl::has(const std::string& key) { return get(LowerCaseString
 
 bool TestHeaderMapImpl::has(const LowerCaseString& key) { return get(key) != nullptr; }
 
+TestHeaderMapImpl2::TestHeaderMapImpl2() = default;
+
+TestHeaderMapImpl2::TestHeaderMapImpl2(
+    const std::initializer_list<std::pair<std::string, std::string>>& values) {
+  for (auto& value : values) {
+    addCopy(value.first, value.second);
+  }
+}
+
+TestHeaderMapImpl2::TestHeaderMapImpl2(const HeaderMap& rhs) : HeaderMapImpl2(rhs) {}
+
+TestHeaderMapImpl2::TestHeaderMapImpl2(const TestHeaderMapImpl2& rhs)
+    : TestHeaderMapImpl2(static_cast<const HeaderMap&>(rhs)) {}
+
+TestHeaderMapImpl2& TestHeaderMapImpl2::operator=(const TestHeaderMapImpl2& rhs) {
+  if (&rhs == this) {
+    return *this;
+  }
+
+  clear();
+  copyFrom(rhs);
+
+  return *this;
+}
+
+void TestHeaderMapImpl2::addCopy(const std::string& key, const std::string& value) {
+  addCopy(LowerCaseString(key), value);
+}
+
+void TestHeaderMapImpl2::remove(const std::string& key) { remove(LowerCaseString(key)); }
+
+std::string TestHeaderMapImpl2::get_(const std::string& key) const {
+  return get_(LowerCaseString(key));
+}
+
+std::string TestHeaderMapImpl2::get_(const LowerCaseString& key) const {
+  const HeaderEntry* header = get(key);
+  if (!header) {
+    return EMPTY_STRING;
+  } else {
+    return std::string(header->value().getStringView());
+  }
+}
+
+bool TestHeaderMapImpl2::has(const std::string& key) { return get(LowerCaseString(key)) != nullptr; }
+
+bool TestHeaderMapImpl2::has(const LowerCaseString& key) { return get(key) != nullptr; }
+
+
 } // namespace Http
 
 namespace Api {

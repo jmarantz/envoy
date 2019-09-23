@@ -18,6 +18,7 @@
 #include "common/common/c_smart_ptr.h"
 #include "common/common/thread.h"
 #include "common/http/header_map_impl.h"
+#include "common/http/header_map_impl2.h"
 #include "common/protobuf/message_validator_impl.h"
 #include "common/protobuf/utility.h"
 #include "common/stats/fake_symbol_table_impl.h"
@@ -643,11 +644,49 @@ public:
   bool has(const LowerCaseString& key);
 };
 
+/**
+ * A test version of HeaderMapImpl that adds some niceties around letting us use
+ * std::string instead of always doing LowerCaseString() by hand.
+ */
+class TestHeaderMapImpl2 : public HeaderMapImpl2 {
+public:
+  TestHeaderMapImpl2();
+  TestHeaderMapImpl2(const std::initializer_list<std::pair<std::string, std::string>>& values);
+  TestHeaderMapImpl2(const HeaderMap& rhs);
+
+  // The above constructor for TestHeaderMap is not an actual copy constructor.
+  TestHeaderMapImpl2(const TestHeaderMapImpl2& rhs);
+  TestHeaderMapImpl2& operator=(const TestHeaderMapImpl2& rhs);
+
+  bool operator==(const TestHeaderMapImpl2& rhs) const { return HeaderMapImpl2::operator==(rhs); }
+
+  friend std::ostream& operator<<(std::ostream& os, const TestHeaderMapImpl2& p) {
+    p.iterate(
+        [](const HeaderEntry& header, void* context) -> HeaderMap::Iterate {
+          std::ostream* local_os = static_cast<std::ostream*>(context);
+          *local_os << header.key().getStringView() << " " << header.value().getStringView()
+                    << std::endl;
+          return HeaderMap::Iterate::Continue;
+        },
+        &os);
+    return os;
+  }
+
+  using HeaderMapImpl2::addCopy;
+  using HeaderMapImpl2::remove;
+  void addCopy(const std::string& key, const std::string& value);
+  void remove(const std::string& key);
+  std::string get_(const std::string& key) const;
+  std::string get_(const LowerCaseString& key) const;
+  bool has(const std::string& key);
+  bool has(const LowerCaseString& key);
+};
+
 // Helper method to create a header map from an initializer list. Useful due to make_unique's
 // inability to infer the initializer list type.
 inline HeaderMapPtr
 makeHeaderMap(const std::initializer_list<std::pair<std::string, std::string>>& values) {
-  return std::make_unique<TestHeaderMapImpl,
+  return std::make_unique<TestHeaderMapImpl2,
                           const std::initializer_list<std::pair<std::string, std::string>>&>(
       values);
 }
