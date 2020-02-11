@@ -298,6 +298,13 @@ TEST_P(StatNameTest, TestSymbolConsistency) {
 TEST_P(StatNameTest, TestIgnoreTrailingDots) {
   EXPECT_EQ("foo.bar", encodeDecode("foo.bar."));
   EXPECT_EQ("foo.bar", encodeDecode("foo.bar..."));
+  EXPECT_EQ("foo..bar", encodeDecode("foo..bar"));
+  EXPECT_EQ("foo...bar", encodeDecode("foo...bar"));
+
+  StatNamePool pool(*table_);
+  SymbolTable::StoragePtr joined = table_->join({makeStat("a"), makeStat(""), makeStat("b")});
+  EXPECT_EQ("a..b", table_->toString(StatName(joined.get())));
+
   EXPECT_EQ("", encodeDecode("."));
   EXPECT_EQ("", encodeDecode(".."));
 }
