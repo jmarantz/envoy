@@ -1414,15 +1414,22 @@ bool BaseDynamicClusterImpl::updateDynamicHostList(const HostVector& new_hosts,
 
   // Remove hosts from current_priority_hosts that were matched to an existing host in the previous
   // loop.
-  for (auto itr = current_priority_hosts.begin(); itr != current_priority_hosts.end();) {
-    auto existing_itr = existing_hosts_for_current_priority.find((*itr)->address()->asString());
-
-    if (existing_itr != existing_hosts_for_current_priority.end()) {
-      existing_hosts_for_current_priority.erase(existing_itr);
-      itr = current_priority_hosts.erase(itr);
-    } else {
-      itr++;
+  {
+    uint32_t n = current_priority_hosts.size();
+    for (uint32_t i = 0; i < n; ) {
+      auto& host = current_priority_hosts[i];
+      auto existing_itr = existing_hosts_for_current_priority.find(host->address()->asString());
+      if (existing_itr != existing_hosts_for_current_priority.end()) {
+        existing_hosts_for_current_priority.erase(existing_itr);
+        if (i != n - 1) {
+          current_priority_hosts[i] = current_priority_hosts[n - 1];
+        }
+        --n;
+      } else {
+        ++i;
+      }
     }
+    current_priority_hosts.resize(n);
   }
 
   // If we saw existing hosts during this iteration from a different priority, then we've moved

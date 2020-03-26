@@ -1242,7 +1242,8 @@ TEST_F(EdsTest, EndpointHostsPerLocality) {
     }
   };
 
-  add_hosts_to_locality("oceania", "koala", "ingsoc", 2);
+  static const uint32_t num_hosts = 54000;
+  add_hosts_to_locality("oceania", "koala", "ingsoc", num_hosts);
   add_hosts_to_locality("", "us-east-1a", "", 1);
 
   initialize();
@@ -1255,7 +1256,7 @@ TEST_F(EdsTest, EndpointHostsPerLocality) {
     EXPECT_EQ(1, hosts_per_locality.get()[0].size());
     EXPECT_THAT(Locality("", "us-east-1a", ""),
                 ProtoEq(hosts_per_locality.get()[0][0]->locality()));
-    EXPECT_EQ(2, hosts_per_locality.get()[1].size());
+    EXPECT_EQ(num_hosts, hosts_per_locality.get()[1].size());
     EXPECT_THAT(Locality("oceania", "koala", "ingsoc"),
                 ProtoEq(hosts_per_locality.get()[1][0]->locality()));
     EXPECT_THAT(Locality("oceania", "koala", "ingsoc"),
@@ -1278,7 +1279,7 @@ TEST_F(EdsTest, EndpointHostsPerLocality) {
     EXPECT_EQ(3, hosts_per_locality.get()[2].size());
     EXPECT_THAT(Locality("oceania", "koala", "eucalyptus"),
                 ProtoEq(hosts_per_locality.get()[2][0]->locality()));
-    EXPECT_EQ(2, hosts_per_locality.get()[3].size());
+    EXPECT_EQ(num_hosts, hosts_per_locality.get()[3].size());
     EXPECT_THAT(Locality("oceania", "koala", "ingsoc"),
                 ProtoEq(hosts_per_locality.get()[3][0]->locality()));
   }
