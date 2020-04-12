@@ -10,6 +10,7 @@
 #include "common/config/utility.h"
 #include "common/singleton/manager_impl.h"
 #include "common/upstream/eds.h"
+#include "common/upstream/subset_hack.h"
 
 #include "server/transport_socket_config_impl.h"
 
@@ -1530,6 +1531,9 @@ TEST_F(EdsTest, PriorityAndLocality) {
 // Set up an EDS config with multiple priorities, localities, weights and make sure
 // they are loaded and reloaded as expected.
 TEST_F(EdsTest, PriorityAndLocalityWeighted) {
+  const double subset_fraction = 0.25;
+  SubsetHack::enableSubsetting("my_shard", 0.25);
+
   envoy::config::endpoint::v3::ClusterLoadAssignment cluster_load_assignment;
   cluster_load_assignment.set_cluster_name("fare");
   resetCluster(R"EOF(
@@ -1574,7 +1578,7 @@ TEST_F(EdsTest, PriorityAndLocalityWeighted) {
       };
 
   // Set up both priority 0 and priority 1 with 2 localities.
-  add_hosts_to_locality_and_priority("oceania", "koala", "ingsoc", 0, 2, 25);
+  add_hosts_to_locality_and_priority("oceania", "koala", "ingsoc", 0, 200, 25);
   add_hosts_to_locality_and_priority("", "us-east-1a", "", 0, 1, 75);
   add_hosts_to_locality_and_priority("", "us-east-1a", "", 1, 8, 60);
   add_hosts_to_locality_and_priority("foo", "bar", "eep", 1, 2, 40);
@@ -1594,7 +1598,10 @@ TEST_F(EdsTest, PriorityAndLocalityWeighted) {
     EXPECT_THAT(Locality("", "us-east-1a", ""),
                 ProtoEq(first_hosts_per_locality.get()[0][0]->locality()));
     EXPECT_EQ(75, first_locality_weights[0]);
-    EXPECT_EQ(2, first_hosts_per_locality.get()[1].size());
+
+    //EXPECT_EQ(200, first_hosts_per_locality.get()[1].size());
+    EXPECT_NEAR(200 * subset_fraction, first_hosts_per_locality.get()[1].size(), 10);
+
     EXPECT_THAT(Locality("oceania", "koala", "ingsoc"),
                 ProtoEq(first_hosts_per_locality.get()[1][0]->locality()));
     EXPECT_THAT(Locality("oceania", "koala", "ingsoc"),

@@ -9,6 +9,17 @@ load(
 envoy_package()
 
 envoy_cc_library(
+    name = "subset_hack_lib",
+    srcs = ["subset_hack.cc"],
+    hdrs = ["subset_hack.h"],
+    deps = [
+        "//source/common/common:assert_lib",
+        "//source/common/common:hash_lib",
+        "//source/common/common:utility_lib",
+    ],
+)
+
+envoy_cc_library(
     name = "cds_api_lib",
     srcs = ["cds_api_impl.cc"],
     hdrs = ["cds_api_impl.h"],
@@ -343,6 +354,7 @@ envoy_cc_library(
     hdrs = ["eds.h"],
     deps = [
         ":cluster_factory_lib",
+        ":subset_hack_lib",
         ":upstream_includes",
         "//include/envoy/config:grpc_mux_interface",
         "//include/envoy/config:subscription_factory_interface",

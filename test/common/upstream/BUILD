@@ -11,6 +11,16 @@ load(
 envoy_package()
 
 envoy_cc_test(
+    name = "subset_hack_test",
+    srcs = ["subset_hack_test.cc"],
+    deps = [
+        "//source/common/common:base64_lib",
+        "//source/common/common:utility_lib",
+        "//source/common/upstream:subset_hack_lib",
+    ],
+)
+
+envoy_cc_test(
     name = "cds_api_impl_test",
     srcs = ["cds_api_impl_test.cc"],
     deps = [

@@ -12,6 +12,7 @@
 #include "common/common/utility.h"
 #include "common/config/api_version.h"
 #include "common/config/version_converter.h"
+#include "common/upstream/subset_hack.h"
 
 namespace Envoy {
 namespace Upstream {
@@ -52,10 +53,20 @@ void EdsClusterImpl::BatchUpdateHelper::batchUpdate(PrioritySet::HostUpdateCb& h
 
     priority_state_manager.initializePriorityFor(locality_lb_endpoint);
 
+    const int num_endpoints = locality_lb_endpoint.lb_endpoints_size();
+    const int min_num_endpoints_to_subset = 40;
     for (const auto& lb_endpoint : locality_lb_endpoint.lb_endpoints()) {
+      Network::Address::InstanceConstSharedPtr resolved_address =
+          parent_.resolveProtoAddress(lb_endpoint.endpoint().address());
+
+      if (num_endpoints >= min_num_endpoints_to_subset) {
+        absl::string_view host = resolved_address->asStringView();
+        if (SubsetHack::skipHost(host)) {
+          continue;
+        }
+      }
       priority_state_manager.registerHostForPriority(
-          "", parent_.resolveProtoAddress(lb_endpoint.endpoint().address()), locality_lb_endpoint,
-          lb_endpoint);
+          "", resolved_address, locality_lb_endpoint, lb_endpoint);
     }
   }
 
@@ -138,6 +149,9 @@ void EdsClusterImpl::onConfigUpdate(const Protobuf::RepeatedPtrField<ProtobufWkt
     assignment_timeout_->enableTimer(std::chrono::milliseconds(stale_after_ms));
   }
 
+  uint32_t size = cluster_load_assignment.endpoints_size();
+  ENVOY_LOG_MISC(error, "cluster={}, endpoints size={}",
+                 cluster_load_assignment.cluster_name(), size);
   BatchUpdateHelper helper(*this, cluster_load_assignment);
   priority_set_.batchHostUpdate(helper);
 }
