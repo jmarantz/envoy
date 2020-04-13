@@ -17,12 +17,12 @@ enum class HashChoice { XX, Sha1, Absl };
 enum class Strategy { Xor, Divide, Modulus, ByteCombine /*, Twister*/ };
 //enum class XorTactic { Reverse, FourBit, ReverseFourBit, EightBit };
 
-#define REVERSE 1
+#define REVERSE 0
 // #define USE_XOR_4_BIT 0
 
 #define STRATEGY Strategy::Xor
-#define HASHER HashChoice::XX
-#define XOR_BITS 8
+#define HASHER HashChoice::Absl
+#define XOR_BITS 16
 
 namespace Envoy {
 namespace Upstream {

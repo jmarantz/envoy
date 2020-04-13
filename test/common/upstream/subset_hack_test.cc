@@ -13,6 +13,9 @@
 
 #include <iostream>
 
+#define SWEEP_OVER_PERCENT true
+#define ITERS 20000
+
 namespace Envoy {
 namespace Upstream {
 namespace {
@@ -122,11 +125,15 @@ TEST(SubsetHackTest, Allow) {
     return absl::StrCat("192.168.", suffix);
   };
 
-  //for (double allow = 0.05; allow <= 1.0; allow += 0.025) {
-  for (double allow = 0.250; allow <= 0.25; allow += 0.025) {
+#if SWEEP_OVER_PERCENT
+  for (double allow = 0.05; allow <= 1.0; allow += 0.025)
+#else
+  for (double allow = 0.250; allow <= 0.25; allow += 0.025)
+#endif
+    {
     std::vector<double> backends_per_envoy_vector, /*envoys_*/ load_per_backend_vector;
 
-    for (uint32_t iter = 0; iter < 20000; ++iter) {
+    for (uint32_t iter = 0; iter < ITERS; ++iter) {
       std::vector<std::string> envoys;
       std::vector<std::string> backends;
       ip_set.clear();

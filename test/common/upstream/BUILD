@@ -12,6 +12,7 @@ envoy_package()
 
 envoy_cc_test(
     name = "subset_hack_test",
+    size = "enormous",
     srcs = ["subset_hack_test.cc"],
     deps = [
         "//source/common/common:base64_lib",
