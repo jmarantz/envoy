@@ -14,7 +14,7 @@
 #include <iostream>
 
 #define SWEEP_OVER_PERCENT true
-#define ITERS 20000
+#define ITERS 2000
 
 namespace Envoy {
 namespace Upstream {
