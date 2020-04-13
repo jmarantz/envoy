@@ -9,18 +9,20 @@
 #include "common/common/utility.h"
 
 static bool is_enabled = false;
+const uint64_t kuint16max = 0xffff;
+const uint64_t kuint32max = 0xffffffff;
 const uint64_t kuint64max = 0xffffffffffffffff;
 
 enum class HashChoice { XX, Sha1, Absl };
-enum class Strategy { Xor, Divide, Modulus /*, Twister*/ };
-//enum class XorBits { Four, Eight };
+enum class Strategy { Xor, Divide, Modulus, ByteCombine /*, Twister*/ };
 //enum class XorTactic { Reverse, FourBit, ReverseFourBit, EightBit };
 
-#define REVERSE 0
-#define USE_XOR_4_BIT 0
+#define REVERSE 1
+// #define USE_XOR_4_BIT 0
 
 #define STRATEGY Strategy::Xor
-#define HASHER HashChoice::Absl
+#define HASHER HashChoice::XX
+#define XOR_BITS 8
 
 namespace Envoy {
 namespace Upstream {
@@ -67,7 +69,7 @@ uint64_t swapBits(uint64_t bits) {
 }
   std::mt19937_64 gen(hash);
   std::uniform_int_distribution<uint32_t> dist(0, 255);
-  return dist(gen) > subset_hack->fraction_255_;
+  return dist(gen) > subset_hack->fraction_;
 
 #endif*/
 
@@ -94,23 +96,29 @@ static uint64_t hash(absl::string_view key) {
 
 void SubsetHack::enableSubsetting(absl::string_view shard_identifier, double fraction_to_allow) {
   SubsetHack* subset_hack = getInstance();
-  subset_hack->fraction64_ = fraction_to_allow * kuint64max;
   subset_hack->shard_identifier_ = std::string(shard_identifier);
   subset_hack->shard_hash_ = hash(shard_identifier);
   ASSERT(fraction_to_allow <= 1.0);
   ASSERT(fraction_to_allow >= 0.0);
   switch (STRATEGY) {
     case Strategy::Divide:
+      subset_hack->fraction_ = fraction_to_allow * kuint64max;
       break;
     case Strategy::Modulus:
-      subset_hack->fraction_255_ = ((*primes)[0] - 1) * fraction_to_allow; // 1.0 --> 1010, 0 --> 0.
+    case Strategy::ByteCombine:
+      subset_hack->fraction_ = ((*primes)[0] - 1) * fraction_to_allow; // 1.0 --> 1010, 0 --> 0.
       break;
     case Strategy::Xor:
-#if USE_XOR_4_BIT
-      subset_hack->fraction_255_ = 15 * fraction_to_allow; // 1.0 --> 15, 0 --> 0.
-#else
-      subset_hack->fraction_255_ = 255 * fraction_to_allow; // 1.0 --> 255, 0 --> 0.
-#endif
+      switch (XOR_BITS) {
+        case 64: subset_hack->fraction_ = fraction_to_allow * kuint64max; break;
+        case 32: subset_hack->fraction_ = fraction_to_allow * kuint32max; break;
+        case 16: subset_hack->fraction_ = fraction_to_allow * kuint16max; break;
+        case 8: subset_hack->fraction_ = fraction_to_allow * 255; break;
+        case 4: subset_hack->fraction_ = fraction_to_allow * 15; break; // 1.0 --> 15, 0 --> 0.
+        default:
+          RELEASE_ASSERT(false, "only 4/8/16/32/64 allowed");
+          break;
+      }
   }
   is_enabled = true;
 }
@@ -131,16 +139,22 @@ uint32_t reverseBits(uint32_t data, uint32_t num_bits) {
 
 static inline uint64_t reduce(uint64_t a, uint32_t num_bits, bool reverse_bits) {
   uint32_t b = a;
+  a = a >> num_bits;
   if (reverse_bits) {
 #if REVERSE
+    //if ((a & 1) ^ (b & 1)) {
+    //  a = reverseBits(a, num_bits);
+    //} else {
     b = reverseBits(b, num_bits);
+    //}
 #endif
   }
-  a = (a >> num_bits) ^ b;
+  a ^= b;
   return a & ((uint64_t(1) << num_bits) - 1);
 }
 
 static uint64_t hashCombine(SubsetHack* subset_hack, absl::string_view host) {
+#if 0
   switch (HASHER) {
     case HashChoice::XX:
     case HashChoice::Sha1:
@@ -153,13 +167,16 @@ static uint64_t hashCombine(SubsetHack* subset_hack, absl::string_view host) {
       return HashUtil::xxHash64(absl::StrCat(subset_hack->shard_identifier_, "\n", host));
       //return subset_hack->shard_hash_ + 31 * HashUtil::xxHash64(host);
       */
+#endif
       return subset_hack->shard_hash_ ^ hash(host);
+#if 0
     case HashChoice::Absl: {
       using IntStringViewPair = std::pair<uint64_t, absl::string_view>;
       absl::Hash<IntStringViewPair> hasher;
       return hasher(IntStringViewPair(subset_hack->shard_hash_, host));
     }
   }
+#endif
 }
 
 bool SubsetHack::skipHost(absl::string_view host) {
@@ -170,7 +187,7 @@ bool SubsetHack::skipHost(absl::string_view host) {
   SubsetHack* subset_hack = getInstance();
 
   switch (STRATEGY) {
-    case Strategy::Divide: return hashCombine(subset_hack, host) > subset_hack->fraction64_;
+    case Strategy::Divide: return hashCombine(subset_hack, host) > subset_hack->fraction_;
     case Strategy::Modulus: {
       uint64_t hash = hashCombine(subset_hack, host);
       for (int32_t i = primes->size() - 1; i >= 0; --i) {
@@ -179,21 +196,27 @@ bool SubsetHack::skipHost(absl::string_view host) {
         }
         hash = hash % (*primes)[i];
       }
-      return hash > subset_hack->fraction_255_;
+      return hash > subset_hack->fraction_;
     }
-    case Strategy::Xor:
-      uint64_t host_hash = hash(host);
-      uint64_t reduce_64 = host_hash ^ subset_hack->shard_hash_;
-      uint32_t reduce_32 = reduce(reduce_64, 32, false);
-      uint32_t reduce_16 = reduce(reduce_32, 16, true);
-      uint32_t reduce_8 = reduce(reduce_16, 8, false);
-
-# if USE_XOR_4_BIT
-      uint32_t reduce_4 = reduce(reduce_8, 4, true);
-      return reduce_4 > subset_hack->fraction_255_;
-# else
-      return reduce_8 > subset_hack->fraction_255_;
-# endif
+    case Strategy::Xor: {
+      // uint64_t accum = hash(host) ^ subset_hack->shard_hash_;
+      uint64_t accum = hashCombine(subset_hack, host);
+      for (uint32_t bits = 32; bits >= XOR_BITS; bits >>= 1) {
+        accum = reduce(accum, bits, (bits == 16));
+      }
+      return accum > subset_hack->fraction_;
+    }
+    case Strategy::ByteCombine:
+      int32_t accum = subset_hack->shard_hash_;
+      for (char c : host) {
+        accum = (accum << 4) + c;
+        int32_t g = accum & 0xF0000000L;
+        if (g != 0) {
+          accum ^= g >> 24;
+        }
+        accum &= ~g;
+      }
+      return (accum % primes->at(0)) > subset_hack->fraction_;
   }
 }
 

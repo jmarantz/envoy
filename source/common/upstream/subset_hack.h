@@ -13,8 +13,7 @@ class SubsetHack {
   void disable();
 
   uint64_t shard_hash_{0};
-  uint32_t fraction_255_{0};
-  uint64_t fraction64_{0};
+  uint64_t fraction_{0};
   std::string shard_identifier_;
 };
 

@@ -126,7 +126,7 @@ TEST(SubsetHackTest, Allow) {
   for (double allow = 0.250; allow <= 0.25; allow += 0.025) {
     std::vector<double> backends_per_envoy_vector, /*envoys_*/ load_per_backend_vector;
 
-    for (uint32_t iter = 0; iter < 200; ++iter) {
+    for (uint32_t iter = 0; iter < 20000; ++iter) {
       std::vector<std::string> envoys;
       std::vector<std::string> backends;
       ip_set.clear();
