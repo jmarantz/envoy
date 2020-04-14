@@ -14,17 +14,16 @@
 #include <iostream>
 
 #define SWEEP_OVER_PERCENT true
-#define ITERS 2000
+#define ITERS 20000
+#define STRATEGY SubsetHack::Strategy::XorReverse
+#define HASHER SubsetHack::HashChoice::XX
+#define XOR_BITS 16
 
 namespace Envoy {
 namespace Upstream {
 namespace {
 
 const uint64_t kuint64max = 0xffffffffffffffff;
-
-TEST(SubsetHackTest, Disabled) {
-  EXPECT_FALSE(SubsetHack::enabled());
-}
 
 class Statistics {
  public:
@@ -168,10 +167,10 @@ TEST(SubsetHackTest, Allow) {
       absl::flat_hash_map<std::string, double> load_per_backend;
 
       for (auto& envoy : envoys) {
-        SubsetHack::enableSubsetting(envoy, allow);
+        SubsetHack subset_hack(HASHER, STRATEGY, XOR_BITS, envoy, allow);
         std::vector<std::string> backends_for_this_envoy;
         for (auto& backend : backends) {
-          if (!SubsetHack::skipHost(backend)) {
+          if (!subset_hack.skipHost(backend)) {
             ++envoys_per_backend[backend];
             backends_for_this_envoy.push_back(backend);
             //envoy_to_backend_map[envoy].push_back(backend);
@@ -233,56 +232,6 @@ TEST(SubsetHackTest, Allow) {
     std::cout << std::endl;
   }
 }
-
-#if 0
-TEST(SubsetHackTest, OldAllow) {
-  //const std::vector<double> allows{0, .1, .15, .25, .5, .6, .75, .9, 1.0};
-  const std::vector<double> allows{.25};
-  std::vector<std::string> envoys;
-  std::vector<std::string> backends;
-  const uint32_t num_backends = 100;
-  const uint32_t num_envoys = 200;
-
-  for (uint32_t i = 0; i < num_backends; ++i) {
-    backends.push_back(absl::StrCat("backend", i));
-  }
-
-  for (uint32_t i = 0; i < num_envoys; ++i) {
-    envoys.push_back(absl::StrCat("envoy", i));
-  }
-
-  for (double allow : allows) {
-    const uint32_t allowable_backend_error = num_backends * allow / 2.0;
-    const uint32_t allowable_envoy_error = num_envoys * allow / 2.0;
-    uint32_t expected_allowed_backends = allow * num_backends;
-    absl::flat_hash_map<std::string, uint32_t> envoys_per_backend;
-    for (auto& envoy : envoys) {
-      SubsetHack::enableSubsetting(envoy, allow);
-      uint32_t count = 0;
-      for (auto& backend : backends) {
-        if (!SubsetHack::skipHost(backend)) {
-          ++count;
-          ++envoys_per_backend[backend];
-        }
-      }
-      EXPECT_NEAR(expected_allowed_backends, count, allowable_backend_error)
-          << "allow=" << allow << ", envoy=" << envoy;
-
-      std::cout << envoy << "," << count << std::endl;
-    }
-
-    std::cout << std::endl;
-
-    uint32_t expected_allowed_envoys = allow * num_envoys;
-    for (auto& backend : backends) {
-      EXPECT_NEAR(expected_allowed_envoys, envoys_per_backend[backend], allowable_envoy_error)
-          << "allow=" << allow << ", backend=" << backend;
-      std::cout << backend << "," << envoys_per_backend[backend] << std::endl;
-    }
-    std::cout << std::flush;
-  }
-}
-#endif
 
 } // namespace
 } // namespace Upstream
