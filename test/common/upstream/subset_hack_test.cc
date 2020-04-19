@@ -13,11 +13,11 @@
 
 #include <iostream>
 
-#define SWEEP_OVER_PERCENT true
+#define SWEEP_OVER_PERCENT false
 #define ITERS 20000
-#define STRATEGY SubsetHack::Strategy::XorReverse
-#define HASHER SubsetHack::HashChoice::XX
-#define XOR_BITS 16
+#define STRATEGY SubsetHack::Strategy::Xor
+#define HASHER SubsetHack::HashChoice::Absl
+#define XOR_BITS 32
 
 namespace Envoy {
 namespace Upstream {

@@ -18,7 +18,8 @@ enum class Strategy { Xor, Divide, Modulus, ByteCombine /*, Twister*/ };
 namespace Envoy {
 namespace Upstream {
 
-static const uint32_t GoodPrime = 257297;
+//static const uint32_t GoodPrime = 257297;
+static const uint32_t GoodPrime = 259610677;
 
 static uint64_t hashSha1(absl::string_view data) {
   absl::string_view key("my hash key");
