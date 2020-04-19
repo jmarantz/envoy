@@ -10,14 +10,16 @@ load(
 
 envoy_package()
 
-envoy_cc_test(
+envoy_cc_test_binary(
     name = "subset_hack_test",
-    size = "enormous",
     srcs = ["subset_hack_test.cc"],
     deps = [
         "//source/common/common:base64_lib",
+        "//source/common/common:thread_lib",
         "//source/common/common:utility_lib",
         "//source/common/upstream:subset_hack_lib",
+        "//test/test_common:environment_lib",
+        "//test/test_common:thread_factory_for_test_lib",
     ],
 )
 

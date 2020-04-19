@@ -12,6 +12,9 @@ envoy_cc_library(
     name = "subset_hack_lib",
     srcs = ["subset_hack.cc"],
     hdrs = ["subset_hack.h"],
+    external_deps = [
+        "ssl",
+    ],
     deps = [
         "//source/common/common:assert_lib",
         "//source/common/common:hash_lib",

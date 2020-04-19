@@ -7,11 +7,12 @@ namespace Upstream {
 
 class SubsetHack {
  public:
-  enum class HashChoice { XX, Sha1, Absl };
+  enum class HashChoice { XX, Sha1, Absl, AbslCombine };
   enum class Strategy { Xor, XorReverse, Divide, Modulus, ByteCombine /*, Twister*/ };
 
   SubsetHack(HashChoice hash_choice, Strategy strategy, uint32_t xor_bits,
-             absl::string_view shard_identifier, double fraction_to_allow);
+             uint32_t prime, absl::string_view shard_identifier,
+             double fraction_to_allow);
 
   bool skipHost(absl::string_view host);
   uint64_t hash(absl::string_view key) const;
@@ -24,6 +25,7 @@ class SubsetHack {
   const HashChoice hash_choice_;
   const Strategy strategy_;
   const uint32_t xor_bits_;
+  const uint32_t prime_;
   const uint64_t shard_hash_;
   uint64_t fraction_{0};
   const std::string shard_identifier_;
