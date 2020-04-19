@@ -17,13 +17,16 @@
 
 #include <iostream>
 
-#define SWEEP_OVER_PERCENT true
+#define SWEEP_OVER_PERCENT false
 #define SWEEP_OVER_PRIMES false
 #define SWEEP_OVER_BACKENDS false
 
+enum class LbPolicy { RoundRobin, LeastRequest };
+
+const double kAllow = 0.25;
 const uint32_t kNumBackends = 500;
-const uint32_t kNumEnvoys = 200;
-const uint32_t kIters = 200;
+const uint32_t kNumEnvoys = 50;
+const uint32_t kIters = 100;
 const uint32_t kSimCycles = 100;
 const uint32_t kXorBits = 8;
 const uint32_t kPrime = 21397;
@@ -68,8 +71,9 @@ class Statistics {
 
 class Sweep {
  public:
-  Sweep(SubsetHack::Strategy strategy, SubsetHack::HashChoice hasher, std::function<void()> progress)
-      : strategy_(strategy), hasher_(hasher), progress_(progress) {}
+  Sweep(SubsetHack::Strategy strategy, SubsetHack::HashChoice hasher, LbPolicy lb_policy,
+        std::function<void()> progress)
+      : strategy_(strategy), hasher_(hasher), lb_policy_(lb_policy), progress_(progress) {}
 
   struct EnvoyInstance;
 
@@ -82,7 +86,7 @@ class Sweep {
   struct BackendInstance {
     explicit BackendInstance(const std::string& name) : name_(name) {}
     std::string name_;
-    double load_{0};
+    //double load_{0};
     uint32_t max_queue_size_{0};
     uint32_t max_latency_{0};
     std::deque<Request> requests_;
@@ -103,24 +107,31 @@ class Sweep {
     explicit EnvoyInstance(const std::string& name) : name_(name) {}
     std::string name_;
     std::vector<BackendAsSeenByEnvoy> backend_subset_;
+    uint32_t round_robin_index_{0};
   };
 
-  std::string strategyAndHasher() {
-    std::string strategy_and_hasher;
+  std::string describe() {
+    std::string out;
     switch (strategy_) {
-      case SubsetHack::Strategy::Modulus: strategy_and_hasher = "modulus"; break;
-      case SubsetHack::Strategy::Xor: strategy_and_hasher = "xor"; break;
-      case SubsetHack::Strategy::XorReverse: strategy_and_hasher = "xor-reverse"; break;
-      default: strategy_and_hasher = "other"; break;
+      case SubsetHack::Strategy::Modulus: out = "mod"; break;
+      case SubsetHack::Strategy::Xor: out = "xor"; break;
+      case SubsetHack::Strategy::XorReverse: out = "xorR"; break;
+      default: out = "other"; break;
     }
 
     switch (hasher_) {
-      case SubsetHack::HashChoice::Absl: strategy_and_hasher += "/absl"; break;
-      case SubsetHack::HashChoice::AbslCombine: strategy_and_hasher += "/absl-combine"; break;
-      case SubsetHack::HashChoice::XX: strategy_and_hasher += "/xx"; break;
-      case SubsetHack::HashChoice::Sha1: strategy_and_hasher += "/sha1"; break;
+      case SubsetHack::HashChoice::Absl: out += "/absl"; break;
+      case SubsetHack::HashChoice::AbslCombine: out += "/absl-combine"; break;
+      case SubsetHack::HashChoice::XX: out += "/xx"; break;
+      case SubsetHack::HashChoice::Sha1: out += "/sha1"; break;
     }
-    return strategy_and_hasher;
+
+    switch (lb_policy_) {
+      case LbPolicy::RoundRobin: out += "/rr"; break;
+      case LbPolicy::LeastRequest: out += "/lr"; break;
+    }
+
+    return out;
   }
 
   uint64_t totalOps() const {
@@ -159,7 +170,7 @@ class Sweep {
 #if SWEEP_OVER_PERCENT
       for (double allow = 0.05; allow <= 1.0; allow += 0.025) {
 #else
-        const double allow = 0.25;
+        const double allow = kAllow;
 #endif
 
 #if SWEEP_OVER_PRIMES
@@ -209,21 +220,30 @@ class Sweep {
     }
   }
 
-  // Initiates a request from an Envoy to a backend, based on load-balancing
-  // policy. For now we are picking least-loaded.
-  void makeRequest(uint32_t envoy_index, uint32_t cycle) {
-    // pick two random backends.
-    EnvoyInstance& envoy = *envoy_instances_[envoy_index];
+  uint32_t pickBackendRoundRobin(EnvoyInstance& envoy) {
+    envoy.round_robin_index_ = (envoy.round_robin_index_ + 1) % envoy.backend_subset_.size();
+    return envoy.round_robin_index_;
+  }
+
+  uint32_t pickBackendLeastLoaded(EnvoyInstance& envoy) {
     uint32_t max_subset_index = envoy.backend_subset_.size() - 1;
     std::uniform_int_distribution<uint32_t> dist{0, max_subset_index};
     uint32_t i = dist(bit_gen_), j;
     while ((j = dist(bit_gen_)) == i) {
     }
 
-    BackendAsSeenByEnvoy& a = envoy.backend_subset_[i];
-    BackendAsSeenByEnvoy& b = envoy.backend_subset_[j];
-    uint32_t subset_index =
-        (a.outstanding_requests_ <= b.outstanding_requests_) ? i : j;
+    return (envoy.backend_subset_[i].outstanding_requests_ <=
+            envoy.backend_subset_[j].outstanding_requests_) ? i : j;
+  }
+
+  // Initiates a request from an Envoy to a backend, based on load-balancing
+  // policy. For now we are picking least-loaded.
+  void makeRequest(uint32_t envoy_index, uint32_t cycle) {
+    // pick two random backends.
+    EnvoyInstance& envoy = *envoy_instances_[envoy_index];
+    uint32_t subset_index = (lb_policy_ == LbPolicy::LeastRequest)
+                            ? pickBackendLeastLoaded(envoy)
+                            : pickBackendRoundRobin(envoy);
     BackendAsSeenByEnvoy& choice = envoy.backend_subset_[subset_index];
 
     ++choice.outstanding_requests_;
@@ -270,6 +290,9 @@ class Sweep {
           envoy.backend_subset_.push_back(BackendAsSeenByEnvoy{b, 0});
         }
       }
+      uint32_t max_subset_index = envoy.backend_subset_.size() - 1;
+      std::uniform_int_distribution<uint32_t> dist{0, max_subset_index};
+      envoy.round_robin_index_ = dist(bit_gen_);
     }
 
     // Let's assume each backend is single-threaded, and can process 100 qps.
@@ -371,7 +394,7 @@ class Sweep {
     Statistics backends_per_envoy_stats(backends_per_envoy_vector_);
     Statistics load_per_backend_stats(load_per_backend_vector_);
 
-    absl::StrAppend(&output_, strategyAndHasher(), ",", 100*allow, ",", prime, ",");
+    absl::StrAppend(&output_, describe(), ",", 100*allow, ",", prime, ",");
     if (write_csv) {
       writeCsvLine(backends_per_envoy_stats, num_backends);
     }
@@ -381,6 +404,8 @@ class Sweep {
     }
     double peak_to_mean = load_per_backend_stats.hi() /
                           load_per_backend_stats.mean();
+    peak_.push_back(load_per_backend_stats.hi());
+    mean_.push_back(load_per_backend_stats.mean());
     peak_to_mean_.push_back(peak_to_mean);
     plus_1_sigma_.push_back((load_per_backend_stats.mean() + load_per_backend_stats.stddev()) /
                             load_per_backend_stats.mean());
@@ -412,9 +437,12 @@ class Sweep {
 
   const SubsetHack::Strategy strategy_;
   const SubsetHack::HashChoice hasher_;
+  const LbPolicy lb_policy_;
   std::string output_;
   std::vector<uint32_t> num_backends_;
   std::vector<double> allow_;
+  std::vector<double> peak_;
+  std::vector<double> mean_;
   std::vector<double> peak_to_mean_;
   std::vector<double> plus_1_sigma_;
   std::function<void()> progress_;
@@ -440,7 +468,9 @@ class TestContext {
   TestContext() : thread_factory_(Thread::threadFactoryForTest()) {}
 
   void run() {
-    sweep(SubsetHack::Strategy::Modulus, SubsetHack::HashChoice::Absl);
+    sweep(SubsetHack::Strategy::Modulus, SubsetHack::HashChoice::Absl, LbPolicy::RoundRobin);
+    sweep(SubsetHack::Strategy::Modulus, SubsetHack::HashChoice::Absl, LbPolicy::LeastRequest);
+    //sweep(SubsetHack::Strategy::Modulus, SubsetHack::HashChoice::Absl);
     //sweep(SubsetHack::Strategy::Modulus, SubsetHack::HashChoice::XX);
     //sweep(SubsetHack::Strategy::Xor, SubsetHack::HashChoice::Absl);
     //sweep(SubsetHack::Strategy::Xor, SubsetHack::HashChoice::XX);
@@ -453,14 +483,26 @@ class TestContext {
 
     std::cout << "num backends,subset%";
     for (auto& sweep : sweeps_) {
-      std::cout << "," << sweep->strategyAndHasher() << " p/m";
+      std::cout << "," << sweep->describe() << " peak";
     }
     for (auto& sweep : sweeps_) {
-      std::cout << "," << sweep->strategyAndHasher() << " +1s";
+      std::cout << "," << sweep->describe() << " mean";
+    }
+    for (auto& sweep : sweeps_) {
+      std::cout << "," << sweep->describe() << " p/m";
+    }
+    for (auto& sweep : sweeps_) {
+      std::cout << "," << sweep->describe() << " +1s";
     }
     std::cout << std::endl;
     for (uint32_t i = 0; i < sweeps_[0]->num_backends_.size(); ++i) {
       std::cout << sweeps_[0]->num_backends_[i] << "," << 100*sweeps_[0]->allow_[i];
+      for (auto& sweep : sweeps_) {
+        std::cout << "," << sweep->peak_[i];
+      }
+      for (auto& sweep : sweeps_) {
+        std::cout << "," << sweep->mean_[i];
+      }
       for (auto& sweep : sweeps_) {
         std::cout << "," << sweep->peak_to_mean_[i];
       }
@@ -481,8 +523,9 @@ class TestContext {
     }
   }
 
-  void sweep(SubsetHack::Strategy strategy, SubsetHack::HashChoice hasher) {
-    sweeps_.push_back(std::make_unique<Sweep>(strategy, hasher,
+  void sweep(SubsetHack::Strategy strategy, SubsetHack::HashChoice hasher,
+             LbPolicy lb_policy) {
+    sweeps_.push_back(std::make_unique<Sweep>(strategy, hasher, lb_policy,
                                               [this] { progress(); }));;
     Sweep& swp = *sweeps_.back();
     total_ops_ += swp.totalOps();
