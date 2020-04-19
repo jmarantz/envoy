@@ -19,18 +19,20 @@
 
 #define SWEEP_OVER_PERCENT false
 #define SWEEP_OVER_PRIMES false
-#define SWEEP_OVER_BACKENDS false
+#define SWEEP_OVER_BACKENDS true
+#define DETAILED_CSV false
 
 enum class LbPolicy { RoundRobin, LeastRequest };
 
-const double kAllow = 0.25;
-const uint32_t kNumBackends = 500;
-const uint32_t kNumEnvoys = 50;
-const uint32_t kIters = 100;
-const uint32_t kSimCycles = 100;
-const uint32_t kXorBits = 8;
-const uint32_t kPrime = 21397;
-const uint32_t kCyclesForBackendsToRetireRequest = 10;
+constexpr double kAllow = 0.25;
+#if !SWEEP_OVER_BACKENDS
+constexpr uint32_t kNumBackends = 500;
+#endif
+constexpr uint32_t kNumEnvoys = 50;
+constexpr uint32_t kIters = 100;
+constexpr uint32_t kSimCycles = 100;
+constexpr uint32_t kXorBits = 8;
+constexpr uint32_t kPrime = 21397;
 
 namespace Envoy {
 namespace Upstream {
@@ -156,11 +158,7 @@ class Sweep {
     return total;
   }
 
-  void run(bool write_csv) {
-    if (write_csv) {
-      writeCsvHeader();
-    }
-
+  void run() {
 #if SWEEP_OVER_BACKENDS
     for (uint32_t num_backends = 40; num_backends <= 3000; num_backends *= 1.3) {
 #else
@@ -184,7 +182,7 @@ class Sweep {
             trial(prime, allow, num_backends);
           }
 
-          emitResults(prime, allow, num_backends, write_csv);
+          emitResults(prime, allow, num_backends);
 #if SWEEP_OVER_PRIMES
         }
 #endif
@@ -225,7 +223,7 @@ class Sweep {
     return envoy.round_robin_index_;
   }
 
-  uint32_t pickBackendLeastLoaded(EnvoyInstance& envoy) {
+  uint32_t pickBackendLeastRequest(EnvoyInstance& envoy) {
     uint32_t max_subset_index = envoy.backend_subset_.size() - 1;
     std::uniform_int_distribution<uint32_t> dist{0, max_subset_index};
     uint32_t i = dist(bit_gen_), j;
@@ -242,17 +240,17 @@ class Sweep {
     // pick two random backends.
     EnvoyInstance& envoy = *envoy_instances_[envoy_index];
     uint32_t subset_index = (lb_policy_ == LbPolicy::LeastRequest)
-                            ? pickBackendLeastLoaded(envoy)
+                            ? pickBackendLeastRequest(envoy)
                             : pickBackendRoundRobin(envoy);
     BackendAsSeenByEnvoy& choice = envoy.backend_subset_[subset_index];
 
     ++choice.outstanding_requests_;
     BackendInstance& backend = *backend_instances_[choice.index_];
-    uint32_t retire_at_cycle = cycle + kCyclesForBackendsToRetireRequest;
-    uint32_t latency = kCyclesForBackendsToRetireRequest;
+    uint32_t retire_at_cycle = cycle + cycles_to_retire_;
+    uint32_t latency = cycles_to_retire_;
     if (!backend.requests_.empty()) {
       uint32_t new_retire_at_cycle = backend.requests_.back().retire_at_cycle_ +
-                                     kCyclesForBackendsToRetireRequest;
+                                     cycles_to_retire_;
       latency += new_retire_at_cycle - retire_at_cycle;
     }
     backend.max_latency_ = std::max(backend.max_latency_, latency);
@@ -266,6 +264,7 @@ class Sweep {
     ip_set_.clear();
     envoy_instances_.clear();
     backend_instances_.clear();
+    cycles_to_retire_ = (4*num_backends + kNumEnvoys - 1) / kNumEnvoys;
 
     for (uint32_t i = 0; i < num_backends; ++i) {
       backend_instances_.push_back(std::make_unique<BackendInstance>(
@@ -379,6 +378,7 @@ class Sweep {
         "Load + 1 sigma\n";
   }
 
+#if DETAILED_CSV
   void writeCsvLine(const Statistics& stats, uint32_t num_backends) {
     absl::StrAppend(&output_,
                     num_backends, ","
@@ -390,18 +390,23 @@ class Sweep {
                     , stats.mean() + stats.stddev());
   }
 
-  void emitResults(uint32_t prime, double allow, uint32_t num_backends, bool write_csv) {
+  void flushDetailedCsv() {
+    std::cout << output_ << "\n\n";
+  }
+#endif
+
+  void emitResults(uint32_t prime, double allow, uint32_t num_backends) {
     Statistics backends_per_envoy_stats(backends_per_envoy_vector_);
     Statistics load_per_backend_stats(load_per_backend_vector_);
 
+#if DETAILED_CSV
     absl::StrAppend(&output_, describe(), ",", 100*allow, ",", prime, ",");
-    if (write_csv) {
-      writeCsvLine(backends_per_envoy_stats, num_backends);
-    }
+    writeCsvLine(backends_per_envoy_stats, num_backends);
     absl::StrAppend(&output_, ",");
-    if (write_csv) {
-      writeCsvLine(load_per_backend_stats, num_backends);
-    }
+    writeCsvLine(load_per_backend_stats, num_backends);
+    absl::StrAppend(&output_, "\n");
+#else
+    UNREFERENCED_PARAMETER(prime);
     double peak_to_mean = load_per_backend_stats.hi() /
                           load_per_backend_stats.mean();
     peak_.push_back(load_per_backend_stats.hi());
@@ -411,9 +416,7 @@ class Sweep {
                             load_per_backend_stats.mean());
     num_backends_.push_back(num_backends);
     allow_.push_back(allow);
-    if (write_csv) {
-      absl::StrAppend(&output_, "\n");
-    }
+#endif
   }
 
   std::string generateName(absl::string_view prefix) {
@@ -439,6 +442,7 @@ class Sweep {
   const SubsetHack::HashChoice hasher_;
   const LbPolicy lb_policy_;
   std::string output_;
+  uint32_t cycles_to_retire_{0};
   std::vector<uint32_t> num_backends_;
   std::vector<double> allow_;
   std::vector<double> peak_;
@@ -481,6 +485,11 @@ class TestContext {
       thread->join();
     }
 
+#if DETAILED_CSV
+    for (auto& sweep : sweeps_) {
+      sweep->flushDetailedCsv();
+    }
+#else
     std::cout << "num backends,subset%";
     for (auto& sweep : sweeps_) {
       std::cout << "," << sweep->describe() << " peak";
@@ -511,6 +520,7 @@ class TestContext {
       }
       std::cout << std::endl;
     }
+#endif
   }
 
  private:
@@ -529,7 +539,7 @@ class TestContext {
                                               [this] { progress(); }));;
     Sweep& swp = *sweeps_.back();
     total_ops_ += swp.totalOps();
-    threads_.push_back(thread_factory_.createThread([&swp]() { swp.run(false); }));
+    threads_.push_back(thread_factory_.createThread([&swp]() { swp.run(); }));
   }
 
   Thread::ThreadFactory& thread_factory_;
