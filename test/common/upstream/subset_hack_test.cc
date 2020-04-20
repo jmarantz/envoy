@@ -22,7 +22,7 @@
 #define SWEEP_OVER_BACKENDS true
 #define DETAILED_CSV false
 
-enum class LbPolicy { RoundRobin, LeastRequest };
+enum class LbPolicy { RoundRobin, LeastRequest, RequestOrdered };
 
 constexpr double kAllow = 0.25;
 #if !SWEEP_OVER_BACKENDS
@@ -130,6 +130,65 @@ class LeastRequestBalancer : public LoadBalancer {
   std::vector<uint32_t> outstanding_requests_;
 };
 
+class RequestOrderedBalancer : public LoadBalancer {
+ public:
+  RequestOrderedBalancer(std::vector<uint32_t>& subset, std::mt19937_64& bit_gen)
+      : request_order_(BackendCompare(*this)) {
+    uint32_t subset_size = subset.size();
+
+    // Shuffle the subset to reduce the frequency that different Envoys pick
+    // the same backends in the same order.
+    for (uint32_t i = subset_size - 1; i > 0; --i) {
+      std::uniform_int_distribution<uint32_t> dist(0, i);
+      std::swap(subset[i], subset[dist(bit_gen)]);
+    }
+
+    // Populate the std::set and initialize the outstanding_request_ array.
+    outstanding_requests_.reserve(subset_size);
+    for (uint32_t i = 0; i < subset_size; ++i) {
+      outstanding_requests_.push_back(0);
+      request_order_.insert(i);
+    }
+  }
+
+  uint32_t pickBackend() override {
+    auto iter = request_order_.begin();
+    uint32_t subset_index = *iter;
+    request_order_.erase(iter);
+    ++outstanding_requests_[subset_index];
+    request_order_.insert(subset_index);
+    return subset_index;
+  }
+
+  void retireRequest(uint32_t subset_index) override {
+    request_order_.erase(subset_index);
+    --outstanding_requests_[subset_index];
+    request_order_.insert(subset_index);
+  }
+
+ private:
+  struct BackendCompare {
+    explicit BackendCompare(RequestOrderedBalancer& balancer) : balancer_(balancer) {}
+
+    bool operator()(uint32_t a, uint32_t b) const {
+      uint32_t a_requests = balancer_.outstanding_requests_[a];
+      uint32_t b_requests = balancer_.outstanding_requests_[b];
+      if (a_requests < b_requests) {
+        return true;
+      } else if (a_requests > b_requests) {
+        return false;
+      }
+      return a < b;
+    }
+
+    RequestOrderedBalancer& balancer_;
+  };
+
+
+  std::vector<uint32_t> outstanding_requests_;
+  std::set<uint32_t, BackendCompare> request_order_;
+};
+
 class Sweep {
  public:
   Sweep(SubsetHack::Strategy strategy, SubsetHack::HashChoice hasher, LbPolicy lb_policy,
@@ -191,6 +250,7 @@ class Sweep {
     switch (lb_policy_) {
       case LbPolicy::RoundRobin: out += "/rr"; break;
       case LbPolicy::LeastRequest: out += "/lr"; break;
+      case LbPolicy::RequestOrdered: out += "/ro"; break;
     }
 
     return out;
@@ -350,6 +410,10 @@ class Sweep {
           break;
         case LbPolicy::LeastRequest:
           envoy.load_balancer_ = std::make_unique<LeastRequestBalancer>(subset_size, bit_gen_);
+          break;
+        case LbPolicy::RequestOrdered:
+          envoy.load_balancer_ = std::make_unique<RequestOrderedBalancer>(
+              envoy.backend_subset_, bit_gen_);
           break;
       }
     }
@@ -534,6 +598,7 @@ class TestContext {
   void run() {
     sweep(SubsetHack::Strategy::Modulus, SubsetHack::HashChoice::Absl, LbPolicy::RoundRobin);
     sweep(SubsetHack::Strategy::Modulus, SubsetHack::HashChoice::Absl, LbPolicy::LeastRequest);
+    sweep(SubsetHack::Strategy::Modulus, SubsetHack::HashChoice::Absl, LbPolicy::RequestOrdered);
     //sweep(SubsetHack::Strategy::Modulus, SubsetHack::HashChoice::Absl);
     //sweep(SubsetHack::Strategy::Modulus, SubsetHack::HashChoice::XX);
     //sweep(SubsetHack::Strategy::Xor, SubsetHack::HashChoice::Absl);
