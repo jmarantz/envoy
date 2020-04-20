@@ -71,6 +71,65 @@ class Statistics {
   double stddev_{0};
 };
 
+class LoadBalancer {
+ public:
+  virtual ~LoadBalancer() = default;
+
+  virtual uint32_t pickBackend() PURE;
+  virtual void retireRequest(uint32_t subset_index) PURE;
+};
+
+class RoundRobinBalancer : public LoadBalancer {
+ public:
+  RoundRobinBalancer(uint32_t subset_size, std::mt19937_64& bit_gen)
+      : subset_size_(subset_size) {
+    std::uniform_int_distribution<uint32_t> dist{0, subset_size_ - 1};
+    round_robin_index_ = dist(bit_gen);
+  }
+
+  uint32_t pickBackend() override {
+    round_robin_index_ = (round_robin_index_ + 1) % subset_size_;
+    return round_robin_index_;
+  }
+
+  void retireRequest(uint32_t /*subset_index*/) override {}
+
+ private:
+  uint32_t subset_size_;
+  uint32_t round_robin_index_;
+};
+
+class LeastRequestBalancer : public LoadBalancer {
+ public:
+  LeastRequestBalancer(uint32_t subset_size, std::mt19937_64& bit_gen)
+      : bit_gen_(bit_gen) {
+    outstanding_requests_.resize(subset_size);
+  }
+
+  uint32_t pickBackend() override {
+    uint32_t max_subset_index = outstanding_requests_.size() - 1;
+    std::uniform_int_distribution<uint32_t> dist{0, max_subset_index};
+    uint32_t i = dist(bit_gen_), j;
+    do {
+      j = dist(bit_gen_);
+    } while (i == j);
+
+    uint32_t subset_index = (outstanding_requests_[i] <= outstanding_requests_[j]) ? i : j;
+    ++outstanding_requests_[subset_index];
+    return subset_index;
+  }
+
+  void retireRequest(uint32_t subset_index) override {
+    ASSERT(outstanding_requests_.size() > subset_index);
+    ASSERT(outstanding_requests_[subset_index] > 0);
+    --outstanding_requests_[subset_index];
+  }
+
+ private:
+  std::mt19937_64& bit_gen_;
+  std::vector<uint32_t> outstanding_requests_;
+};
+
 class Sweep {
  public:
   Sweep(SubsetHack::Strategy strategy, SubsetHack::HashChoice hasher, LbPolicy lb_policy,
@@ -108,8 +167,9 @@ class Sweep {
   struct EnvoyInstance {
     explicit EnvoyInstance(const std::string& name) : name_(name) {}
     std::string name_;
-    std::vector<BackendAsSeenByEnvoy> backend_subset_;
-    uint32_t round_robin_index_{0};
+    //std::vector<BackendAsSeenByEnvoy> backend_subset_;
+    std::vector<uint32_t> backend_subset_;
+    std::unique_ptr<LoadBalancer> load_balancer_;
   };
 
   std::string describe() {
@@ -208,16 +268,13 @@ class Sweep {
       Request& request = backend.requests_.front();
       if (request.retire_at_cycle_ <= cycle) {
         EnvoyInstance& envoy = *envoy_instances_[request.envoy_index_];
-        BackendAsSeenByEnvoy& backend_as_seen_by_envoy =
-            envoy.backend_subset_[request.subset_index_];
+        envoy.load_balancer_->retireRequest(request.subset_index_);
         backend.requests_.pop_front();
-
-        ASSERT(backend_as_seen_by_envoy.outstanding_requests_ > 0);
-        --backend_as_seen_by_envoy.outstanding_requests_;
       }
     }
   }
 
+  /*
   uint32_t pickBackendRoundRobin(EnvoyInstance& envoy) {
     envoy.round_robin_index_ = (envoy.round_robin_index_ + 1) % envoy.backend_subset_.size();
     return envoy.round_robin_index_;
@@ -233,19 +290,16 @@ class Sweep {
     return (envoy.backend_subset_[i].outstanding_requests_ <=
             envoy.backend_subset_[j].outstanding_requests_) ? i : j;
   }
+  */
 
   // Initiates a request from an Envoy to a backend, based on load-balancing
   // policy. For now we are picking least-loaded.
   void makeRequest(uint32_t envoy_index, uint32_t cycle) {
     // pick two random backends.
     EnvoyInstance& envoy = *envoy_instances_[envoy_index];
-    uint32_t subset_index = (lb_policy_ == LbPolicy::LeastRequest)
-                            ? pickBackendLeastRequest(envoy)
-                            : pickBackendRoundRobin(envoy);
-    BackendAsSeenByEnvoy& choice = envoy.backend_subset_[subset_index];
-
-    ++choice.outstanding_requests_;
-    BackendInstance& backend = *backend_instances_[choice.index_];
+    uint32_t subset_index = envoy.load_balancer_->pickBackend();
+    uint32_t backend_index = envoy.backend_subset_[subset_index];
+    BackendInstance& backend = *backend_instances_[backend_index];
     uint32_t retire_at_cycle = cycle + cycles_to_retire_;
     uint32_t latency = cycles_to_retire_;
     if (!backend.requests_.empty()) {
@@ -286,12 +340,18 @@ class Sweep {
         BackendInstance& backend = *backend_instances_[b];
         if (!subset_hack.skipHost(backend.name_)) {
           backend.envoys_.push_back(e);
-          envoy.backend_subset_.push_back(BackendAsSeenByEnvoy{b, 0});
+          envoy.backend_subset_.push_back(b);
         }
       }
-      uint32_t max_subset_index = envoy.backend_subset_.size() - 1;
-      std::uniform_int_distribution<uint32_t> dist{0, max_subset_index};
-      envoy.round_robin_index_ = dist(bit_gen_);
+      uint32_t subset_size = envoy.backend_subset_.size();
+      switch (lb_policy_) {
+        case LbPolicy::RoundRobin:
+          envoy.load_balancer_ = std::make_unique<RoundRobinBalancer>(subset_size, bit_gen_);
+          break;
+        case LbPolicy::LeastRequest:
+          envoy.load_balancer_ = std::make_unique<LeastRequestBalancer>(subset_size, bit_gen_);
+          break;
+      }
     }
 
     // Let's assume each backend is single-threaded, and can process 100 qps.
