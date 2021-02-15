@@ -177,6 +177,7 @@ public:
   void free(const StatName& stat_name) override;
   void incRefCount(const StatName& stat_name) override;
   StoragePtr join(const StatNameVec& stat_names) const override;
+  StoragePtr join(const SymbolVec& symbols) const override;
   void populateList(const StatName* names, uint32_t num_names, StatNameList& list) override;
   StoragePtr encode(absl::string_view name) override;
   StoragePtr makeDynamicStorage(absl::string_view name) override;
@@ -548,6 +549,8 @@ public:
    * @return the StatName held in the container for this name.
    */
   StatName add(absl::string_view name);
+
+  StatName move(SymbolTable::StoragePtr&& storage);
 
   /**
    * Does essentially the same thing as add(), but returns the storage as a

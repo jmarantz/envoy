@@ -571,6 +571,15 @@ SymbolTable::StoragePtr SymbolTableImpl::join(const StatNameVec& stat_names) con
   return mem_block.release();
 }
 
+SymbolTable::StoragePtr SymbolTableImpl::join(const SymbolVec& symbols) const {
+  Encoding encoding;
+  encoding.addSymbols(symbols);
+  MemBlockBuilder<uint8_t> mem_block(Encoding::totalSizeBytes(num_bytes));
+  encoding.moveToMemBlock(mem_block);
+  ASSERT(mem_block.capacityRemaining() == 0);
+  return mem_block.release();
+}
+
 void SymbolTableImpl::populateList(const StatName* names, uint32_t num_names, StatNameList& list) {
   RELEASE_ASSERT(num_names < 256, "Maximum number elements in a StatNameList exceeded");
 

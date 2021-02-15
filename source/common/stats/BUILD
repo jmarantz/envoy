@@ -194,6 +194,7 @@ envoy_cc_library(
     srcs = ["tag_extractor_impl.cc"],
     hdrs = ["tag_extractor_impl.h"],
     deps = [
+        ":symbol_table_lib",
         "//include/envoy/stats:stats_interface",
         "//source/common/common:assert_lib",
         "//source/common/common:perf_annotation_lib",

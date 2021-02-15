@@ -11,6 +11,7 @@
 #include "envoy/stats/tag_extractor.h"
 
 #include "common/common/regex.h"
+#include "common/stats/symbol_table_impl.h"
 
 #include "absl/strings/string_view.h"
 #include "re2/re2.h"
@@ -124,19 +125,25 @@ private:
   const re2::RE2 regex_;
 };
 
-class TagExtractorTokensImpl : public TagExtractorImplBase {
+class TagExtractorSymbolic {
 public:
-  TagExtractorTokensImpl(absl::string_view name, absl::string_view regex,
-                         absl::string_view substr = "");
+  TagExtractorSymbolic(absl::string_view name, absl::string_view tokens,
+                       SymbolTable& symbol_table, absl::string_view substr = "");
 
-  bool extractTag(absl::string_view tag_extracted_name, std::vector<Tag>& tags,
-                  IntervalSet<size_t>& remove_characters) const override;
+  bool extractTag(const SymbolVec& symbols. StatNameTagVector& tags,
+                  IntervalSet<size_t>& remove_tokens) const;
 
 private:
-  static uint32_t findMatchIndex(const std::vector<std::string>& tokens);
+  struct Token {
+    Symbol symbol_;
+    bool wildcard_{false};
+    bool match_{false};
+  };
+  using TokenVector = std::vector<Token>;
 
-  std::vector<std::string> tokens_;
-  const uint32_t match_index_{0};
+  StatNameManagedStorage storage_;
+  TokenVector tokens_;
+  uint32_t match_index_{0};
 };
 
 } // namespace Stats

@@ -171,66 +171,73 @@ bool TagExtractorRe2Impl::extractTag(absl::string_view stat_name, std::vector<Ta
   return false;
 }
 
-TagExtractorTokensImpl::TagExtractorTokensImpl(absl::string_view name, absl::string_view tokens,
-                                               absl::string_view substr)
-    : TagExtractorImplBase(name, tokens, substr),
-      tokens_(absl::StrSplit(tokens, '.')), match_index_{findMatchIndex(tokens_)} {}
-
-uint32_t TagExtractorTokensImpl::findMatchIndex(const std::vector<std::string>& tokens) {
-  uint32_t index = tokens.size();
-  for (uint32_t i = 0; i < tokens.size(); ++i) {
-    if (tokens[i] == "$") {
-      ASSERT(index == tokens.size(), absl::StrJoin(tokens, "."));
-      index = i;
+TagExtractorSymbolic::TagExtractorSymbolic(absl::string_view name, absl::string_view token_str,
+                                       absl::string_view substr, SymbolTable& symbol_table)
+    : storage_(token_str, symbol_table) {
+  uint32_t index = 0;
+  Symbol asterisk, dollar;
+  bool first = true;
+  StatNameManagedStorage special_storage("*.$", symbol_table);
+  symbol_table.decode(asterisk.statName(), [&asterisk, &dollar, &first](Symbol symbol) {
+    if (first) {
+      asterisk = symbol;
+      first = false;
+    } else {
+      dollar = symbol;
     }
-  }
-  ASSERT(index != tokens.size(), absl::StrJoin(tokens, "."));
-  return index;
+  }, [](absl::string_view){});
+  symbol_table.decode(
+      storage_.statName(),
+      [this, &index, asterisk, dollar)(Symbol symbol) {
+        tokens_.push_back(Token{symbol, symbol == asterisk, symbol == dollar});
+        if (symbol == dollar) {
+          match_index_ = index;
+        }
+        ++index;
+      },
+      [](absl::string_view){});
 }
 
-bool TagExtractorTokensImpl::extractTag(absl::string_view stat_name, std::vector<Tag>& tags,
-                                        IntervalSet<size_t>& remove_characters) const {
+bool TagExtractorSymbolicImpl::extractTag(
+    SymbolVec symbols. StatNameTagVector& tags, IntervalSet<size_t>& remove_tokens,
+    StatNamePool& pool) const {
   PERF_OPERATION(perf);
 
+  /*
   if (substrMismatch(stat_name)) {
     PERF_RECORD(perf, "tokens-skip", name_);
     PERF_TAG_INC(skipped_);
     return false;
   }
+  */
 
-  std::vector<absl::string_view> tokens = absl::StrSplit(stat_name, '.');
-  bool match_all_at_end = tokens.size() > tokens_.size() && (tokens_[tokens_.size() - 1] == "*");
-  if (tokens.size() < tokens_.size() || (tokens.size() > tokens_.size() && !match_all_at_end)) {
+  if (symbols.size() < tokens_.size() || (symbols.size() > tokens_.size() &&
+                                          !tokens_.back().wildcard_)) {
     PERF_RECORD(perf, "tokens-miss", name_);
     PERF_TAG_INC(missed_);
     return false;
   }
 
-  uint32_t index = 0, start = 0, end = 0;
-  absl::string_view tag;
+  uint32_t tag_index = tokens_.size();
+  Symbol tag_value;
   for (uint32_t i = 0; i < tokens_.size(); ++i) {
-    if (i == match_index_) {
-      ASSERT(tag.empty());
-      tag = tokens[i];
-      start = index;
-      end = start + tokens[i].size();
-      if (index > 0) {
-        --start; // Remove dot leading to this token.
-      } else if (i < (tokens.size() - 1)) {
-        ++end; // Remove dot leading to next token
-      }
-    } else if (tokens_[i] != "*" && (tokens_[i] != tokens[i])) {
+    Token& token = tokens_[i];
+    if (token.match_) {
+      ASSERT(tag_index == tokens_.size());
+      tag = token.symbol_;
+      tag_index = i;
+    } else if (!token.wildcard_ && (tokens_[i].symbol != symbols[i])) {
       PERF_RECORD(perf, "tokens-miss", name_);
       PERF_TAG_INC(missed_);
       return false;
-    } else if (end == 0) {
-      index += tokens[i].size() + 1;
     }
   }
 
-  ASSERT(!tag.empty());
-  addTag(tags) = std::string(tag);
-  remove_characters.insert(start, end);
+  tags.emplace_back();
+  StatNameTag& tag = tags.back();
+  tag.name_ = name_;
+  tag.value_ = pool_.add(symbol_table.join({tag_value}));
+  remove_tokens.insert(tag_index, tag_index + 1);
   PERF_RECORD(perf, "tokens-match", name_);
   PERF_TAG_INC(matched_);
   return true;

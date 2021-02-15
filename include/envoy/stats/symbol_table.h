@@ -126,6 +126,7 @@ public:
    * @return Storage allocated for the joined name.
    */
   virtual StoragePtr join(const StatNameVec& stat_names) const PURE;
+  virtual StoragePtr join(const SymbolVec& symbols) const PURE;
 
   /**
    * Populates a StatNameList from a list of encodings. This is not done at

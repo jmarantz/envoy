@@ -106,7 +106,7 @@ private:
   TagVector default_tags_;
 
   struct TokenNode {
-    absl;:flat_hash_map<Symbol, std::vector<std::uniuqe_ptr<TokenNode>>> next_;
+    absl::flat_hash_map<Symbol, std::vector<std::uniuqe_ptr<TokenNode>>> next_;
     StatNme tag_name_;
     bool wildcard_{false};
   };
