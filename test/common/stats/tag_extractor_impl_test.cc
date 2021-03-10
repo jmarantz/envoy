@@ -22,7 +22,8 @@ TEST(TagExtractorTest, TwoSubexpressions) {
   std::string name = "cluster.test_cluster.upstream_cx_total";
   TagVector tags;
   IntervalSetImpl<size_t> remove_characters;
-  ASSERT_TRUE(tag_extractor.extractTag(name, tags, remove_characters));
+  TagExtractionContext tag_extraction_context(name);
+  ASSERT_TRUE(tag_extractor.extractTag(tag_extraction_context, tags, remove_characters));
   std::string tag_extracted_name = StringUtil::removeCharacters(name, remove_characters);
   EXPECT_EQ("cluster.upstream_cx_total", tag_extracted_name);
   ASSERT_EQ(1, tags.size());
@@ -36,7 +37,8 @@ TEST(TagExtractorTest, RE2Variants) {
   std::string name = "cluster.test_cluster.upstream_cx_total";
   TagVector tags;
   IntervalSetImpl<size_t> remove_characters;
-  ASSERT_TRUE(tag_extractor.extractTag(name, tags, remove_characters));
+  TagExtractionContext tag_extraction_context(name);
+  ASSERT_TRUE(tag_extractor.extractTag(tag_extraction_context, tags, remove_characters));
   std::string tag_extracted_name = StringUtil::removeCharacters(name, remove_characters);
   EXPECT_EQ("cluster.upstream_cx_total", tag_extracted_name);
   ASSERT_EQ(1, tags.size());
@@ -49,7 +51,8 @@ TEST(TagExtractorTest, SingleSubexpression) {
   std::string name = "listener.80.downstream_cx_total";
   TagVector tags;
   IntervalSetImpl<size_t> remove_characters;
-  ASSERT_TRUE(tag_extractor.extractTag(name, tags, remove_characters));
+  TagExtractionContext tag_extraction_context(name);
+  ASSERT_TRUE(tag_extractor.extractTag(tag_extraction_context, tags, remove_characters));
   std::string tag_extracted_name = StringUtil::removeCharacters(name, remove_characters);
   EXPECT_EQ("listener.downstream_cx_total", tag_extracted_name);
   ASSERT_EQ(1, tags.size());
@@ -141,8 +144,9 @@ public:
                                              });
 
     IntervalSetImpl<size_t> remove_characters;
+    TagExtractionContext tag_extraction_context(metric_name);
     for (const TagExtractor* tag_extractor : extractors) {
-      tag_extractor->extractTag(metric_name, tags, remove_characters);
+      tag_extractor->extractTag(tag_extraction_context, tags, remove_characters);
     }
     return StringUtil::removeCharacters(metric_name, remove_characters);
   }
@@ -406,18 +410,29 @@ protected:
     TagExtractorTokensImpl tokens(tag_name, pattern);
     IntervalSetImpl<size_t> remove_characters;
     tags_.clear();
-    bool ret = tokens.extractTag(stat_name, tags_, remove_characters);
-    if (ret) {
+    bool extracted = tokens.extractTag(stat_name, tags_, remove_characters);
+    if (extracted) {
       tag_extracted_name_ = StringUtil::removeCharacters(stat_name, remove_characters);
     } else {
       tag_extracted_name_.clear();
     }
-    return ret;
+    return extracted;
   }
 
   std::vector<Tag> tags_;
   std::string tag_extracted_name_;
 };
+
+TEST_F(TagExtractorTokensTest, Prefix) {
+  EXPECT_EQ("prefix", TagExtractorTokensImpl("name", "prefix.foo.$").prefixToken());
+  EXPECT_EQ("prefix", TagExtractorTokensImpl("name", "prefix.$.*").prefixToken());
+  EXPECT_EQ("", TagExtractorTokensImpl("name", "*.foo.$").prefixToken());
+  EXPECT_EQ("", TagExtractorTokensImpl("name", "**.foo.$").prefixToken());
+  EXPECT_EQ("", TagExtractorTokensImpl("name", "$.foo.$").prefixToken());
+  EXPECT_EQ("", TagExtractorTokensImpl("name", "*.$").prefixToken());
+  EXPECT_EQ("", TagExtractorTokensImpl("name", "**.$").prefixToken());
+  EXPECT_EQ("", TagExtractorTokensImpl("name", "$").prefixToken());
+}
 
 TEST_F(TagExtractorTokensTest, TokensMatchStart) {
   EXPECT_TRUE(extract("when", "$.is.the.time", "now.is.the.time"));
@@ -433,8 +448,43 @@ TEST_F(TagExtractorTokensTest, TokensMatchStartWild) {
 
 TEST_F(TagExtractorTokensTest, TokensMatchStartWildLong) {
   EXPECT_TRUE(extract("when", "$.is.the.*", "now.is.the.time.to.come.to.the.aid"));
+}
+
+TEST_F(TagExtractorTokensTest, TokensMatchStartDoubleWildLong) {
+  EXPECT_TRUE(extract("when", "$.is.the.**", "now.is.the.time.to.come.to.the.aid"));
   EXPECT_THAT(tags_, ElementsAre(Tag{"when", "now"}));
   EXPECT_EQ("is.the.time.to.come.to.the.aid", tag_extracted_name_);
+}
+
+TEST_F(TagExtractorTokensTest, TokensMatchStartSingleWildLong) {
+  EXPECT_FALSE(extract("when", "$.is.the.*", "now.is.the.time.to.come.to.the.aid"));
+}
+
+TEST_F(TagExtractorTokensTest, TokensMatchStartDoubleWild) {
+  EXPECT_TRUE(extract("when", "$.**.aid", "now.is.the.time.to.come.to.the.aid"));
+  EXPECT_THAT(tags_, ElementsAre(Tag{"when", "now"}));
+  EXPECT_EQ("is.the.time.to.come.to.the.aid", tag_extracted_name_);
+}
+
+TEST_F(TagExtractorTokensTest, TokensMatchStartDoubleWildBacktrackEarlyMatch) {
+  EXPECT_TRUE(extract("when", "$.**.aid.of.their",
+                      "now.is.the.time.to.come.to.the.aid.backtrack.now.aid.of.their"));
+  EXPECT_THAT(tags_, ElementsAre(Tag{"when", "now"}));
+  EXPECT_EQ("is.the.time.to.come.to.the.aid.backtrack.now.aid.of.their", tag_extracted_name_);
+}
+
+TEST_F(TagExtractorTokensTest, TokensMatchStartDoubleWildBacktrackImmediateMatchMiddle) {
+  EXPECT_TRUE(extract("match", "now.**.$.of.their",
+                      "now.is.the.time.to.come.to.the.aid.fake.aid.real.of.their"));
+  EXPECT_THAT(tags_, ElementsAre(Tag{"match", "real"}));
+  EXPECT_EQ("now.is.the.time.to.come.to.the.aid.fake.aid.of.their", tag_extracted_name_);
+}
+
+TEST_F(TagExtractorTokensTest, TokensMatchStartDoubleWildBacktrackLateMatchMiddle) {
+  EXPECT_TRUE(extract("match", "now.**.aid.$.of.their",
+                      "now.is.the.time.to.come.to.the.aid.fake.aid.real.of.their"));
+  EXPECT_THAT(tags_, ElementsAre(Tag{"match", "real"}));
+  EXPECT_EQ("now.is.the.time.to.come.to.the.aid.fake.aid.of.their", tag_extracted_name_);
 }
 
 TEST_F(TagExtractorTokensTest, TokensMatchMiddle) {

@@ -4,6 +4,7 @@
 #include "envoy/config/overload/v3/overload.pb.h"
 #include "envoy/event/scaled_range_timer_manager.h"
 #include "envoy/server/overload/overload_manager.h"
+#include "envoy/server/overload/thread_local_overload_state.h"
 #include "envoy/server/resource_monitor.h"
 #include "envoy/server/resource_monitor_config.h"
 
@@ -16,6 +17,7 @@
 #include "test/common/stats/stat_test_utility.h"
 #include "test/mocks/event/mocks.h"
 #include "test/mocks/protobuf/mocks.h"
+#include "test/mocks/server/options.h"
 #include "test/mocks/thread_local/mocks.h"
 #include "test/test_common/registry.h"
 #include "test/test_common/utility.h"
@@ -119,9 +121,10 @@ public:
   TestOverloadManager(Event::Dispatcher& dispatcher, Stats::Scope& stats_scope,
                       ThreadLocal::SlotAllocator& slot_allocator,
                       const envoy::config::overload::v3::OverloadManager& config,
-                      ProtobufMessage::ValidationVisitor& validation_visitor, Api::Api& api)
+                      ProtobufMessage::ValidationVisitor& validation_visitor, Api::Api& api,
+                      const Server::MockOptions& options)
       : OverloadManagerImpl(dispatcher, stats_scope, slot_allocator, config, validation_visitor,
-                            api) {
+                            api, options) {
     EXPECT_CALL(*this, createScaledRangeTimerManager)
         .Times(AnyNumber())
         .WillRepeatedly(Invoke(this, &TestOverloadManager::createDefaultScaledRangeTimerManager));
@@ -165,7 +168,8 @@ protected:
 
   std::unique_ptr<TestOverloadManager> createOverloadManager(const std::string& config) {
     return std::make_unique<TestOverloadManager>(dispatcher_, stats_, thread_local_,
-                                                 parseConfig(config), validation_visitor_, *api_);
+                                                 parseConfig(config), validation_visitor_, *api_,
+                                                 options_);
   }
 
   FakeResourceMonitorFactory<Envoy::ProtobufWkt::Struct> factory1_;
@@ -183,6 +187,7 @@ protected:
   Event::TimerCb timer_cb_;
   NiceMock<ProtobufMessage::MockValidationVisitor> validation_visitor_;
   Api::ApiPtr api_;
+  Server::MockOptions options_;
 };
 
 constexpr char kRegularStateConfig[] = R"YAML(
@@ -494,7 +499,9 @@ constexpr char kReducedTimeoutsConfig[] = R"YAML(
           - timer: HTTP_DOWNSTREAM_CONNECTION_IDLE
             min_timeout: 2s
           - timer: HTTP_DOWNSTREAM_STREAM_IDLE
-            min_scale: { value: 10 }
+            min_scale: { value: 10 } # percent
+          - timer: TRANSPORT_SOCKET_CONNECT
+            min_scale: { value: 40 } # percent
       triggers:
         - name: "envoy.resource_monitors.fake_resource1"
           scaled:
@@ -507,6 +514,7 @@ constexpr std::pair<TimerType, Event::ScaledTimerMinimum> kReducedTimeoutsMinimu
     {TimerType::HttpDownstreamIdleConnectionTimeout,
      Event::AbsoluteMinimum(std::chrono::seconds(2))},
     {TimerType::HttpDownstreamIdleStreamTimeout, Event::ScaledMinimum(UnitFloat(0.1))},
+    {TimerType::TransportSocketConnectTimeout, Event::ScaledMinimum(UnitFloat(0.4))},
 };
 TEST_F(OverloadManagerImplTest, CreateScaledTimerManager) {
   auto manager(createOverloadManager(kReducedTimeoutsConfig));

@@ -48,6 +48,7 @@ public:
   }
   // quic::QuicSpdyStream
   void OnBodyAvailable() override;
+  bool OnStopSending(quic::QuicRstStreamErrorCode error) override;
   void OnStreamReset(const quic::QuicRstStreamFrame& frame) override;
   void Reset(quic::QuicRstStreamErrorCode error) override;
   void OnClose() override;
@@ -66,6 +67,7 @@ protected:
                                 const quic::QuicHeaderList& header_list) override;
   void OnTrailingHeadersComplete(bool fin, size_t frame_len,
                                  const quic::QuicHeaderList& header_list) override;
+  void OnHeadersTooLarge() override;
 
 private:
   QuicFilterManagerConnectionImpl* filterManagerConnection();
