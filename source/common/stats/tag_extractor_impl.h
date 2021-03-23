@@ -22,7 +22,8 @@ namespace Stats {
 // Carries state across tag extractions.
 class TagExtractionContext {
 public:
-  explicit TagExtractionContext(absl::string_view name) : name_(name) {}
+  TagExtractionContext(absl::string_view name, StatNameTagVector& tags)
+      : name_(name), tags_(tags) {}
 
   absl::string_view name() { return name_; }
   const std::vector<absl::string_view>& tokens();
@@ -30,6 +31,7 @@ public:
 private:
   absl::string_view name_;
   std::vector<absl::string_view> tokens_;
+  StatNameTagVector& tags_;
 };
 
 // To check if a tag extractor is actually used you can run
@@ -145,12 +147,12 @@ private:
  *  **    matches 0 or more dot-separated token values.
  *  $     used as the tag value. There must be exactly one of these in each tokens descriptor.
  */
-class TagExtractorSymbolic {
+class TagExtractorSymbolic : public TagExtractorImplBase {
 public:
   TagExtractorSymbolic(absl::string_view name, absl::string_view tokens,
                        SymbolTable& symbol_table);
 
-  bool extractTag(const SymbolVec& symbols. StatNameTagVector& tags,
+  bool extractTag(TagExtractionContext& context, StatNameTagVector& tags,
                   IntervalSet<size_t>& remove_tokens) const;
 
 private:
@@ -169,10 +171,6 @@ private:
   StatNameManagedStorage storage_;
   TokenVector tokens_;
   uint32_t match_index_{0};
-
-
-  const std::vector<std::string> tokens_;
-  const uint32_t match_index_;
 };
 
 } // namespace Stats

@@ -181,13 +181,13 @@ bool TagExtractorRe2Impl::extractTag(TagExtractionContext& context, std::vector<
 }
 
 TagExtractorSymbolic::TagExtractorSymbolic(absl::string_view name, absl::string_view token_str,
-                                       absl::string_view substr, SymbolTable& symbol_table)
+                                           SymbolTable& symbol_table)
     : storage_(token_str, symbol_table) {
   uint32_t index = 0;
   Symbol asterisk, dollar;
   bool first = true;
   StatNameManagedStorage special_storage("*.$", symbol_table);
-  symbol_table.decode(asterisk.statName(), [&asterisk, &dollar, &first](Symbol symbol) {
+  symbol_table.decode(special_storage.statName(), [&asterisk, &dollar, &first](Symbol symbol) {
     if (first) {
       asterisk = symbol;
       first = false;
@@ -197,7 +197,7 @@ TagExtractorSymbolic::TagExtractorSymbolic(absl::string_view name, absl::string_
   }, [](absl::string_view){});
   symbol_table.decode(
       storage_.statName(),
-      [this, &index, asterisk, dollar)(Symbol symbol) {
+      [this, &index, asterisk, dollar](Symbol symbol) {
         tokens_.push_back(Token{symbol, symbol == asterisk, symbol == dollar});
         if (symbol == dollar) {
           match_index_ = index;
@@ -211,14 +211,6 @@ bool TagExtractorSymbolicImpl::extractTag(
     SymbolVec symbols. StatNameTagVector& tags, IntervalSet<size_t>& remove_tokens,
     StatNamePool& pool) const {
   PERF_OPERATION(perf);
-
-  /*
-  if (substrMismatch(stat_name)) {
-    PERF_RECORD(perf, "tokens-skip", name_);
-    PERF_TAG_INC(skipped_);
-    return false;
-  }
-  */
 
   if (symbols.size() < tokens_.size() || (symbols.size() > tokens_.size() &&
                                           !tokens_.back().wildcard_)) {

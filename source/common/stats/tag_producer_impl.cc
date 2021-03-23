@@ -114,12 +114,11 @@ class TagFromStatNameContext {
   TagFromStatNameContext(StatName metric_name, StatNameTagVector& tags,
                          StatName& tag_extracted_name, StatNamePool& pool)
       : tags_(tags), tag_extracted_name_(tag_extracted_name), pool_(pool) {
-    symbol_table_.decode(metric_name,
-                         [this](Symbol symbol) { segment_vec_.push_back(symbol); },
-                         [thi](absl::string_view name) { segment_vec_.push_back(name); });
-  }
-
-  void visit(TokenNode* node, uint32_t index) {
+    pool.symbolTable().decode(metric_name,
+                              [this](Symbol symbol) { segment_vec_.push_back(Segment(symbol)); },
+                              [this](absl::string_view name) {
+                                segment_vec_.push_back(Segment(name));
+                              });
   }
 
   StatNameTagVector& tags_;

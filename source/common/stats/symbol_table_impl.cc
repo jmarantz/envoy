@@ -574,7 +574,7 @@ SymbolTable::StoragePtr SymbolTableImpl::join(const StatNameVec& stat_names) con
 SymbolTable::StoragePtr SymbolTableImpl::join(const SymbolVec& symbols) const {
   Encoding encoding;
   encoding.addSymbols(symbols);
-  MemBlockBuilder<uint8_t> mem_block(Encoding::totalSizeBytes(num_bytes));
+  MemBlockBuilder<uint8_t> mem_block(encoding.bytesRequired());
   encoding.moveToMemBlock(mem_block);
   ASSERT(mem_block.capacityRemaining() == 0);
   return mem_block.release();
