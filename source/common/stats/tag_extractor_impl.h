@@ -10,6 +10,7 @@
 
 #include "envoy/stats/tag_extractor.h"
 
+#include "common/common/utility.h"
 #include "common/common/regex.h"
 #include "common/stats/symbol_table_impl.h"
 
@@ -121,8 +122,7 @@ public:
   TagExtractorStdRegexImpl(absl::string_view name, absl::string_view regex,
                            absl::string_view substr = "");
 
-  bool extractTag(TagExtractionContext& context, std::vector<Tag>& tags,
-                  IntervalSet<size_t>& remove_characters) const override;
+  bool extractTag(TagExtractionContext& context) const override;
 
 private:
   const std::regex regex_;
@@ -133,8 +133,7 @@ public:
   TagExtractorRe2Impl(absl::string_view name, absl::string_view regex,
                       absl::string_view substr = "");
 
-  bool extractTag(TagExtractionContext& context, std::vector<Tag>& tags,
-                  IntervalSet<size_t>& remove_characters) const override;
+  bool extractTag(TagExtractionContext& context) const override;
 
 private:
   const re2::RE2 regex_;

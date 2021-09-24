@@ -11,6 +11,7 @@
 #include "common/config/utility.h"
 #include "common/config/well_known_names.h"
 #include "common/protobuf/protobuf.h"
+#include "common/stats/tag_extractor_impl.h"
 
 #include "test/mocks/config/mocks.h"
 #include "test/mocks/grpc/mocks.h"
@@ -103,9 +104,10 @@ TEST(UtilityTest, createTagProducer) {
   auto producer = Utility::createTagProducer(bootstrap);
   ASSERT(producer != nullptr);
   std::vector<Stats::Tag> tags;
-  auto extracted_name = producer->produceTags("http.config_test.rq_total", tags);
+  Stats::TagExtractionContext extraction_context("http.config_test.rq_total");
+  auto extracted_name = producer->produceTags(extraction_context);
   ASSERT_EQ(extracted_name, "http.rq_total");
-  ASSERT_EQ(tags.size(), 1);
+  ASSERT_EQ(extraction_context.tags().size(), 1);
 }
 
 TEST(UtilityTest, CheckFilesystemSubscriptionBackingPath) {

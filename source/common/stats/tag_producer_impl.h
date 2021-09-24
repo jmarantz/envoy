@@ -38,7 +38,7 @@ public:
    * @param metric_name std::string a name of Stats::Metric (Counter, Gauge, Histogram).
    * @param tags std::vector a set of Stats::Tag.
    */
-  std::string produceTags(absl::string_view metric_name, TagVector& tags) const override;
+  std::string produceTags(TagExtractionContext& extraction_context) const override;
 
   bool produceTagsFromStatName(StatName metric_name, StatNameTagVector& tags,
                                StatName& tag_extracted_name, StatNamePool& pool) const override;

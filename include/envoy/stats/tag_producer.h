@@ -14,6 +14,8 @@ namespace Stats {
 
 class StatNamePool;
 
+class TagExtractionContext;
+
 class TagProducer {
 public:
   virtual ~TagProducer() = default;

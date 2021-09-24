@@ -14,6 +14,7 @@
 #include "common/common/lock_guard.h"
 #include "common/stats/histogram_impl.h"
 #include "common/stats/stats_matcher_impl.h"
+#include "common/stats/tag_extractor_impl.h"
 #include "common/stats/tag_producer_impl.h"
 #include "common/stats/tag_utility.h"
 
@@ -371,7 +372,7 @@ public:
         stat_name_tags_.emplace_back(tag_name, pool_.add(tag.value_));
       }
     } else {
-      tag_extracted_name_ = name;
+      tag_extracted_name_ = stat_name;
     }
   }
 
