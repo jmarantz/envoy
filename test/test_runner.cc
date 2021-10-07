@@ -2,15 +2,13 @@
 
 #include <regex>
 
-#include "common/common/logger.h"
-#include "common/common/logger_delegates.h"
-#include "common/common/thread.h"
-#include "common/event/libevent.h"
-#include "common/runtime/runtime_features.h"
-
-#include "exe/process_wide.h"
-
-#include "server/backtrace.h"
+#include "source/common/common/logger.h"
+#include "source/common/common/logger_delegates.h"
+#include "source/common/common/thread.h"
+#include "source/common/event/libevent.h"
+#include "source/common/runtime/runtime_features.h"
+#include "source/exe/process_wide.h"
+#include "source/server/backtrace.h"
 
 #include "test/common/runtime/utility.h"
 #include "test/mocks/access_log/mocks.h"
@@ -75,6 +73,8 @@ public:
 } // namespace
 
 int TestRunner::RunTests(int argc, char** argv) {
+  Thread::TestThread test_thread;
+
   ::testing::InitGoogleMock(&argc, argv);
   // We hold on to process_wide to provide RAII cleanup of process-wide
   // state.

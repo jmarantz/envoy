@@ -7,25 +7,24 @@
 #include "envoy/common/callback.h"
 #include "envoy/common/matchers.h"
 #include "envoy/config/core/v3/http_uri.pb.h"
-#include "envoy/extensions/filters/http/oauth2/v3alpha/oauth.pb.h"
+#include "envoy/extensions/filters/http/oauth2/v3/oauth.pb.h"
 #include "envoy/http/header_map.h"
 #include "envoy/server/filter_config.h"
 #include "envoy/stats/stats_macros.h"
 #include "envoy/stream_info/stream_info.h"
 #include "envoy/upstream/cluster_manager.h"
 
-#include "common/common/assert.h"
-#include "common/common/matchers.h"
-#include "common/config/datasource.h"
-#include "common/formatter/substitution_formatter.h"
-#include "common/http/header_map_impl.h"
-#include "common/http/header_utility.h"
-#include "common/http/rest_api_fetcher.h"
-#include "common/http/utility.h"
-
-#include "extensions/filters/http/common/pass_through_filter.h"
-#include "extensions/filters/http/oauth2/oauth.h"
-#include "extensions/filters/http/oauth2/oauth_client.h"
+#include "source/common/common/assert.h"
+#include "source/common/common/matchers.h"
+#include "source/common/config/datasource.h"
+#include "source/common/formatter/substitution_formatter.h"
+#include "source/common/http/header_map_impl.h"
+#include "source/common/http/header_utility.h"
+#include "source/common/http/rest_api_fetcher.h"
+#include "source/common/http/utility.h"
+#include "source/extensions/filters/http/common/pass_through_filter.h"
+#include "source/extensions/filters/http/oauth2/oauth.h"
+#include "source/extensions/filters/http/oauth2/oauth_client.h"
 
 #include "absl/strings/str_split.h"
 #include "absl/strings/string_view.h"
@@ -49,38 +48,35 @@ class SDSSecretReader : public SecretReader {
 public:
   SDSSecretReader(Secret::GenericSecretConfigProviderSharedPtr client_secret_provider,
                   Secret::GenericSecretConfigProviderSharedPtr token_secret_provider, Api::Api& api)
-      : api_(api), client_secret_provider_(std::move(client_secret_provider)),
-        token_secret_provider_(std::move(token_secret_provider)) {
-    readAndWatchSecret(client_secret_, *client_secret_provider_);
-    readAndWatchSecret(token_secret_, *token_secret_provider_);
-  }
+      : update_callback_client_(readAndWatchSecret(client_secret_, client_secret_provider, api)),
+        update_callback_token_(readAndWatchSecret(token_secret_, token_secret_provider, api)) {}
 
   const std::string& clientSecret() const override { return client_secret_; }
 
   const std::string& tokenSecret() const override { return token_secret_; }
 
 private:
-  void readAndWatchSecret(std::string& value,
-                          Secret::GenericSecretConfigProvider& secret_provider) {
-    const auto* secret = secret_provider.secret();
+  Envoy::Common::CallbackHandlePtr
+  readAndWatchSecret(std::string& value,
+                     Secret::GenericSecretConfigProviderSharedPtr& secret_provider, Api::Api& api) {
+    const auto* secret = secret_provider->secret();
     if (secret != nullptr) {
-      value = Config::DataSource::read(secret->secret(), true, api_);
+      value = Config::DataSource::read(secret->secret(), true, api);
     }
 
-    update_callback_ = secret_provider.addUpdateCallback([&secret_provider, this, &value]() {
-      const auto* secret = secret_provider.secret();
+    return secret_provider->addUpdateCallback([secret_provider, &api, &value]() {
+      const auto* secret = secret_provider->secret();
       if (secret != nullptr) {
-        value = Config::DataSource::read(secret->secret(), true, api_);
+        value = Config::DataSource::read(secret->secret(), true, api);
       }
     });
   }
+
   std::string client_secret_;
   std::string token_secret_;
-  Api::Api& api_;
-  Envoy::Common::CallbackHandlePtr update_callback_;
 
-  Secret::GenericSecretConfigProviderSharedPtr client_secret_provider_;
-  Secret::GenericSecretConfigProviderSharedPtr token_secret_provider_;
+  Envoy::Common::CallbackHandlePtr update_callback_client_;
+  Envoy::Common::CallbackHandlePtr update_callback_token_;
 };
 
 /**
@@ -104,7 +100,7 @@ struct FilterStats {
  */
 class FilterConfig {
 public:
-  FilterConfig(const envoy::extensions::filters::http::oauth2::v3alpha::OAuth2Config& proto_config,
+  FilterConfig(const envoy::extensions::filters::http::oauth2::v3::OAuth2Config& proto_config,
                Upstream::ClusterManager& cluster_manager,
                std::shared_ptr<SecretReader> secret_reader, Stats::Scope& scope,
                const std::string& stats_prefix);

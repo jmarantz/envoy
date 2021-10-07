@@ -1,13 +1,13 @@
-#include "common/stats/tag_producer_impl.h"
+#include "source/common/stats/tag_producer_impl.h"
 
 #include <string>
 
 #include "envoy/common/exception.h"
 #include "envoy/config/metrics/v3/stats.pb.h"
 
-#include "common/common/utility.h"
-#include "common/stats/tag_extractor_impl.h"
-#include "common/stats/utility.h"
+#include "source/common/common/utility.h"
+#include "source/common/stats/tag_extractor_impl.h"
+#include "source/common/stats/utility.h"
 
 namespace Envoy {
 namespace Stats {

@@ -1,13 +1,12 @@
 #include <memory>
 #include <string>
 
-#include "envoy/extensions/filters/http/oauth2/v3alpha/oauth.pb.h"
+#include "envoy/extensions/filters/http/oauth2/v3/oauth.pb.h"
 
-#include "common/protobuf/message_validator_impl.h"
-#include "common/protobuf/utility.h"
-#include "common/secret/secret_provider_impl.h"
-
-#include "extensions/filters/http/oauth2/config.h"
+#include "source/common/protobuf/message_validator_impl.h"
+#include "source/common/protobuf/utility.h"
+#include "source/common/secret/secret_provider_impl.h"
+#include "source/extensions/filters/http/oauth2/config.h"
 
 #include "test/mocks/server/factory_context.h"
 
@@ -47,7 +46,7 @@ config:
   signout_path:
     path:
       exact: /signout
-  auth_scopes: 
+  auth_scopes:
   - user
   - openid
   - email
@@ -95,7 +94,7 @@ config:
   signout_path:
     path:
       exact: /signout
-  auth_scopes: 
+  auth_scopes:
   - user
   - openid
   - email
@@ -140,7 +139,7 @@ TEST(ConfigTest, InvalidHmacSecret) {
 TEST(ConfigTest, CreateFilterMissingConfig) {
   OAuth2Config config;
 
-  envoy::extensions::filters::http::oauth2::v3alpha::OAuth2 proto_config;
+  envoy::extensions::filters::http::oauth2::v3::OAuth2 proto_config;
 
   NiceMock<Server::Configuration::MockFactoryContext> factory_context;
   EXPECT_THROW_WITH_MESSAGE(

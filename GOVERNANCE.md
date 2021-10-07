@@ -37,8 +37,8 @@
 * Triage GitHub issues and perform pull request reviews for other maintainers and the community.
   The areas of specialization listed in [OWNERS.md](OWNERS.md) can be used to help with routing
   an issue/question to the right person.
-* Triage build issues - file issues for known flaky builds or bugs, and either fix or find someone
-  to fix any main build breakages.
+* Triage build and CI issues. Monitor #envoy-ci and #test-flaky and file issues for failing builds,
+  flaky tests or new bugs, and either fix or find someone to fix any main build breakages.
 * During GitHub issue triage, apply all applicable [labels](https://github.com/envoyproxy/envoy/labels)
   to each new issue. Labels are extremely useful for future issue follow up. Which labels to apply
   is somewhat subjective so just use your best judgment. A few of the most important labels that are
@@ -140,7 +140,7 @@ New Features
 Deprecated
 ----------
 ```
-* Run the deprecate_versions.py script (e.g. `sh tools/deprecate_version/deprecate_version.sh`)
+* Run the deprecate_versions.py script (e.g. `bazel run //tools/deprecate_version:deprecate_version`)
   to file tracking issues for runtime guarded code which can be removed.
 * Check source/common/runtime/runtime_features.cc and see if any runtime guards in
   disabled_runtime_features should be reassessed, and ping on the relevant issues.

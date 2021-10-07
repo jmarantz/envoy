@@ -56,7 +56,8 @@ def proto_print(src, dst):
     print('proto_print %s -> %s' % (src, dst))
     subprocess.check_call([
         'bazel-bin/tools/protoxform/protoprint', src, dst,
-        './bazel-bin/tools/protoxform/protoprint.runfiles/envoy/tools/type_whisperer/api_type_db.pb_text'
+        './bazel-bin/tools/protoxform/protoprint.runfiles/envoy/tools/type_whisperer/api_type_db.pb_text',
+        './tools/testdata/protoxform/TEST_API_VERSION'
     ])
 
 
@@ -133,8 +134,6 @@ if __name__ == "__main__":
     for target in sys.argv[2:]:
         path, filename = path_and_filename(target)
         messages += run(cmd, path, filename, 'active_or_frozen')
-        messages += run(cmd, path, filename, 'next_major_version_candidate')
-        messages += run(cmd, path, filename, 'next_major_version_candidate.envoy_internal')
 
     if len(messages) == 0:
         logging.warning("PASS")

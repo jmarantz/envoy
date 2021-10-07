@@ -19,11 +19,15 @@ envoy_cc_test(
         "//source/extensions/common/dynamic_forward_proxy:dns_cache_manager_impl",
         "//test/mocks/network:network_mocks",
         "//test/mocks/runtime:runtime_mocks",
+        "//test/mocks/server:factory_context_mocks",
         "//test/mocks/thread_local:thread_local_mocks",
+        "//test/test_common:registry_lib",
         "//test/test_common:simulated_time_system_lib",
         "//test/test_common:test_runtime_lib",
         "@envoy_api//envoy/config/cluster/v3:pkg_cc_proto",
+        "@envoy_api//envoy/config/core/v3:pkg_cc_proto",
         "@envoy_api//envoy/extensions/common/dynamic_forward_proxy/v3:pkg_cc_proto",
+        "@envoy_api//envoy/extensions/key_value/file_based/v3:pkg_cc_proto",
     ],
 )
 

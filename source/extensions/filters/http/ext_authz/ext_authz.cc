@@ -1,14 +1,12 @@
-#include "extensions/filters/http/ext_authz/ext_authz.h"
+#include "source/extensions/filters/http/ext_authz/ext_authz.h"
 
 #include "envoy/config/core/v3/base.pb.h"
 
-#include "common/common/assert.h"
-#include "common/common/enum_to_int.h"
-#include "common/common/matchers.h"
-#include "common/http/utility.h"
-#include "common/router/config_impl.h"
-
-#include "extensions/filters/http/well_known_names.h"
+#include "source/common/common/assert.h"
+#include "source/common/common/enum_to_int.h"
+#include "source/common/common/matchers.h"
+#include "source/common/http/utility.h"
+#include "source/common/router/config_impl.h"
 
 namespace Envoy {
 namespace Extensions {
@@ -41,7 +39,7 @@ void Filter::initiateCall(const Http::RequestHeaderMap& headers,
 
   auto&& maybe_merged_per_route_config =
       Http::Utility::getMergedPerFilterConfig<FilterConfigPerRoute>(
-          HttpFilterNames::get().ExtAuthorization, route,
+          "envoy.filters.http.ext_authz", route,
           [](FilterConfigPerRoute& cfg_base, const FilterConfigPerRoute& cfg) {
             cfg_base.merge(cfg);
           });
@@ -65,7 +63,7 @@ void Filter::initiateCall(const Http::RequestHeaderMap& headers,
   Filters::Common::ExtAuthz::CheckRequestUtils::createHttpCheck(
       decoder_callbacks_, headers, std::move(context_extensions), std::move(metadata_context),
       check_request_, config_->maxRequestBytes(), config_->packAsBytes(),
-      config_->includePeerCertificate());
+      config_->includePeerCertificate(), config_->destinationLabels());
 
   ENVOY_STREAM_LOG(trace, "ext_authz filter calling authorization server", *decoder_callbacks_);
   state_ = State::Calling;
@@ -162,7 +160,8 @@ Http::FilterHeadersStatus Filter::encode100ContinueHeaders(Http::ResponseHeaderM
 
 Http::FilterHeadersStatus Filter::encodeHeaders(Http::ResponseHeaderMap& headers, bool) {
   ENVOY_STREAM_LOG(trace,
-                   "ext_authz filter has {} response header(s) to add to the encoded response:",
+                   "ext_authz filter has {} response header(s) to add and {} response header(s) to "
+                   "set to the encoded response:",
                    *encoder_callbacks_, response_headers_to_add_.size());
   if (!response_headers_to_add_.empty()) {
     ENVOY_STREAM_LOG(
@@ -173,6 +172,14 @@ Http::FilterHeadersStatus Filter::encodeHeaders(Http::ResponseHeaderMap& headers
     }
   }
 
+  if (!response_headers_to_set_.empty()) {
+    ENVOY_STREAM_LOG(
+        trace, "ext_authz filter set header(s) to the encoded response:", *encoder_callbacks_);
+    for (const auto& header : response_headers_to_set_) {
+      ENVOY_STREAM_LOG(trace, "'{}':'{}'", *encoder_callbacks_, header.first.get(), header.second);
+      headers.setCopy(header.first, header.second);
+    }
+  }
   return Http::FilterHeadersStatus::Continue;
 }
 
@@ -209,7 +216,7 @@ void Filter::onComplete(Filters::Common::ExtAuthz::ResponsePtr&& response) {
   Stats::StatName empty_stat_name;
 
   if (!response->dynamic_metadata.fields().empty()) {
-    decoder_callbacks_->streamInfo().setDynamicMetadata(HttpFilterNames::get().ExtAuthorization,
+    decoder_callbacks_->streamInfo().setDynamicMetadata("envoy.filters.http.ext_authz",
                                                         response->dynamic_metadata);
   }
 
@@ -273,6 +280,12 @@ void Filter::onComplete(Filters::Common::ExtAuthz::ResponsePtr&& response) {
       response_headers_to_add_ = std::move(response->response_headers_to_add);
     }
 
+    if (!response->response_headers_to_set.empty()) {
+      ENVOY_STREAM_LOG(trace, "ext_authz filter saving {} header(s) to set to the response:",
+                       *decoder_callbacks_, response->response_headers_to_set.size());
+      response_headers_to_set_ = std::move(response->response_headers_to_set);
+    }
+
     if (cluster_) {
       config_->incCounter(cluster_->statsScope(), config_->ext_authz_ok_);
     }
@@ -299,7 +312,7 @@ void Filter::onComplete(Filters::Common::ExtAuthz::ResponsePtr&& response) {
                                              empty_stat_name,
                                              empty_stat_name,
                                              false};
-      config_->httpContext().codeStats().chargeResponseStat(info);
+      config_->httpContext().codeStats().chargeResponseStat(info, false);
     }
 
     decoder_callbacks_->sendLocalReply(
@@ -376,13 +389,16 @@ void Filter::continueDecoding() {
 }
 
 Filter::PerRouteFlags Filter::getPerRouteFlags(const Router::RouteConstSharedPtr& route) const {
-  if (route == nullptr || route->routeEntry() == nullptr) {
+  if (route == nullptr ||
+      (!Runtime::runtimeFeatureEnabled(
+           "envoy.reloadable_features.http_ext_authz_do_not_skip_direct_response_and_redirect") &&
+       route->routeEntry() == nullptr)) {
     return PerRouteFlags{true /*skip_check_*/, false /*skip_request_body_buffering_*/};
   }
 
   const auto* specific_per_route_config =
       Http::Utility::resolveMostSpecificPerFilterConfig<FilterConfigPerRoute>(
-          HttpFilterNames::get().ExtAuthorization, route);
+          "envoy.filters.http.ext_authz", route);
   if (specific_per_route_config != nullptr) {
     return PerRouteFlags{specific_per_route_config->disabled(),
                          specific_per_route_config->disableRequestBodyBuffering()};

@@ -7,10 +7,9 @@
 #include "envoy/network/filter.h"
 #include "envoy/network/listen_socket.h"
 #include "envoy/network/listener.h"
-#include "envoy/server/active_udp_listener_config.h"
 
-// TODO(lambdai): remove connection_handler_impl after ActiveListenerImplBase is extracted from it.
-#include "server/connection_handler_impl.h"
+#include "source/common/network/utility.h"
+#include "source/server/active_listener_base.h"
 
 namespace Envoy {
 namespace Server {
@@ -24,7 +23,7 @@ struct UdpListenerStats {
   ALL_UDP_LISTENER_STATS(GENERATE_COUNTER_STRUCT)
 };
 
-class ActiveUdpListenerBase : public ConnectionHandlerImpl::ActiveListenerImplBase,
+class ActiveUdpListenerBase : public ActiveListenerImplBase,
                               public Network::ConnectionHandler::ActiveUdpListener {
 public:
   ActiveUdpListenerBase(uint32_t worker_index, uint32_t concurrency,
@@ -62,7 +61,8 @@ protected:
  */
 class ActiveRawUdpListener : public ActiveUdpListenerBase,
                              public Network::UdpListenerFilterManager,
-                             public Network::UdpReadFilterCallbacks {
+                             public Network::UdpReadFilterCallbacks,
+                             Logger::Loggable<Logger::Id::conn_handler> {
 public:
   ActiveRawUdpListener(uint32_t worker_index, uint32_t concurrency,
                        Network::UdpConnectionHandler& parent, Event::Dispatcher& dispatcher,
@@ -84,6 +84,10 @@ public:
   void onWriteReady(const Network::Socket& socket) override;
   void onReceiveError(Api::IoError::IoErrorCode error_code) override;
   Network::UdpPacketWriter& udpPacketWriter() override { return *udp_packet_writer_; }
+  size_t numPacketsExpectedPerEventLoop() const final {
+    // TODO(mattklein123) change this to a reasonable number if needed.
+    return Network::MAX_NUM_PACKETS_PER_EVENT_LOOP;
+  }
 
   // Network::UdpWorker
   void onDataWorker(Network::UdpRecvData&& data) override;
@@ -98,6 +102,12 @@ public:
     // after deletion.
     read_filter_.reset();
     udp_listener_.reset();
+  }
+  // These two are unreachable because a config will be rejected if it configures both this listener
+  // and any L4 filter chain.
+  void updateListenerConfig(Network::ListenerConfig&) override { NOT_REACHED_GCOVR_EXCL_LINE; }
+  void onFilterChainDraining(const std::list<const Network::FilterChain*>&) override {
+    NOT_REACHED_GCOVR_EXCL_LINE;
   }
 
   // Network::UdpListenerFilterManager

@@ -8,9 +8,9 @@
 #include "envoy/event/file_event.h"
 #include "envoy/network/dns.h"
 
-#include "common/common/linked_object.h"
-#include "common/common/logger.h"
-#include "common/common/utility.h"
+#include "source/common/common/linked_object.h"
+#include "source/common/common/logger.h"
+#include "source/common/common/utility.h"
 
 #include "absl/container/node_hash_map.h"
 #include "ares.h"
@@ -24,11 +24,11 @@ class DnsResolverImplPeer;
  * Implementation of DnsResolver that uses c-ares. All calls and callbacks are assumed to
  * happen on the thread that owns the creating dispatcher.
  */
-class DnsResolverImpl : public DnsResolver, protected Logger::Loggable<Logger::Id::upstream> {
+class DnsResolverImpl : public DnsResolver, protected Logger::Loggable<Logger::Id::dns> {
 public:
   DnsResolverImpl(Event::Dispatcher& dispatcher,
                   const std::vector<Network::Address::InstanceConstSharedPtr>& resolvers,
-                  const bool use_tcp_for_dns_lookups);
+                  const envoy::config::core::v3::DnsResolverOptions& dns_resolver_options);
   ~DnsResolverImpl() override;
 
   // Network::DnsResolver
@@ -40,13 +40,15 @@ private:
   struct PendingResolution : public ActiveDnsQuery {
     // Network::ActiveDnsQuery
     PendingResolution(DnsResolverImpl& parent, ResolveCb callback, Event::Dispatcher& dispatcher,
-                      ares_channel channel, const std::string& dns_name)
+                      ares_channel channel, const std::string& dns_name,
+                      DnsLookupFamily dns_lookup_family)
         : parent_(parent), callback_(callback), dispatcher_(dispatcher), channel_(channel),
-          dns_name_(dns_name) {}
+          dns_name_(dns_name), dns_lookup_family_(dns_lookup_family) {}
 
-    void cancel() override {
+    void cancel(CancelReason) override {
       // c-ares only supports channel-wide cancellation, so we just allow the
       // network events to continue but don't invoke the callback on completion.
+      // TODO(mattklein123): Potentially use timeout to destroy and recreate the channel.
       cancelled_ = true;
     }
 
@@ -80,6 +82,7 @@ private:
     bool fallback_if_failed_ = false;
     const ares_channel channel_;
     const std::string dns_name_;
+    const DnsLookupFamily dns_lookup_family_;
   };
 
   struct AresOptions {
@@ -106,7 +109,8 @@ private:
   Event::TimerPtr timer_;
   ares_channel channel_;
   bool dirty_channel_{};
-  const bool use_tcp_for_dns_lookups_;
+  envoy::config::core::v3::DnsResolverOptions dns_resolver_options_;
+
   absl::node_hash_map<int, Event::FileEventPtr> events_;
   const absl::optional<std::string> resolvers_csv_;
 };

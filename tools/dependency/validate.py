@@ -22,12 +22,12 @@ def load_module(name, path):
     return module
 
 
-envoy_repository_locations = load_module('envoy_repository_locations',
-                                         'bazel/repository_locations.bzl')
-api_repository_locations = load_module('api_repository_locations',
-                                       'api/bazel/repository_locations.bzl')
-extensions_build_config = load_module('extensions_build_config',
-                                      'source/extensions/extensions_build_config.bzl')
+envoy_repository_locations = load_module(
+    'envoy_repository_locations', 'bazel/repository_locations.bzl')
+api_repository_locations = load_module(
+    'api_repository_locations', 'api/bazel/repository_locations.bzl')
+extensions_build_config = load_module(
+    'extensions_build_config', 'source/extensions/extensions_build_config.bzl')
 
 REPOSITORY_LOCATIONS_SPEC = dict(envoy_repository_locations.REPOSITORY_LOCATIONS_SPEC)
 REPOSITORY_LOCATIONS_SPEC.update(api_repository_locations.REPOSITORY_LOCATIONS_SPEC)
@@ -39,7 +39,7 @@ EXTENSION_LABEL_RE = re.compile('(//source/extensions/.*):')
 IGNORE_DEPS = set([
     'envoy',
     'envoy_api',
-    'envoy_api_canonical',
+    'envoy_api',
     'platforms',
     'bazel_tools',
     'local_config_cc',
@@ -76,34 +76,34 @@ class DependencyInfo(object):
     def deps_by_use_category(self, use_category):
         """Find the set of external dependencies in a given use_category.
 
-    Args:
-      use_category: string providing use_category.
+        Args:
+          use_category: string providing use_category.
 
-    Returns:
-      Set of dependency identifiers that match use_category.
-    """
-        return set(name for name, metadata in REPOSITORY_LOCATIONS_SPEC.items()
-                   if use_category in metadata['use_category'])
+        Returns:
+          Set of dependency identifiers that match use_category.
+        """
+        return set(
+            name for name, metadata in REPOSITORY_LOCATIONS_SPEC.items()
+            if use_category in metadata['use_category'])
 
     def get_metadata(self, dependency):
         """Obtain repository metadata for a dependency.
 
-    Args:
-      dependency: string providing dependency identifier.
+        Args:
+          dependency: string providing dependency identifier.
 
-    Returns:
-      A dictionary with the repository metadata as defined in
-      bazel/repository_locations.bzl.
-    """
+        Returns:
+          A dictionary with the repository metadata as defined in
+          bazel/repository_locations.bzl.
+        """
         return REPOSITORY_LOCATIONS_SPEC.get(dependency)
 
 
 class BuildGraph(object):
     """Models the Bazel build graph."""
 
-    def __init__(self,
-                 ignore_deps=IGNORE_DEPS,
-                 repository_locations_spec=REPOSITORY_LOCATIONS_SPEC):
+    def __init__(
+            self, ignore_deps=IGNORE_DEPS, repository_locations_spec=REPOSITORY_LOCATIONS_SPEC):
         self._ignore_deps = ignore_deps
         # Reverse map from untracked dependencies implied by other deps back to the dep.
         self._implied_untracked_deps_revmap = {}
@@ -116,13 +116,13 @@ class BuildGraph(object):
     def query_external_deps(self, *targets):
         """Query the build graph for transitive external dependencies.
 
-    Args:
-      targets: Bazel targets.
+        Args:
+          targets: Bazel targets.
 
-    Returns:
-      A set of dependency identifiers that are reachable from targets.
-    """
-        deps_query = ' union '.join(f'deps({l})' for l in targets)
+        Returns:
+          A set of dependency identifiers that are reachable from targets.
+        """
+        deps_query = 'deps(set({}))'.format(' '.join(targets))
         try:
             deps = subprocess.check_output(['bazel', 'query', deps_query],
                                            stderr=subprocess.PIPE).decode().splitlines()
@@ -149,9 +149,9 @@ class BuildGraph(object):
     def list_extensions(self):
         """List all extensions.
 
-    Returns:
-      Dictionary items from source/extensions/extensions_build_config.bzl.
-    """
+        Returns:
+          Dictionary items from source/extensions/extensions_build_config.bzl.
+        """
         return extensions_build_config.EXTENSIONS.items()
 
 
@@ -167,24 +167,25 @@ class Validator(object):
     def validate_build_graph_structure(self):
         """Validate basic assumptions about dependency relationship in the build graph.
 
-    Raises:
-      DependencyError: on a dependency validation error.
-    """
+        Raises:
+          DependencyError: on a dependency validation error.
+        """
         print('Validating build dependency structure...')
         queried_core_ext_deps = self._build_graph.query_external_deps(
             '//source/exe:envoy_main_common_with_core_extensions_lib', '//source/extensions/...')
         queried_all_deps = self._build_graph.query_external_deps('//source/...')
         if queried_all_deps != queried_core_ext_deps:
-            raise DependencyError('Invalid build graph structure. deps(//source/...) != '
-                                  'deps(//source/exe:envoy_main_common_with_core_extensions_lib) '
-                                  'union deps(//source/extensions/...)')
+            raise DependencyError(
+                'Invalid build graph structure. deps(//source/...) != '
+                'deps(//source/exe:envoy_main_common_with_core_extensions_lib) '
+                'union deps(//source/extensions/...)')
 
     def validate_test_only_deps(self):
         """Validate that test-only dependencies aren't included in //source/...
 
-    Raises:
-      DependencyError: on a dependency validation error.
-    """
+        Raises:
+          DependencyError: on a dependency validation error.
+        """
         print('Validating test-only dependencies...')
         # Validate that //source doesn't depend on test_only
         queried_source_deps = self._build_graph.query_external_deps('//source/...')
@@ -207,12 +208,12 @@ class Validator(object):
     def validate_data_plane_core_deps(self):
         """Validate dataplane_core dependencies.
 
-    Check that we at least tag as dataplane_core dependencies that match some
-    well-known targets for the data-plane.
+        Check that we at least tag as dataplane_core dependencies that match some
+        well-known targets for the data-plane.
 
-    Raises:
-      DependencyError: on a dependency validation error.
-    """
+        Raises:
+          DependencyError: on a dependency validation error.
+        """
         print('Validating data-plane dependencies...')
         # Necessary but not sufficient for dataplane. With some refactoring we could
         # probably have more precise tagging of dataplane/controlplane/other deps in
@@ -237,13 +238,12 @@ class Validator(object):
     def validate_control_plane_deps(self):
         """Validate controlplane dependencies.
 
-    Check that we at least tag as controlplane dependencies that match some
-    well-known targets for
-    the control-plane.
+        Check that we at least tag as controlplane dependencies that match some
+        well-known targets for the control-plane.
 
-    Raises:
-      DependencyError: on a dependency validation error.
-    """
+        Raises:
+          DependencyError: on a dependency validation error.
+        """
         print('Validating control-plane dependencies...')
         # Necessary but not sufficient for controlplane. With some refactoring we could
         # probably have more precise tagging of dataplane/controlplane/other deps in
@@ -258,19 +258,19 @@ class Validator(object):
         if len(bad_controlplane_core_deps) > 0:
             raise DependencyError(
                 f'Observed controlplane core deps {queried_controlplane_core_min_deps} is not covered '
-                'by "use_category" implied core deps {expected_controlplane_core_deps}: '
-                '{bad_controlplane_core_deps} are missing')
+                f'by "use_category" implied core deps {expected_controlplane_core_deps}: '
+                f'{bad_controlplane_core_deps} are missing')
 
     def validate_extension_deps(self, name, target):
         """Validate that extensions are correctly declared for dataplane_ext and observability_ext.
 
-    Args:
-      name: extension name.
-      target: extension Bazel target.
+        Args:
+          name: extension name.
+          target: extension Bazel target.
 
-    Raises:
-      DependencyError: on a dependency validation error.
-    """
+        Raises:
+          DependencyError: on a dependency validation error.
+        """
         print(f'Validating extension {name} dependencies...')
         queried_deps = self._build_graph.query_external_deps(target)
         marginal_deps = queried_deps.difference(self._queried_core_deps)
@@ -296,9 +296,9 @@ class Validator(object):
     def validate_all(self):
         """Collection of all validations.
 
-    Raises:
-      DependencyError: on a dependency validation error.
-    """
+        Raises:
+          DependencyError: on a dependency validation error.
+        """
         self.validate_build_graph_structure()
         self.validate_test_only_deps()
         self.validate_data_plane_core_deps()

@@ -46,7 +46,6 @@ envoy_cc_test(
         "//source/common/event:dispatcher_lib",
         "//source/common/stats:isolated_store_lib",
         "//source/common/stats:stats_lib",
-        "//source/extensions/common/crypto:utility_lib",
         "//source/extensions/common/wasm:wasm_lib",
         "//test/extensions/common/wasm:wasm_runtime",
         "//test/extensions/common/wasm/test_data:test_context_cpp_plugin",
@@ -92,6 +91,7 @@ envoy_cc_test_library(
     deps = [
         "//source/extensions/wasm_runtime/null:config",
         "//source/extensions/wasm_runtime/v8:config",
+        "//source/extensions/wasm_runtime/wamr:config",
         "//source/extensions/wasm_runtime/wasmtime:config",
         "//source/extensions/wasm_runtime/wavm:config",
     ],

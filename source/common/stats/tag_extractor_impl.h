@@ -10,9 +10,9 @@
 
 #include "envoy/stats/tag_extractor.h"
 
-#include "common/common/utility.h"
-#include "common/common/regex.h"
-#include "common/stats/symbol_table_impl.h"
+#include "source/common/common/utility.h"
+#include "source/common/common/regex.h"
+#include "source/common/stats/symbol_table_impl.h"
 
 #include "absl/strings/string_view.h"
 #include "re2/re2.h"

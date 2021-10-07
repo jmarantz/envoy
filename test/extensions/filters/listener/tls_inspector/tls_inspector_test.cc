@@ -1,7 +1,6 @@
-#include "common/http/utility.h"
-#include "common/network/io_socket_handle_impl.h"
-
-#include "extensions/filters/listener/tls_inspector/tls_inspector.h"
+#include "source/common/http/utility.h"
+#include "source/common/network/io_socket_handle_impl.h"
+#include "source/extensions/filters/listener/tls_inspector/tls_inspector.h"
 
 #include "test/extensions/filters/listener/tls_inspector/tls_utility.h"
 #include "test/mocks/api/mocks.h"
@@ -283,11 +282,12 @@ TEST_P(TlsInspectorTest, InlineReadSucceed) {
   EXPECT_EQ(Network::FilterStatus::Continue, filter_->onAccept(cb_));
 }
 
-// Test that the deprecated extension name still functions.
+// Test that the deprecated extension name is disabled by default.
+// TODO(zuercher): remove when envoy.deprecated_features.allow_deprecated_extension_names is removed
 TEST(TlsInspectorConfigFactoryTest, DEPRECATED_FEATURE_TEST(DeprecatedExtensionFilterName)) {
   const std::string deprecated_name = "envoy.listener.tls_inspector";
 
-  ASSERT_NE(
+  ASSERT_EQ(
       nullptr,
       Registry::FactoryRegistry<
           Server::Configuration::NamedListenerFilterConfigFactory>::getFactory(deprecated_name));

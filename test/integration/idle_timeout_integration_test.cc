@@ -35,6 +35,14 @@ public:
             hcm.mutable_request_timeout()->set_seconds(0);
             hcm.mutable_request_timeout()->set_nanos(RequestTimeoutMs * 1000 * 1000);
           }
+          if (enable_per_try_idle_timeout_) {
+            auto* route_config = hcm.mutable_route_config();
+            auto* virtual_host = route_config->mutable_virtual_hosts(0);
+            auto* route = virtual_host->mutable_routes(0)->mutable_route();
+            auto* retry_policy = route->mutable_retry_policy();
+            retry_policy->mutable_per_try_idle_timeout()->set_seconds(0);
+            retry_policy->mutable_per_try_idle_timeout()->set_nanos(IdleTimeoutMs * 1000 * 1000);
+          }
 
           // For validating encode100ContinueHeaders() timer kick.
           hcm.set_proxy_100_continue(true);
@@ -62,16 +70,36 @@ public:
     return response;
   }
 
+  IntegrationStreamDecoderPtr setupPerTryIdleTimeoutTest(const char* method = "GET") {
+    initialize();
+    codec_client_ = makeHttpConnection(makeClientConnection((lookupPort("http"))));
+    auto response = codec_client_->makeHeaderOnlyRequest(
+        Http::TestRequestHeaderMapImpl{{":method", method},
+                                       {":path", "/test/long/url"},
+                                       {":scheme", "http"},
+                                       {":authority", "host"}});
+    AssertionResult result =
+        fake_upstreams_[0]->waitForHttpConnection(*dispatcher_, fake_upstream_connection_);
+    RELEASE_ASSERT(result, result.message());
+    result = fake_upstream_connection_->waitForNewStream(*dispatcher_, upstream_request_);
+    RELEASE_ASSERT(result, result.message());
+    result = upstream_request_->waitForHeadersComplete();
+    RELEASE_ASSERT(result, result.message());
+    result = upstream_request_->waitForEndStream(*dispatcher_);
+    RELEASE_ASSERT(result, result.message());
+    return response;
+  }
+
   void sleep() {
     test_time_.timeSystem().advanceTimeWait(std::chrono::milliseconds(IdleTimeoutMs / 2));
   }
 
   void waitForTimeout(IntegrationStreamDecoder& response, absl::string_view stat_name = "",
                       absl::string_view stat_prefix = "http.config_test") {
-    if (downstream_protocol_ == Http::CodecClient::Type::HTTP1) {
+    if (downstream_protocol_ == Http::CodecType::HTTP1) {
       ASSERT_TRUE(codec_client_->waitForDisconnect());
     } else {
-      response.waitForReset();
+      ASSERT_TRUE(response.waitForReset());
       codec_client_->close();
     }
     if (!stat_name.empty()) {
@@ -86,6 +114,7 @@ public:
   bool enable_global_idle_timeout_{false};
   bool enable_per_stream_idle_timeout_{false};
   bool enable_request_timeout_{false};
+  bool enable_per_try_idle_timeout_{false};
   DangerousDeprecatedTestTime test_time_;
 };
 
@@ -114,7 +143,7 @@ TEST_P(IdleTimeoutIntegrationTest, TimeoutBasic) {
 
   upstream_request_->encodeHeaders(default_response_headers_, false);
   upstream_request_->encodeData(512, true);
-  response->waitForEndStream();
+  ASSERT_TRUE(response->waitForEndStream());
 
   EXPECT_TRUE(upstream_request_->complete());
   EXPECT_TRUE(response->complete());
@@ -150,7 +179,7 @@ TEST_P(IdleTimeoutIntegrationTest, IdleTimeoutWithTwoRequests) {
 
   upstream_request_->encodeHeaders(default_response_headers_, false);
   upstream_request_->encodeData(512, true);
-  response->waitForEndStream();
+  ASSERT_TRUE(response->waitForEndStream());
 
   EXPECT_TRUE(upstream_request_->complete());
   EXPECT_TRUE(response->complete());
@@ -162,7 +191,7 @@ TEST_P(IdleTimeoutIntegrationTest, IdleTimeoutWithTwoRequests) {
   waitForNextUpstreamRequest();
   upstream_request_->encodeHeaders(default_response_headers_, false);
   upstream_request_->encodeData(1024, true);
-  response->waitForEndStream();
+  ASSERT_TRUE(response->waitForEndStream());
 
   EXPECT_TRUE(upstream_request_->complete());
   EXPECT_TRUE(response->complete());
@@ -194,7 +223,7 @@ TEST_P(IdleTimeoutIntegrationTest, PerStreamIdleTimeoutAfterDownstreamHeaders) {
 
 // Per-stream idle timeout with reads disabled.
 TEST_P(IdleTimeoutIntegrationTest, PerStreamIdleTimeoutWithLargeBuffer) {
-  config_helper_.addFilter(R"EOF(
+  config_helper_.prependFilter(R"EOF(
   name: backpressure-filter
   )EOF");
   enable_per_stream_idle_timeout_ = true;
@@ -202,13 +231,13 @@ TEST_P(IdleTimeoutIntegrationTest, PerStreamIdleTimeoutWithLargeBuffer) {
 
   codec_client_ = makeHttpConnection(makeClientConnection((lookupPort("http"))));
   auto response = codec_client_->makeHeaderOnlyRequest(default_request_headers_);
-  response->waitForEndStream();
+  ASSERT_TRUE(response->waitForEndStream());
   EXPECT_TRUE(response->complete());
 
   // Make sure that for HTTP/1.1 reads are enabled even though the first request
   // ended in the "backed up" state.
   auto response2 = codec_client_->makeHeaderOnlyRequest(default_request_headers_);
-  response2->waitForEndStream();
+  ASSERT_TRUE(response2->waitForEndStream());
   EXPECT_TRUE(response2->complete());
 }
 
@@ -269,6 +298,23 @@ TEST_P(IdleTimeoutIntegrationTest, PerStreamIdleTimeoutAfterUpstreamHeaders) {
   waitForTimeout(*response, "downstream_rq_idle_timeout");
 
   EXPECT_FALSE(upstream_request_->complete());
+  EXPECT_EQ(0U, upstream_request_->bodyLength());
+  EXPECT_FALSE(response->complete());
+  EXPECT_EQ("200", response->headers().getStatusValue());
+  EXPECT_EQ("", response->body());
+}
+
+// Per-try idle timeout after upstream headers have been sent.
+TEST_P(IdleTimeoutIntegrationTest, PerTryIdleTimeoutAfterUpstreamHeaders) {
+  enable_per_try_idle_timeout_ = true;
+  auto response = setupPerTryIdleTimeoutTest();
+
+  upstream_request_->encodeHeaders(Http::TestResponseHeaderMapImpl{{":status", "200"}}, false);
+
+  waitForTimeout(*response);
+  test_server_->waitForCounterGe("cluster.cluster_0.upstream_rq_per_try_idle_timeout", 1);
+
+  EXPECT_TRUE(upstream_request_->complete());
   EXPECT_EQ(0U, upstream_request_->bodyLength());
   EXPECT_FALSE(response->complete());
   EXPECT_EQ("200", response->headers().getStatusValue());
@@ -357,7 +403,7 @@ TEST_P(IdleTimeoutIntegrationTest, RequestTimeoutUnconfiguredDoesNotTriggerOnBod
 
 TEST_P(IdleTimeoutIntegrationTest, RequestTimeoutTriggersOnRawIncompleteRequestWithHeaders) {
   // Omitting \r\n\r\n does not indicate incomplete request in HTTP2
-  if (downstreamProtocol() == Envoy::Http::CodecClient::Type::HTTP2) {
+  if (downstreamProtocol() == Envoy::Http::CodecType::HTTP2) {
     return;
   }
   enable_request_timeout_ = true;
@@ -370,7 +416,7 @@ TEST_P(IdleTimeoutIntegrationTest, RequestTimeoutTriggersOnRawIncompleteRequestW
 }
 
 TEST_P(IdleTimeoutIntegrationTest, RequestTimeoutDoesNotTriggerOnRawCompleteRequestWithHeaders) {
-  if (downstreamProtocol() == Envoy::Http::CodecClient::Type::HTTP2) {
+  if (downstreamProtocol() == Envoy::Http::CodecType::HTTP2) {
     return;
   }
   enable_request_timeout_ = true;
@@ -409,6 +455,35 @@ TEST_P(IdleTimeoutIntegrationTest, RequestTimeoutIsNotDisarmedByEncode100Continu
   EXPECT_TRUE(response->complete());
   EXPECT_EQ("408", response->headers().getStatusValue());
   EXPECT_EQ("request timeout", response->body());
+}
+
+// Per-stream idle timeout reset from within a filter.
+TEST_P(IdleTimeoutIntegrationTest, PerStreamIdleTimeoutResetFromFilter) {
+  config_helper_.prependFilter(R"EOF(
+  name: reset-idle-timer-filter
+  )EOF");
+  enable_per_stream_idle_timeout_ = true;
+
+  auto response = setupPerStreamIdleTimeoutTest();
+
+  sleep();
+  codec_client_->sendData(*request_encoder_, 1, false);
+
+  // Two sleeps should trigger the timer, as each advances time by timeout / 2. However, the data
+  // frame above would have caused the filter to reset the timer. Thus, the stream should not be
+  // reset yet.
+  sleep();
+
+  EXPECT_FALSE(response->complete());
+
+  sleep();
+
+  waitForTimeout(*response, "downstream_rq_idle_timeout");
+
+  // Now the timer should have triggered.
+  EXPECT_TRUE(response->complete());
+  EXPECT_EQ("408", response->headers().getStatusValue());
+  EXPECT_EQ("stream timeout", response->body());
 }
 
 // TODO(auni53) create a test filter that hangs and does not send data upstream, which would

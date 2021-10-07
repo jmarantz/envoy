@@ -12,20 +12,16 @@ namespace Envoy {
 namespace {
 
 // Terminating CONNECT and sending raw TCP upstream.
-class ConnectTerminationIntegrationTest
-    : public testing::TestWithParam<Network::Address::IpVersion>,
-      public HttpIntegrationTest {
+class ConnectTerminationIntegrationTest : public HttpProtocolIntegrationTest {
 public:
-  ConnectTerminationIntegrationTest()
-      : HttpIntegrationTest(Http::CodecClient::Type::HTTP2, GetParam()) {
-    enableHalfClose(true);
-  }
+  ConnectTerminationIntegrationTest() { enableHalfClose(true); }
 
   void initialize() override {
     config_helper_.addConfigModifier(
         [&](envoy::extensions::filters::network::http_connection_manager::v3::HttpConnectionManager&
                 hcm) {
-          ConfigHelper::setConnectConfig(hcm, true, allow_post_);
+          ConfigHelper::setConnectConfig(hcm, true, allow_post_,
+                                         downstream_protocol_ == Http::CodecType::HTTP3);
 
           if (enable_timeout_) {
             hcm.mutable_stream_idle_timeout()->set_seconds(0);
@@ -70,6 +66,30 @@ public:
                                                   {":protocol", "bytestream"},
                                                   {":scheme", "https"},
                                                   {":authority", "host:80"}};
+  void clearExtendedConnectHeaders() {
+    connect_headers_.removeProtocol();
+    connect_headers_.removePath();
+  }
+
+  void sendBidirectionalDataAndCleanShutdown() {
+    sendBidirectionalData("hello", "hello", "there!", "there!");
+    // Send a second set of data to make sure for example headers are only sent once.
+    sendBidirectionalData(",bye", "hello,bye", "ack", "there!ack");
+
+    // Send an end stream. This should result in half close upstream.
+    codec_client_->sendData(*request_encoder_, "", true);
+    ASSERT_TRUE(fake_raw_upstream_connection_->waitForHalfClose());
+
+    // Now send a FIN from upstream. This should result in clean shutdown downstream.
+    ASSERT_TRUE(fake_raw_upstream_connection_->close());
+    if (downstream_protocol_ == Http::CodecType::HTTP1) {
+      ASSERT_TRUE(codec_client_->waitForDisconnect());
+    } else {
+      ASSERT_TRUE(response_->waitForEndStream());
+      ASSERT_FALSE(response_->reset());
+    }
+  }
+
   FakeRawConnectionPtr fake_raw_upstream_connection_;
   IntegrationStreamDecoderPtr response_;
   bool enable_timeout_{};
@@ -77,22 +97,19 @@ public:
   bool allow_post_{};
 };
 
+TEST_P(ConnectTerminationIntegrationTest, OriginalStyle) {
+  initialize();
+  clearExtendedConnectHeaders();
+
+  setUpConnection();
+  sendBidirectionalDataAndCleanShutdown();
+}
+
 TEST_P(ConnectTerminationIntegrationTest, Basic) {
   initialize();
 
   setUpConnection();
-  sendBidirectionalData("hello", "hello", "there!", "there!");
-  // Send a second set of data to make sure for example headers are only sent once.
-  sendBidirectionalData(",bye", "hello,bye", "ack", "there!ack");
-
-  // Send an end stream. This should result in half close upstream.
-  codec_client_->sendData(*request_encoder_, "", true);
-  ASSERT_TRUE(fake_raw_upstream_connection_->waitForHalfClose());
-
-  // Now send a FIN from upstream. This should result in clean shutdown downstream.
-  ASSERT_TRUE(fake_raw_upstream_connection_->close());
-  response_->waitForEndStream();
-  ASSERT_FALSE(response_->reset());
+  sendBidirectionalDataAndCleanShutdown();
 }
 
 TEST_P(ConnectTerminationIntegrationTest, BasicAllowPost) {
@@ -104,18 +121,7 @@ TEST_P(ConnectTerminationIntegrationTest, BasicAllowPost) {
   connect_headers_.removeProtocol();
 
   setUpConnection();
-  sendBidirectionalData("hello", "hello", "there!", "there!");
-  // Send a second set of data to make sure for example headers are only sent once.
-  sendBidirectionalData(",bye", "hello,bye", "ack", "there!ack");
-
-  // Send an end stream. This should result in half close upstream.
-  codec_client_->sendData(*request_encoder_, "", true);
-  ASSERT_TRUE(fake_raw_upstream_connection_->waitForHalfClose());
-
-  // Now send a FIN from upstream. This should result in clean shutdown downstream.
-  ASSERT_TRUE(fake_raw_upstream_connection_->close());
-  response_->waitForEndStream();
-  ASSERT_FALSE(response_->reset());
+  sendBidirectionalDataAndCleanShutdown();
 }
 
 TEST_P(ConnectTerminationIntegrationTest, UsingHostMatch) {
@@ -123,20 +129,10 @@ TEST_P(ConnectTerminationIntegrationTest, UsingHostMatch) {
   initialize();
 
   connect_headers_.removePath();
+  connect_headers_.removeProtocol();
 
   setUpConnection();
-  sendBidirectionalData("hello", "hello", "there!", "there!");
-  // Send a second set of data to make sure for example headers are only sent once.
-  sendBidirectionalData(",bye", "hello,bye", "ack", "there!ack");
-
-  // Send an end stream. This should result in half close upstream.
-  codec_client_->sendData(*request_encoder_, "", true);
-  ASSERT_TRUE(fake_raw_upstream_connection_->waitForHalfClose());
-
-  // Now send a FIN from upstream. This should result in clean shutdown downstream.
-  ASSERT_TRUE(fake_raw_upstream_connection_->close());
-  response_->waitForEndStream();
-  ASSERT_FALSE(response_->reset());
+  sendBidirectionalDataAndCleanShutdown();
 }
 
 TEST_P(ConnectTerminationIntegrationTest, DownstreamClose) {
@@ -151,6 +147,10 @@ TEST_P(ConnectTerminationIntegrationTest, DownstreamClose) {
 }
 
 TEST_P(ConnectTerminationIntegrationTest, DownstreamReset) {
+  if (downstream_protocol_ == Http::CodecType::HTTP1) {
+    // Resetting an individual stream requires HTTP/2 or later.
+    return;
+  }
   initialize();
 
   setUpConnection();
@@ -169,7 +169,13 @@ TEST_P(ConnectTerminationIntegrationTest, UpstreamClose) {
 
   // Tear down by closing the upstream connection.
   ASSERT_TRUE(fake_raw_upstream_connection_->close());
-  response_->waitForReset();
+  if (downstream_protocol_ == Http::CodecType::HTTP3) {
+    // In HTTP/3 end stream will be sent when the upstream connection is closed, and
+    // STOP_SENDING frame sent instead of reset.
+    ASSERT_TRUE(response_->waitForEndStream());
+  } else {
+    ASSERT_TRUE(response_->waitForReset());
+  }
 }
 
 TEST_P(ConnectTerminationIntegrationTest, TestTimeout) {
@@ -179,11 +185,14 @@ TEST_P(ConnectTerminationIntegrationTest, TestTimeout) {
   setUpConnection();
 
   // Wait for the timeout to close the connection.
-  response_->waitForReset();
+  ASSERT_TRUE(response_->waitForReset());
   ASSERT_TRUE(fake_raw_upstream_connection_->waitForHalfClose());
 }
 
 TEST_P(ConnectTerminationIntegrationTest, BuggyHeaders) {
+  if (downstream_protocol_ == Http::CodecType::HTTP1) {
+    return;
+  }
   initialize();
 
   // Sending a header-only request is probably buggy, but rather than having a
@@ -205,7 +214,7 @@ TEST_P(ConnectTerminationIntegrationTest, BuggyHeaders) {
 
   // Either with early close, or half close, the FIN from upstream should result
   // in clean stream teardown.
-  response_->waitForEndStream();
+  ASSERT_TRUE(response_->waitForEndStream());
   ASSERT_FALSE(response_->reset());
 }
 
@@ -226,10 +235,10 @@ TEST_P(ConnectTerminationIntegrationTest, BasicMaxStreamDuration) {
 
   test_server_->waitForCounterGe("cluster.cluster_0.upstream_rq_max_duration_reached", 1);
 
-  if (downstream_protocol_ == Http::CodecClient::Type::HTTP1) {
+  if (downstream_protocol_ == Http::CodecType::HTTP1) {
     ASSERT_TRUE(codec_client_->waitForDisconnect());
   } else {
-    response_->waitForReset();
+    ASSERT_TRUE(response_->waitForReset());
     codec_client_->close();
   }
 }
@@ -240,7 +249,10 @@ public:
   void initialize() override {
     config_helper_.addConfigModifier(
         [&](envoy::extensions::filters::network::http_connection_manager::v3::HttpConnectionManager&
-                hcm) -> void { ConfigHelper::setConnectConfig(hcm, false, false); });
+                hcm) -> void {
+          ConfigHelper::setConnectConfig(hcm, false, false,
+                                         downstream_protocol_ == Http::CodecType::HTTP3);
+        });
 
     HttpProtocolIntegrationTest::initialize();
   }
@@ -254,7 +266,10 @@ public:
 };
 
 INSTANTIATE_TEST_SUITE_P(Protocols, ProxyingConnectIntegrationTest,
-                         testing::ValuesIn(HttpProtocolIntegrationTest::getProtocolTestParams()),
+                         testing::ValuesIn(HttpProtocolIntegrationTest::getProtocolTestParams(
+                             {Http::CodecType::HTTP1, Http::CodecType::HTTP2,
+                              Http::CodecType::HTTP3},
+                             {Http::CodecType::HTTP1})),
                          HttpProtocolIntegrationTest::protocolTestParamsToString);
 
 TEST_P(ProxyingConnectIntegrationTest, ProxyConnect) {
@@ -274,12 +289,116 @@ TEST_P(ProxyingConnectIntegrationTest, ProxyConnect) {
   RELEASE_ASSERT(result, result.message());
   ASSERT_TRUE(upstream_request_->waitForHeadersComplete());
   EXPECT_EQ(upstream_request_->headers().get(Http::Headers::get().Method)[0]->value(), "CONNECT");
-  if (upstreamProtocol() == FakeHttpConnection::Type::HTTP1) {
+  if (upstreamProtocol() == Http::CodecType::HTTP1) {
     EXPECT_TRUE(upstream_request_->headers().get(Http::Headers::get().Protocol).empty());
   } else {
     EXPECT_EQ(upstream_request_->headers().get(Http::Headers::get().Protocol)[0]->value(),
               "bytestream");
   }
+
+  // Send response headers
+  upstream_request_->encodeHeaders(default_response_headers_, false);
+
+  // Wait for them to arrive downstream.
+  response_->waitForHeaders();
+  EXPECT_EQ("200", response_->headers().getStatusValue());
+
+  // Make sure that even once the response has started, that data can continue to go upstream.
+  codec_client_->sendData(*request_encoder_, "hello", false);
+  ASSERT_TRUE(upstream_request_->waitForData(*dispatcher_, 5));
+
+  // Also test upstream to downstream data.
+  upstream_request_->encodeData(12, false);
+  response_->waitForBodyData(12);
+
+  cleanupUpstreamAndDownstream();
+}
+
+TEST_P(ProxyingConnectIntegrationTest, ProxyConnectWithPortStrippingLegacy) {
+  config_helper_.addRuntimeOverride("envoy.reloadable_features.strip_port_from_connect", "false");
+  config_helper_.addConfigModifier(
+      [&](envoy::extensions::filters::network::http_connection_manager::v3::HttpConnectionManager&
+              hcm) { hcm.set_strip_any_host_port(true); });
+
+  initialize();
+
+  // Send request headers.
+  codec_client_ = makeHttpConnection(lookupPort("http"));
+  auto encoder_decoder = codec_client_->startRequest(connect_headers_);
+  request_encoder_ = &encoder_decoder.first;
+  response_ = std::move(encoder_decoder.second);
+
+  // Wait for them to arrive upstream.
+  AssertionResult result =
+      fake_upstreams_[0]->waitForHttpConnection(*dispatcher_, fake_upstream_connection_);
+  RELEASE_ASSERT(result, result.message());
+  result = fake_upstream_connection_->waitForNewStream(*dispatcher_, upstream_request_);
+  RELEASE_ASSERT(result, result.message());
+  ASSERT_TRUE(upstream_request_->waitForHeadersComplete());
+  EXPECT_EQ(upstream_request_->headers().getMethodValue(), "CONNECT");
+  EXPECT_EQ(upstream_request_->headers().getHostValue(), "host:80");
+  if (upstreamProtocol() == Http::CodecType::HTTP1) {
+    EXPECT_TRUE(upstream_request_->headers().get(Http::Headers::get().Protocol).empty());
+  } else {
+    EXPECT_EQ(upstream_request_->headers().get(Http::Headers::get().Protocol)[0]->value(),
+              "bytestream");
+  }
+
+  // Send response headers
+  upstream_request_->encodeHeaders(default_response_headers_, false);
+
+  // Wait for them to arrive downstream.
+  response_->waitForHeaders();
+  EXPECT_EQ("200", response_->headers().getStatusValue());
+
+  // Make sure that even once the response has started, that data can continue to go upstream.
+  codec_client_->sendData(*request_encoder_, "hello", false);
+  ASSERT_TRUE(upstream_request_->waitForData(*dispatcher_, 5));
+
+  // Also test upstream to downstream data.
+  upstream_request_->encodeData(12, false);
+  response_->waitForBodyData(12);
+
+  cleanupUpstreamAndDownstream();
+}
+
+TEST_P(ProxyingConnectIntegrationTest, ProxyConnectWithPortStripping) {
+  config_helper_.addConfigModifier(
+      [&](envoy::extensions::filters::network::http_connection_manager::v3::HttpConnectionManager&
+              hcm) {
+        hcm.set_strip_any_host_port(true);
+        auto* route_config = hcm.mutable_route_config();
+        auto* header_value_option = route_config->mutable_request_headers_to_add()->Add();
+        auto* mutable_header = header_value_option->mutable_header();
+        mutable_header->set_key("Host-In-Envoy");
+        mutable_header->set_value("%REQ(:AUTHORITY)%");
+      });
+
+  initialize();
+
+  // Send request headers.
+  codec_client_ = makeHttpConnection(lookupPort("http"));
+  auto encoder_decoder = codec_client_->startRequest(connect_headers_);
+  request_encoder_ = &encoder_decoder.first;
+  response_ = std::move(encoder_decoder.second);
+
+  // Wait for them to arrive upstream.
+  AssertionResult result =
+      fake_upstreams_[0]->waitForHttpConnection(*dispatcher_, fake_upstream_connection_);
+  RELEASE_ASSERT(result, result.message());
+  result = fake_upstream_connection_->waitForNewStream(*dispatcher_, upstream_request_);
+  RELEASE_ASSERT(result, result.message());
+  ASSERT_TRUE(upstream_request_->waitForHeadersComplete());
+  EXPECT_EQ(upstream_request_->headers().getMethodValue(), "CONNECT");
+  EXPECT_EQ(upstream_request_->headers().getHostValue(), "host:80");
+  if (upstreamProtocol() == Http::CodecType::HTTP1) {
+    EXPECT_TRUE(upstream_request_->headers().getProtocolValue().empty());
+  } else {
+    EXPECT_EQ(upstream_request_->headers().getProtocolValue(), "bytestream");
+  }
+  auto stripped_host = upstream_request_->headers().get(Http::LowerCaseString("host-in-envoy"));
+  ASSERT_EQ(stripped_host.size(), 1);
+  EXPECT_EQ(stripped_host[0]->value(), "host");
 
   // Send response headers
   upstream_request_->encodeHeaders(default_response_headers_, false);
@@ -317,7 +436,7 @@ TEST_P(ProxyingConnectIntegrationTest, ProxyConnectWithIP) {
   RELEASE_ASSERT(result, result.message());
   ASSERT_TRUE(upstream_request_->waitForHeadersComplete());
   EXPECT_EQ(upstream_request_->headers().get(Http::Headers::get().Method)[0]->value(), "CONNECT");
-  if (upstreamProtocol() == FakeHttpConnection::Type::HTTP1) {
+  if (upstreamProtocol() == Http::CodecType::HTTP1) {
     EXPECT_TRUE(upstream_request_->headers().get(Http::Headers::get().Protocol).empty());
   } else {
     EXPECT_EQ(upstream_request_->headers().get(Http::Headers::get().Protocol)[0]->value(),
@@ -334,39 +453,21 @@ TEST_P(ProxyingConnectIntegrationTest, ProxyConnectWithIP) {
   cleanupUpstreamAndDownstream();
 }
 
-INSTANTIATE_TEST_SUITE_P(IpVersions, ConnectTerminationIntegrationTest,
-                         testing::ValuesIn(TestEnvironment::getIpVersionsForTest()),
-                         TestUtility::ipTestParamsToString);
+INSTANTIATE_TEST_SUITE_P(HttpAndIpVersions, ConnectTerminationIntegrationTest,
+                         testing::ValuesIn(HttpProtocolIntegrationTest::getProtocolTestParams(
+                             {Http::CodecType::HTTP1, Http::CodecType::HTTP2,
+                              Http::CodecType::HTTP3},
+                             {Http::CodecType::HTTP1})),
+                         HttpProtocolIntegrationTest::protocolTestParamsToString);
 
-using Params = std::tuple<Network::Address::IpVersion, FakeHttpConnection::Type, bool>;
+using Params = std::tuple<Network::Address::IpVersion, Http::CodecType>;
 
 // Tunneling downstream TCP over an upstream HTTP CONNECT tunnel.
-class TcpTunnelingIntegrationTest : public testing::TestWithParam<Params>,
-                                    public HttpIntegrationTest {
+class TcpTunnelingIntegrationTest : public HttpProtocolIntegrationTest {
 public:
-  TcpTunnelingIntegrationTest()
-      : HttpIntegrationTest(Http::CodecClient::Type::HTTP2, std::get<0>(GetParam())) {}
-
-  static std::string paramsToString(const testing::TestParamInfo<Params>& p) {
-    return fmt::format(
-        "{}_{}_{}", std::get<0>(p.param) == Network::Address::IpVersion::v4 ? "IPv4" : "IPv6",
-        std::get<1>(p.param) == FakeHttpConnection::Type::HTTP1 ? "HTTP1Upstream" : "HTTP2Upstream",
-        std::get<2>(p.param) ? "WaitConnectResponse" : "DoNotWaitConnectResponse");
-  }
-
   void SetUp() override {
-    wait_for_connect_response_ = std::get<2>(GetParam());
     enableHalfClose(true);
-    setDownstreamProtocol(Http::CodecClient::Type::HTTP2);
-    setUpstreamProtocol(std::get<1>(GetParam()));
 
-    if (wait_for_connect_response_) {
-      config_helper_.addRuntimeOverride(
-          "envoy.reloadable_features.http_upstream_wait_connect_response", "true");
-    } else {
-      config_helper_.addRuntimeOverride(
-          "envoy.reloadable_features.http_upstream_wait_connect_response", "false");
-    }
     config_helper_.addConfigModifier(
         [&](envoy::config::bootstrap::v3::Bootstrap& bootstrap) -> void {
           envoy::extensions::filters::network::tcp_proxy::v3::TcpProxy proxy_config;
@@ -377,8 +478,7 @@ public:
           auto* listener = bootstrap.mutable_static_resources()->add_listeners();
           listener->set_name("tcp_proxy");
           auto* socket_address = listener->mutable_address()->mutable_socket_address();
-          socket_address->set_address(
-              Network::Test::getLoopbackAddressString(std::get<0>(GetParam())));
+          socket_address->set_address(Network::Test::getLoopbackAddressString(version_));
           socket_address->set_port_value(0);
 
           auto* filter_chain = listener->add_filter_chains();
@@ -386,8 +486,8 @@ public:
           filter->mutable_typed_config()->PackFrom(proxy_config);
           filter->set_name("envoy.filters.network.tcp_proxy");
         });
+    HttpProtocolIntegrationTest::SetUp();
   }
-  bool wait_for_connect_response_{};
 };
 
 TEST_P(TcpTunnelingIntegrationTest, Basic) {
@@ -415,7 +515,7 @@ TEST_P(TcpTunnelingIntegrationTest, Basic) {
   ASSERT_TRUE(tcp_client->write("hello", false));
   tcp_client->close();
   ASSERT_TRUE(upstream_request_->waitForData(*dispatcher_, 5));
-  if (upstreamProtocol() == FakeHttpConnection::Type::HTTP1) {
+  if (upstreamProtocol() == Http::CodecType::HTTP1) {
     ASSERT_TRUE(fake_upstream_connection_->waitForDisconnect());
   } else {
     ASSERT_TRUE(upstream_request_->waitForEndStream(*dispatcher_));
@@ -470,7 +570,7 @@ TEST_P(TcpTunnelingIntegrationTest, BasicUsePost) {
   ASSERT_TRUE(tcp_client->write("hello", false));
   tcp_client->close();
   ASSERT_TRUE(upstream_request_->waitForData(*dispatcher_, 5));
-  if (upstreamProtocol() == FakeHttpConnection::Type::HTTP1) {
+  if (upstreamProtocol() == Http::CodecType::HTTP1) {
     ASSERT_TRUE(fake_upstream_connection_->waitForDisconnect());
   } else {
     ASSERT_TRUE(upstream_request_->waitForEndStream(*dispatcher_));
@@ -492,7 +592,7 @@ TEST_P(TcpTunnelingIntegrationTest, InvalidResponseHeaders) {
   // upstream gets a stream reset.
   default_response_headers_.setStatus(enumToInt(Http::Code::ServiceUnavailable));
   upstream_request_->encodeHeaders(default_response_headers_, false);
-  if (upstreamProtocol() == FakeHttpConnection::Type::HTTP1) {
+  if (upstreamProtocol() == Http::CodecType::HTTP1) {
     ASSERT_TRUE(fake_upstream_connection_->waitForDisconnect());
   } else {
     ASSERT_TRUE(upstream_request_->waitForReset());
@@ -521,13 +621,13 @@ TEST_P(TcpTunnelingIntegrationTest, CloseUpstreamFirst) {
   // Send data from upstream to downstream with an end stream and make sure the data is received
   // before the connection is half-closed.
   upstream_request_->encodeData(12, true);
-  if (upstreamProtocol() == FakeHttpConnection::Type::HTTP1) {
+  if (upstreamProtocol() == Http::CodecType::HTTP1) {
     ASSERT_TRUE(fake_upstream_connection_->close());
   }
   ASSERT_TRUE(tcp_client->waitForData(12));
   tcp_client->waitForHalfClose();
 
-  if (upstreamProtocol() == FakeHttpConnection::Type::HTTP1) {
+  if (upstreamProtocol() == Http::CodecType::HTTP1) {
     ASSERT_TRUE(fake_upstream_connection_->waitForDisconnect());
     tcp_client->close();
   } else {
@@ -543,7 +643,7 @@ TEST_P(TcpTunnelingIntegrationTest, CloseUpstreamFirst) {
 }
 
 TEST_P(TcpTunnelingIntegrationTest, ResetStreamTest) {
-  if (upstreamProtocol() == FakeHttpConnection::Type::HTTP1) {
+  if (upstreamProtocol() == Http::CodecType::HTTP1) {
     return;
   }
   enableHalfClose(false);
@@ -592,7 +692,7 @@ TEST_P(TcpTunnelingIntegrationTest, TestIdletimeoutWithLargeOutstandingData) {
   upstream_request_->encodeData(data, false);
 
   tcp_client->waitForDisconnect();
-  if (upstreamProtocol() == FakeHttpConnection::Type::HTTP1) {
+  if (upstreamProtocol() == Http::CodecType::HTTP1) {
     ASSERT_TRUE(fake_upstream_connection_->waitForDisconnect());
     tcp_client->close();
   } else {
@@ -615,7 +715,7 @@ TEST_P(TcpTunnelingIntegrationTest, TcpProxyDownstreamFlush) {
   upstream_request_->encodeHeaders(default_response_headers_, false);
 
   tcp_client->readDisable(true);
-  if (upstreamProtocol() == FakeHttpConnection::Type::HTTP1) {
+  if (upstreamProtocol() == Http::CodecType::HTTP1) {
     ASSERT_TRUE(tcp_client->write("hello", false));
     ASSERT_TRUE(upstream_request_->waitForData(*dispatcher_, 5));
 
@@ -635,13 +735,20 @@ TEST_P(TcpTunnelingIntegrationTest, TcpProxyDownstreamFlush) {
   tcp_client->readDisable(false);
   tcp_client->waitForData(data);
   tcp_client->waitForHalfClose();
-  if (upstreamProtocol() == FakeHttpConnection::Type::HTTP1) {
+  if (upstreamProtocol() == Http::CodecType::HTTP1) {
     tcp_client->close();
   }
 }
 
 // Test that an upstream flush works correctly (all data is flushed)
 TEST_P(TcpTunnelingIntegrationTest, TcpProxyUpstreamFlush) {
+  if (upstreamProtocol() == Http::CodecType::HTTP3) {
+    // The payload data depends on having TCP buffers upstream and downstream.
+    // For HTTP/3, upstream, the flow control window will back up sooner, Envoy
+    // flow control will kick in, and the large write of |data| will fail to
+    // complete.
+    return;
+  }
   // Use a very large size to make sure it is larger than the kernel socket read buffer.
   const uint32_t size = 50 * 1024 * 1024;
   config_helper_.setBufferLimits(size, size);
@@ -661,7 +768,7 @@ TEST_P(TcpTunnelingIntegrationTest, TcpProxyUpstreamFlush) {
   ASSERT_TRUE(tcp_client->waitForData(5));
 
   ASSERT_TRUE(tcp_client->write(data, true));
-  if (upstreamProtocol() == FakeHttpConnection::Type::HTTP1) {
+  if (upstreamProtocol() == Http::CodecType::HTTP1) {
     tcp_client->close();
 
     upstream_request_->readDisable(false);
@@ -679,9 +786,9 @@ TEST_P(TcpTunnelingIntegrationTest, TcpProxyUpstreamFlush) {
   }
 }
 
-// Test that h2 connection is reused.
-TEST_P(TcpTunnelingIntegrationTest, H2ConnectionReuse) {
-  if (upstreamProtocol() == FakeHttpConnection::Type::HTTP1) {
+// Test that h2/h3 connection is reused.
+TEST_P(TcpTunnelingIntegrationTest, ConnectionReuse) {
+  if (upstreamProtocol() == Http::CodecType::HTTP1) {
     return;
   }
   initialize();
@@ -727,7 +834,7 @@ TEST_P(TcpTunnelingIntegrationTest, H2ConnectionReuse) {
 
 // Test that with HTTP1 we have no connection reuse with downstream close.
 TEST_P(TcpTunnelingIntegrationTest, H1NoConnectionReuse) {
-  if (upstreamProtocol() == FakeHttpConnection::Type::HTTP2) {
+  if (upstreamProtocol() != Http::CodecType::HTTP1) {
     return;
   }
   initialize();
@@ -768,7 +875,7 @@ TEST_P(TcpTunnelingIntegrationTest, H1NoConnectionReuse) {
 
 // Test that with HTTP1 we have no connection with upstream close.
 TEST_P(TcpTunnelingIntegrationTest, H1UpstreamCloseNoConnectionReuse) {
-  if (upstreamProtocol() == FakeHttpConnection::Type::HTTP2) {
+  if (upstreamProtocol() == Http::CodecType::HTTP2) {
     return;
   }
   initialize();
@@ -812,7 +919,7 @@ TEST_P(TcpTunnelingIntegrationTest, H1UpstreamCloseNoConnectionReuse) {
 }
 
 TEST_P(TcpTunnelingIntegrationTest, 2xxStatusCodeValidHttp1) {
-  if (upstreamProtocol() == FakeHttpConnection::Type::HTTP2) {
+  if (upstreamProtocol() != Http::CodecType::HTTP1) {
     return;
   }
   initialize();
@@ -842,7 +949,7 @@ TEST_P(TcpTunnelingIntegrationTest, 2xxStatusCodeValidHttp1) {
 }
 
 TEST_P(TcpTunnelingIntegrationTest, ContentLengthHeaderIgnoredHttp1) {
-  if (upstreamProtocol() == FakeHttpConnection::Type::HTTP2) {
+  if (upstreamProtocol() != Http::CodecType::HTTP1) {
     return;
   }
   initialize();
@@ -871,7 +978,7 @@ TEST_P(TcpTunnelingIntegrationTest, ContentLengthHeaderIgnoredHttp1) {
 }
 
 TEST_P(TcpTunnelingIntegrationTest, TransferEncodingHeaderIgnoredHttp1) {
-  if (upstreamProtocol() == FakeHttpConnection::Type::HTTP2) {
+  if (upstreamProtocol() != Http::CodecType::HTTP1) {
     return;
   }
   initialize();
@@ -902,9 +1009,6 @@ TEST_P(TcpTunnelingIntegrationTest, TransferEncodingHeaderIgnoredHttp1) {
 }
 
 TEST_P(TcpTunnelingIntegrationTest, DeferTransmitDataUntilSuccessConnectResponseIsReceived) {
-  if (!wait_for_connect_response_) {
-    return;
-  }
   initialize();
 
   // Start a connection, and verify the upgrade headers are received upstream.
@@ -925,7 +1029,7 @@ TEST_P(TcpTunnelingIntegrationTest, DeferTransmitDataUntilSuccessConnectResponse
   ASSERT_TRUE(upstream_request_->waitForData(*dispatcher_, 5));
 
   tcp_client->close();
-  if (upstreamProtocol() == FakeHttpConnection::Type::HTTP1) {
+  if (upstreamProtocol() == Http::CodecType::HTTP1) {
     ASSERT_TRUE(fake_upstream_connection_->waitForDisconnect());
   } else {
     ASSERT_TRUE(upstream_request_->waitForEndStream(*dispatcher_));
@@ -935,9 +1039,6 @@ TEST_P(TcpTunnelingIntegrationTest, DeferTransmitDataUntilSuccessConnectResponse
 }
 
 TEST_P(TcpTunnelingIntegrationTest, NoDataTransmittedIfConnectFailureResponseIsReceived) {
-  if (!wait_for_connect_response_) {
-    return;
-  }
   initialize();
 
   // Start a connection, and verify the upgrade headers are received upstream.
@@ -957,7 +1058,7 @@ TEST_P(TcpTunnelingIntegrationTest, NoDataTransmittedIfConnectFailureResponseIsR
   ASSERT_FALSE(upstream_request_->waitForData(*dispatcher_, 1, std::chrono::milliseconds(100)));
 
   tcp_client->close();
-  if (upstreamProtocol() == FakeHttpConnection::Type::HTTP1) {
+  if (upstreamProtocol() == Http::CodecType::HTTP1) {
     ASSERT_TRUE(fake_upstream_connection_->waitForDisconnect());
   } else {
     ASSERT_TRUE(upstream_request_->waitForReset());
@@ -979,13 +1080,11 @@ TEST_P(TcpTunnelingIntegrationTest, UpstreamDisconnectBeforeResponseReceived) {
   tcp_client->close();
 }
 
-INSTANTIATE_TEST_SUITE_P(
-    IpAndHttpVersions, TcpTunnelingIntegrationTest,
-    ::testing::Combine(testing::ValuesIn(TestEnvironment::getIpVersionsForTest()),
-                       testing::Values(FakeHttpConnection::Type::HTTP1,
-                                       FakeHttpConnection::Type::HTTP2),
-                       testing::Values(false, true)),
-    TcpTunnelingIntegrationTest::paramsToString);
-
+INSTANTIATE_TEST_SUITE_P(IpAndHttpVersions, TcpTunnelingIntegrationTest,
+                         testing::ValuesIn(HttpProtocolIntegrationTest::getProtocolTestParams(
+                             {Http::CodecType::HTTP1},
+                             {Http::CodecType::HTTP1, Http::CodecType::HTTP2,
+                              Http::CodecType::HTTP3})),
+                         HttpProtocolIntegrationTest::protocolTestParamsToString);
 } // namespace
 } // namespace Envoy

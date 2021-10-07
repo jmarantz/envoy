@@ -1,8 +1,10 @@
 load("@rules_cc//cc:defs.bzl", "cc_library", "cc_proto_library")
 load("//bazel:envoy_build_system.bzl", "envoy_package")
 load("//bazel:envoy_internal.bzl", "envoy_select_force_libcpp")
+load("//bazel:utils.bzl", "json_data")
 load("@bazel_skylib//lib:selects.bzl", "selects")
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
+load(":repository_locations.bzl", "REPOSITORY_LOCATIONS_SPEC")
 
 licenses(["notice"])  # Apache 2
 
@@ -170,6 +172,11 @@ config_setting(
 )
 
 config_setting(
+    name = "clang_pch_build",
+    values = {"define": "ENVOY_CLANG_PCH=1"},
+)
+
+config_setting(
     name = "gcc_build_gcc",
     flag_values = {
         "@bazel_tools//tools/cpp:compiler": "gcc",
@@ -290,27 +297,37 @@ config_setting(
 bool_flag(
     name = "http3",
     build_setting_default = True,
+    visibility = ["//visibility:private"],
 )
 
 config_setting(
-    name = "disable_http3",
+    name = "disable_http3_setting",
     flag_values = {
         ":http3": "False",
     },
+    visibility = ["//visibility:private"],
+)
+
+selects.config_setting_group(
+    name = "disable_http3",
+    match_any = [
+        ":disable_http3_setting",
+        ":boringssl_fips",
+    ],
 )
 
 config_setting(
-    name = "disable_hot_restart",
+    name = "disable_hot_restart_setting",
     values = {"define": "hot_restart=disabled"},
+    visibility = ["//visibility:private"],
 )
 
-# Used to avoid conflicting selects https://github.com/bazelbuild/bazel/issues/8323
-alias(
-    name = "disable_hot_restart_or_apple",
-    actual = select({
-        ":apple": ":apple",
-        "//conditions:default": ":disable_hot_restart",
-    }),
+selects.config_setting_group(
+    name = "disable_hot_restart",
+    match_any = [
+        ":apple",
+        ":disable_hot_restart_setting",
+    ],
 )
 
 config_setting(
@@ -380,11 +397,6 @@ config_setting(
     values = {"define": "zlib=ng"},
 )
 
-config_setting(
-    name = "enable_quiche",
-    values = {"define": "quiche=enabled"},
-)
-
 # TODO: consider converting WAVM VM support to an extension (https://github.com/envoyproxy/envoy/issues/12574)
 config_setting(
     name = "wasm_wavm",
@@ -394,6 +406,11 @@ config_setting(
 config_setting(
     name = "wasm_v8",
     values = {"define": "wasm=v8"},
+)
+
+config_setting(
+    name = "wasm_wamr",
+    values = {"define": "wasm=wamr"},
 )
 
 config_setting(
@@ -531,56 +548,53 @@ alias(
     }),
 )
 
-alias(
+selects.config_setting_group(
     name = "apple",
-    actual = select(
-        {
-            ":darwin": ":darwin",
-            ":darwin_x86_64": ":darwin_x86_64",
-            ":ios_arm64": ":ios_arm64",
-            ":ios_arm64e": ":ios_arm64e",
-            ":ios_armv7": ":ios_armv7",
-            ":ios_armv7s": ":ios_armv7s",
-            ":ios_i386": ":ios_i386",
-            ":ios_x86_64": ":ios_x86_64",
-            # If we're not on an apple platform return a value that will never match in the select() statement calling this
-            # since it would have already been matched above.
-            "//conditions:default": ":darwin",
-        },
-    ),
+    match_any = [
+        ":darwin",
+        ":darwin_arm64",
+        ":darwin_x86_64",
+        ":ios_arm64",
+        ":ios_arm64e",
+        ":ios_armv7",
+        ":ios_armv7s",
+        ":ios_i386",
+        ":ios_x86_64",
+    ],
 )
 
-alias(
+selects.config_setting_group(
     name = "linux",
-    actual = select(
-        {
-            ":linux_x86_64": ":linux_x86_64",
-            ":linux_aarch64": ":linux_aarch64",
-            ":linux_ppc": ":linux_ppc",
-            ":linux_s390x": "linux_s390x",
-            ":linux_mips64": ":linux_mips64",
-            # If we're not on an linux platform return a value that will never match in the select() statement calling this
-            # since it would have already been matched above.
-            "//conditions:default": ":linux_x86_64",
-        },
-    ),
+    match_any = [
+        ":linux_aarch64",
+        ":linux_mips64",
+        ":linux_ppc",
+        ":linux_s390x",
+        ":linux_x86_64",
+    ],
 )
 
-alias(
+selects.config_setting_group(
     name = "x86",
-    actual = select(
-        {
-            ":darwin_x86_64": ":darwin_x86_64",
-            ":ios_x86_64": "ios_x86_64",
-            "linux_x86_64": "linux_x86_64",
-            "windows_x86_64": "windows_x86_64",
-            # If we're not on an x86 platform return a value that will never match in the select() statement calling this since it would have already been matched above.
-            "//conditions:default": ":darwin_x86_64",
-        },
-    ),
+    match_any = [
+        ":darwin_x86_64",
+        ":ios_x86_64",
+        ":linux_x86_64",
+        ":windows_x86_64",
+    ],
 )
 
 alias(
     name = "remote_jdk11",
     actual = "@bazel_tools//tools/jdk:remote_jdk11",
+)
+
+alias(
+    name = "windows",
+    actual = "@bazel_tools//src/conditions:windows",
+)
+
+json_data(
+    name = "repository_locations",
+    data = REPOSITORY_LOCATIONS_SPEC,
 )

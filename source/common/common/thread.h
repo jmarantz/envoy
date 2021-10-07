@@ -7,8 +7,7 @@
 
 #include "envoy/thread/thread.h"
 
-#include "common/common/non_copyable.h"
-#include "common/singleton/threadsafe_singleton.h"
+#include "source/common/common/non_copyable.h"
 
 #include "absl/synchronization/mutex.h"
 
@@ -169,26 +168,52 @@ public:
   T* get(const MakeObject& make_object) { return BaseClass::get(0, make_object); }
 };
 
-struct MainThread {
-  using MainThreadSingleton = InjectableSingleton<MainThread>;
-  bool inMainThread() const { return main_thread_id_ == std::this_thread::get_id(); }
-  static void init() { MainThreadSingleton::initialize(new MainThread()); }
-  static void clear() {
-    delete MainThreadSingleton::getExisting();
-    MainThreadSingleton::clear();
-  }
-  static bool isMainThread() {
-    // If threading is off, only main thread is running.
-    if (MainThreadSingleton::getExisting() == nullptr) {
-      return true;
-    }
-    // When threading is on, compare thread id with main thread id.
-    return MainThreadSingleton::get().inMainThread();
-  }
-
-private:
-  std::thread::id main_thread_id_{std::this_thread::get_id()};
+// RAII object to declare the TestThread. This should be declared in main() or
+// equivalent for any test binaries.
+//
+// Generally we expect TestThread to be instantiated only once on main() for
+// each test binary, though nested instantiations are allowed as long as the
+// thread ID does not change.
+class TestThread {
+public:
+  TestThread();
+  ~TestThread();
 };
+
+// RAII object to declare the MainThread. This should be declared in the thread
+// function or equivalent.
+//
+// Generally we expect MainThread to be instantiated only once or twice. It has
+// to be instantiated prior to OptionsImpl being created, so it needs to be in
+// instantiated from main_common(). In addition, it is instantiated by
+// ThreadLocal implementation to get the correct behavior for tests that do not
+// instantiate main.
+//
+// In general, nested instantiations are allowed as long as the thread ID does
+// not change.
+class MainThread {
+public:
+  MainThread();
+  ~MainThread();
+
+  /**
+   * Returns whether the current thread is the main thread or test thread.
+   */
+  static bool isMainOrTestThread();
+};
+
+// To improve exception safety in data plane, we plan to forbid the use of raw try in the core code
+// base. This macros uses main thread assertion to make sure that exceptions aren't thrown from
+// worker thread.
+#define TRY_ASSERT_MAIN_THREAD                                                                     \
+  try {                                                                                            \
+    ASSERT(Thread::MainThread::isMainOrTestThread());
+
+#define END_TRY }
+
+// TODO(chaoqinli-1123): Remove this macros after we have removed all the exceptions from data
+// plane.
+#define TRY_NEEDS_AUDIT try
 
 } // namespace Thread
 } // namespace Envoy

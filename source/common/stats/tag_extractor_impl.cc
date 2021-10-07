@@ -1,14 +1,14 @@
-#include "common/stats/tag_extractor_impl.h"
+#include "source/common/stats/tag_extractor_impl.h"
 
 #include <cstring>
 #include <string>
 
 #include "envoy/common/exception.h"
 
-#include "common/common/assert.h"
-#include "common/common/fmt.h"
-#include "common/common/perf_annotation.h"
-#include "common/common/regex.h"
+#include "source/common/common/assert.h"
+#include "source/common/common/fmt.h"
+#include "source/common/common/perf_annotation.h"
+#include "source/common/common/regex.h"
 
 #include "absl/strings/ascii.h"
 #include "absl/strings/match.h"
@@ -143,7 +143,7 @@ bool TagExtractorStdRegexImpl::extractTag(TagExtractionContext& context) const {
 
 TagExtractorRe2Impl::TagExtractorRe2Impl(absl::string_view name, absl::string_view regex,
                                          absl::string_view substr)
-    : TagExtractorImplBase(name, regex, substr), regex_(regex) {}
+    : TagExtractorImplBase(name, regex, substr), regex_(std::string(regex)) {}
 
 bool TagExtractorRe2Impl::extractTag(TagExtractionContext& context) const {
   PERF_OPERATION(perf);
@@ -199,6 +199,17 @@ TagExtractorSymbolic::TagExtractorSymbolic(absl::string_view name, absl::string_
       first = false;
     } else {
       dollar = symbol;
+
+      /*
+TagExtractorTokensImpl::TagExtractorTokensImpl(absl::string_view name, absl::string_view tokens)
+    : TagExtractorImplBase(name, tokens, ""), tokens_(absl::StrSplit(tokens, '.')),
+      match_index_(findMatchIndex(tokens_)) {
+  if (!tokens_.empty()) {
+    const absl::string_view first = tokens_[0];
+    if (first != "$" && first != "*" && first != "**") {
+      prefix_ = std::string(first);
+      */
+
     }
   }, [](absl::string_view){});
   symbol_table.decode(
@@ -272,6 +283,10 @@ bool TagExtractorSymbolicImpl::extractTag(
   }
   context.addTag(name_) = tag_value;
   context.removeCharacters(start, end);
+  /*
+  addTag(tags) = std::string(tag_value);
+  remove_characters.insert(start, end);
+  */
 
   PERF_RECORD(perf, "tokens-match", name_);
   PERF_TAG_INC(matched_);

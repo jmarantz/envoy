@@ -10,6 +10,8 @@ from google.protobuf import text_format
 from tools.type_whisperer.api_type_db_pb2 import TypeDb
 from tools.type_whisperer.types_pb2 import Types, TypeDescription
 
+# TODO(htuch): cleanup this file, remove type upgrade, simplify.
+
 # Regexes governing v3upgrades. TODO(htuch): The regex approach will have
 # to be rethought as we go beyond v3, this is WiP.
 TYPE_UPGRADE_REGEXES = [
@@ -20,8 +22,9 @@ TYPE_UPGRADE_REGEXES = [
     ('envoy\.type\.matcher', 'envoy.type.matcher.v3'),
     ('envoy\.type', 'envoy.type.v3'),
     ('envoy\.config\.cluster\.redis', 'envoy.extensions.clusters.redis.v3'),
-    ('envoy\.config\.retry\.previous_priorities',
-     'envoy.extensions.retry.priority.previous_priorities.v3'),
+    (
+        'envoy\.config\.retry\.previous_priorities',
+        'envoy.extensions.retry.priority.previous_priorities.v3'),
 ]
 
 # These packages must be upgraded to v3, even if there are no protos
@@ -69,8 +72,8 @@ def upgraded_path(proto_path, upgraded_package):
 def upgraded_type_with_description(type_name, type_desc):
     upgrade_type_desc = TypeDescription()
     upgrade_type_desc.qualified_package = upgraded_package(type_desc)
-    upgrade_type_desc.proto_path = upgraded_path(type_desc.proto_path,
-                                                 upgrade_type_desc.qualified_package)
+    upgrade_type_desc.proto_path = upgraded_path(
+        type_desc.proto_path, upgrade_type_desc.qualified_package)
     upgrade_type_desc.deprecated_type = type_desc.deprecated_type
     upgrade_type_desc.map_entry = type_desc.map_entry
     return (upgraded_type(type_name, type_desc), upgrade_type_desc)
@@ -159,8 +162,8 @@ if __name__ == '__main__':
         type_map.update([
             upgraded_type_with_description(type_name, type_desc)
             for type_name, type_desc in type_map.items()
-            if type_desc.qualified_package in next_versions_pkgs and
-            (type_desc.active or type_desc.deprecated_type or type_desc.map_entry)
+            if type_desc.qualified_package in next_versions_pkgs and (
+                type_desc.active or type_desc.deprecated_type or type_desc.map_entry)
         ])
 
     # Generate the type database proto. To provide some stability across runs, in
@@ -173,15 +176,6 @@ if __name__ == '__main__':
         type_desc = type_db.types[t]
         type_desc.qualified_package = type_map[t].qualified_package
         type_desc.proto_path = type_map[t].proto_path
-        if type_desc.qualified_package in next_versions_pkgs:
-            type_desc.next_version_type_name = upgraded_type(t, type_map[t])
-            assert (type_desc.next_version_type_name != t)
-            next_proto_info[type_map[t].proto_path] = (
-                type_map[type_desc.next_version_type_name].proto_path,
-                type_map[type_desc.next_version_type_name].qualified_package)
-    for proto_path, (next_proto_path, next_package) in sorted(next_proto_info.items()):
-        type_db.next_version_protos[proto_path].proto_path = next_proto_path
-        type_db.next_version_protos[proto_path].qualified_package = next_package
 
     # Write out proto text.
     with open(out_path, 'w') as f:
