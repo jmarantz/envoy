@@ -317,7 +317,7 @@ RetryPolicyImpl::RetryPolicyImpl(const envoy::config::route::v3::RetryPolicy& re
 
 std::vector<Upstream::RetryHostPredicateSharedPtr> RetryPolicyImpl::retryHostPredicates() const {
   std::vector<Upstream::RetryHostPredicateSharedPtr> predicates;
-
+  predicates.reserve(retry_host_predicate_configs_.size());
   for (const auto& config : retry_host_predicate_configs_) {
     predicates.emplace_back(config.first.createHostPredicate(*config.second, num_retries_));
   }
@@ -353,6 +353,7 @@ InternalRedirectPolicyImpl::InternalRedirectPolicyImpl(
 
 std::vector<InternalRedirectPredicateSharedPtr> InternalRedirectPolicyImpl::predicates() const {
   std::vector<InternalRedirectPredicateSharedPtr> predicates;
+  predicates.reserve(predicate_factories_.size());
   for (const auto& predicate_factory : predicate_factories_) {
     predicates.emplace_back(predicate_factory.first->createInternalRedirectPredicate(
         *predicate_factory.second, current_route_name_));
@@ -746,7 +747,7 @@ absl::string_view
 RouteEntryImplBase::sanitizePathBeforePathMatching(const absl::string_view path) const {
   absl::string_view ret = path;
   if (vhost_.globalRouteConfig().ignorePathParametersInPathMatching()) {
-    auto pos = ret.find_first_of(";");
+    auto pos = ret.find_first_of(';');
     if (pos != absl::string_view::npos) {
       ret.remove_suffix(ret.length() - pos);
     }
