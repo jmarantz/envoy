@@ -457,6 +457,16 @@ envoy_cc_library(
 )
 
 envoy_cc_library(
+    name = "packed_struct_lib",
+    hdrs = ["packed_struct.h"],
+    deps = [
+        ":assert_lib",
+        ":utility_lib",
+        "//source/common/protobuf:utility_lib_header",
+    ],
+)
+
+envoy_cc_library(
     name = "callback_impl_lib",
     srcs = ["callback_impl.cc"],
     hdrs = ["callback_impl.h"],
