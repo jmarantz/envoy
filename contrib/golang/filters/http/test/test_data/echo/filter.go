@@ -2,19 +2,34 @@ package main
 
 import (
 	"fmt"
+	"runtime"
 
 	"github.com/envoyproxy/envoy/contrib/golang/filters/http/source/go/pkg/api"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 type filter struct {
 	callbacks api.FilterCallbackHandler
 	path      string
+	config    *structpb.Struct
 }
 
 func (f *filter) sendLocalReply() api.StatusType {
 	headers := make(map[string]string)
-	body := fmt.Sprintf("forbidden from go, path: %s\r\n", f.path)
-	f.callbacks.SendLocalReply(403, body, headers, -1, "test-from-go")
+	echoBody := ""
+	v, ok := f.config.AsMap()["echo_body"]
+	if ok {
+		echoBody = v.(string)
+	}
+
+	{
+		body := fmt.Sprintf("%s, path: %s\r\n", echoBody, f.path)
+		f.callbacks.SendLocalReply(403, body, headers, -1, "test-from-go")
+	}
+	// Force GC to free the body string.
+	// For the case that C++ shouldn't touch the memory of the body string,
+	// after the sendLocalReply function returns.
+	runtime.GC()
 	return api.LocalReply
 }
 
@@ -22,7 +37,9 @@ func (f *filter) DecodeHeaders(header api.RequestHeaderMap, endStream bool) api.
 	header.Del("x-test-header-1")
 	f.path, _ = header.Get(":path")
 	header.Set("rsp-header-from-go", "foo-test")
-	if f.path == "/localreply" {
+	// For the convenience of testing, it's better to in the config parse phase
+	matchPath, ok := f.config.AsMap()["match_path"]
+	if ok && f.path == matchPath.(string) {
 		return f.sendLocalReply()
 	}
 	return api.Continue
@@ -50,8 +67,4 @@ func (f *filter) EncodeTrailers(trailers api.ResponseTrailerMap) api.StatusType 
 }
 
 func (f *filter) OnDestroy(reason api.DestroyReason) {
-}
-
-func (f *filter) Callbacks() api.FilterCallbacks {
-	return f.callbacks
 }

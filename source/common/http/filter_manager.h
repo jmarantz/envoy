@@ -583,6 +583,9 @@ public:
   absl::string_view ja3Hash() const override {
     return StreamInfoImpl::downstreamAddressProvider().ja3Hash();
   }
+  const absl::optional<std::chrono::milliseconds>& roundTripTime() const override {
+    return StreamInfoImpl::downstreamAddressProvider().roundTripTime();
+  }
 
 private:
   Network::Address::InstanceConstSharedPtr overridden_downstream_remote_address_;
@@ -980,6 +983,7 @@ private:
   std::list<ActiveStreamEncoderFilterPtr> encoder_filters_;
   std::list<StreamFilterBase*> filters_;
   std::list<AccessLog::InstanceSharedPtr> access_log_handlers_;
+  absl::optional<std::chrono::milliseconds> access_log_flush_interval_;
 
   // Stores metadata added in the decoding filter that is being processed. Will be cleared before
   // processing the next filter. The storage is created on demand. We need to store metadata

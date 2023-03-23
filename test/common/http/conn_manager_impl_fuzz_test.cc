@@ -12,6 +12,8 @@
 // * Idle/drain timeouts.
 // * HTTP 1.0 special cases
 // * Fuzz config settings
+#include <chrono>
+
 #include "envoy/extensions/filters/network/http_connection_manager/v3/http_connection_manager.pb.h"
 
 #include "source/common/common/empty_string.h"
@@ -126,6 +128,9 @@ public:
   // Http::ConnectionManagerConfig
   const RequestIDExtensionSharedPtr& requestIDExtension() override { return request_id_extension_; }
   const std::list<AccessLog::InstanceSharedPtr>& accessLogs() override { return access_logs_; }
+  const absl::optional<std::chrono::milliseconds>& accessLogFlushInterval() override {
+    return access_log_flush_interval_;
+  }
   ServerConnectionPtr createCodec(Network::Connection&, const Buffer::Instance&,
                                   ServerConnectionCallbacks&) override {
     return ServerConnectionPtr{codec_};
@@ -225,12 +230,14 @@ public:
     return nullptr;
   }
   bool appendXForwardedPort() const override { return false; }
+  bool addProxyProtocolConnectionState() const override { return true; }
 
   const envoy::extensions::filters::network::http_connection_manager::v3::HttpConnectionManager
       config_;
   NiceMock<Random::MockRandomGenerator> random_;
   RequestIDExtensionSharedPtr request_id_extension_;
   std::list<AccessLog::InstanceSharedPtr> access_logs_;
+  absl::optional<std::chrono::milliseconds> access_log_flush_interval_;
   MockServerConnection* codec_{};
   MockStreamDecoderFilter* decoder_filter_{};
   MockStreamEncoderFilter* encoder_filter_{};
@@ -598,6 +605,8 @@ DEFINE_PROTO_FUZZER(const test::common::http::ConnManagerImplTestCase& input) {
   ON_CALL(filter_callbacks.connection_, ssl()).WillByDefault(Return(ssl_connection));
   ON_CALL(Const(filter_callbacks.connection_), ssl()).WillByDefault(Return(ssl_connection));
   ON_CALL(filter_callbacks.connection_, close(_))
+      .WillByDefault(InvokeWithoutArgs([&connection_alive] { connection_alive = false; }));
+  ON_CALL(filter_callbacks.connection_, close(_, _))
       .WillByDefault(InvokeWithoutArgs([&connection_alive] { connection_alive = false; }));
   filter_callbacks.connection_.stream_info_.downstream_connection_info_provider_->setLocalAddress(
       std::make_shared<Network::Address::Ipv4Instance>("127.0.0.1"));

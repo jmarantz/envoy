@@ -51,7 +51,6 @@ namespace {
 
 using ::testing::_;
 using ::testing::DoAll;
-using ::testing::Eq;
 using ::testing::InSequence;
 using ::testing::Invoke;
 using ::testing::InvokeWithoutArgs;
@@ -808,7 +807,7 @@ public:
 
 // Test initialization of subset load balancer with every possible load balancer policy.
 TEST_P(ClusterManagerSubsetInitializationTest, SubsetLoadBalancerInitialization) {
-  const std::string yamlPattern = R"EOF(
+  constexpr absl::string_view yamlPattern = R"EOF(
  static_resources:
   clusters:
   - name: cluster_1
@@ -2320,7 +2319,7 @@ TEST_F(ClusterManagerImplTest, CloseTcpConnectionsOnHealthFailure) {
     outlier_detector.runCallbacks(test_host);
     health_checker.runCallbacks(test_host, HealthTransition::Unchanged);
 
-    EXPECT_CALL(*connection1, close(Network::ConnectionCloseType::NoFlush));
+    EXPECT_CALL(*connection1, close(Network::ConnectionCloseType::NoFlush, _));
     test_host->healthFlagSet(Host::HealthFlag::FAILED_OUTLIER_CHECK);
     outlier_detector.runCallbacks(test_host);
 
@@ -2335,8 +2334,8 @@ TEST_F(ClusterManagerImplTest, CloseTcpConnectionsOnHealthFailure) {
   }
 
   // Order of these calls is implementation dependent, so can't sequence them!
-  EXPECT_CALL(*connection1, close(Network::ConnectionCloseType::NoFlush));
-  EXPECT_CALL(*connection2, close(Network::ConnectionCloseType::NoFlush));
+  EXPECT_CALL(*connection1, close(Network::ConnectionCloseType::NoFlush, _));
+  EXPECT_CALL(*connection2, close(Network::ConnectionCloseType::NoFlush, _));
   test_host->healthFlagSet(Host::HealthFlag::FAILED_ACTIVE_HC);
   health_checker.runCallbacks(test_host, HealthTransition::Changed);
 

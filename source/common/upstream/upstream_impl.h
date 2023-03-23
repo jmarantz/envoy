@@ -9,6 +9,7 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "envoy/common/callback.h"
@@ -99,6 +100,55 @@ private:
   Network::ConnectionSocket::OptionsSharedPtr base_socket_options_;
   Network::ConnectionSocket::OptionsSharedPtr cluster_socket_options_;
   std::vector<UpstreamLocalAddress> upstream_local_addresses_;
+};
+
+/**
+ * Class for LBPolicies
+ * Uses a absl::variant to store pointers for the LBPolicy
+ */
+class LBPolicyConfig {
+public:
+  LBPolicyConfig(const envoy::config::cluster::v3::Cluster& config);
+
+  OptRef<const envoy::config::cluster::v3::Cluster::RoundRobinLbConfig> lbRoundRobinConfig() const {
+    return getConfig<envoy::config::cluster::v3::Cluster::RoundRobinLbConfig>();
+  }
+
+  OptRef<const envoy::config::cluster::v3::Cluster::LeastRequestLbConfig>
+  lbLeastRequestConfig() const {
+    return getConfig<envoy::config::cluster::v3::Cluster::LeastRequestLbConfig>();
+  }
+
+  OptRef<const envoy::config::cluster::v3::Cluster::RingHashLbConfig> lbRingHashConfig() const {
+    return getConfig<envoy::config::cluster::v3::Cluster::RingHashLbConfig>();
+  }
+
+  OptRef<const envoy::config::cluster::v3::Cluster::MaglevLbConfig> lbMaglevConfig() const {
+    return getConfig<envoy::config::cluster::v3::Cluster::MaglevLbConfig>();
+  }
+
+  OptRef<const envoy::config::cluster::v3::Cluster::OriginalDstLbConfig>
+  lbOriginalDstConfig() const {
+    return getConfig<envoy::config::cluster::v3::Cluster::OriginalDstLbConfig>();
+  }
+
+private:
+  template <typename T> OptRef<const T> getConfig() const {
+    // Condition checks for the type of LbConfig, it also checks that the value is not nullptr
+    // The Round Robin config being set to nullptr is the default value of the variant
+    if (const auto lbPtr = absl::get_if<std::unique_ptr<const T>>(&lb_policy_); lbPtr && *lbPtr) {
+      return *(*lbPtr);
+    } else {
+      return absl::nullopt;
+    }
+  }
+
+  absl::variant<std::unique_ptr<const envoy::config::cluster::v3::Cluster::RoundRobinLbConfig>,
+                std::unique_ptr<const envoy::config::cluster::v3::Cluster::LeastRequestLbConfig>,
+                std::unique_ptr<const envoy::config::cluster::v3::Cluster::RingHashLbConfig>,
+                std::unique_ptr<const envoy::config::cluster::v3::Cluster::MaglevLbConfig>,
+                std::unique_ptr<const envoy::config::cluster::v3::Cluster::OriginalDstLbConfig>>
+      lb_policy_;
 };
 
 /**
@@ -788,42 +838,29 @@ public:
   }
   OptRef<const envoy::config::cluster::v3::Cluster::RoundRobinLbConfig>
   lbRoundRobinConfig() const override {
-    if (lb_round_robin_config_ == nullptr) {
-      return absl::nullopt;
-    }
-    return *lb_round_robin_config_;
+    return lb_policy_config_->lbRoundRobinConfig();
   }
   OptRef<const envoy::config::cluster::v3::Cluster::LeastRequestLbConfig>
   lbLeastRequestConfig() const override {
-    if (lb_least_request_config_ == nullptr) {
-      return absl::nullopt;
-    }
-    return *lb_least_request_config_;
+    return lb_policy_config_->lbLeastRequestConfig();
   }
   OptRef<const envoy::config::cluster::v3::Cluster::RingHashLbConfig>
   lbRingHashConfig() const override {
-    if (lb_ring_hash_config_ == nullptr) {
-      return absl::nullopt;
-    }
-    return *lb_ring_hash_config_;
+    return lb_policy_config_->lbRingHashConfig();
   }
   OptRef<const envoy::config::cluster::v3::Cluster::MaglevLbConfig>
   lbMaglevConfig() const override {
-    if (lb_maglev_config_ == nullptr) {
-      return absl::nullopt;
-    }
-    return *lb_maglev_config_;
+    return lb_policy_config_->lbMaglevConfig();
   }
   OptRef<const envoy::config::cluster::v3::Cluster::OriginalDstLbConfig>
   lbOriginalDstConfig() const override {
-    if (lb_original_dst_config_ == nullptr) {
+    return lb_policy_config_->lbOriginalDstConfig();
+  }
+  OptRef<const envoy::config::core::v3::TypedExtensionConfig> upstreamConfig() const override {
+    if (upstream_config_ == nullptr) {
       return absl::nullopt;
     }
-    return *lb_original_dst_config_;
-  }
-  const absl::optional<envoy::config::core::v3::TypedExtensionConfig>&
-  upstreamConfig() const override {
-    return upstream_config_;
+    return *upstream_config_;
   }
   bool maintenanceMode() const override;
   uint64_t maxRequestsPerConnection() const override { return max_requests_per_connection_; }
@@ -861,7 +898,12 @@ public:
   std::shared_ptr<UpstreamLocalAddressSelector> getUpstreamLocalAddressSelector() const override {
     return upstream_local_address_selector_;
   }
-  const LoadBalancerSubsetInfo& lbSubsetInfo() const override { return lb_subset_; }
+  const LoadBalancerSubsetInfo& lbSubsetInfo() const override {
+    if (lb_subset_ != nullptr) {
+      return *lb_subset_;
+    }
+    return DefaultLoadBalancerSubsetInfoImpl::get();
+  }
   const envoy::config::core::v3::Metadata& metadata() const override { return metadata_; }
   const Envoy::Config::TypedMetadata& typedMetadata() const override { return typed_metadata_; }
 
@@ -907,6 +949,7 @@ public:
   Http::Http1::CodecStats& http1CodecStats() const override;
   Http::Http2::CodecStats& http2CodecStats() const override;
   Http::Http3::CodecStats& http3CodecStats() const override;
+  Http::HeaderValidatorPtr makeHeaderValidator(Http::Protocol protocol) const override;
 
 protected:
   // Gets the retry budget percent/concurrency from the circuit breaker thresholds. If the retry
@@ -937,23 +980,24 @@ private:
     const ClusterRequestResponseSizeStatsPtr request_response_size_stats_;
   };
 
+#ifdef ENVOY_ENABLE_UHV
+  ::Envoy::Http::HeaderValidatorStats& getHeaderValidatorStats(Http::Protocol protocol) const;
+#endif
+
   Runtime::Loader& runtime_;
   const std::string name_;
   const std::string observability_name_;
-  const envoy::config::cluster::v3::Cluster::DiscoveryType type_;
   const absl::flat_hash_map<std::string, ProtocolOptionsConfigConstSharedPtr>
       extension_protocol_options_;
   const std::shared_ptr<const HttpProtocolOptionsConfigImpl> http_protocol_options_;
   const std::shared_ptr<const TcpProtocolOptionsConfigImpl> tcp_protocol_options_;
   const uint64_t max_requests_per_connection_;
-  const uint32_t max_response_headers_count_;
   const std::chrono::milliseconds connect_timeout_;
   absl::optional<std::chrono::milliseconds> idle_timeout_;
   absl::optional<std::chrono::milliseconds> tcp_pool_idle_timeout_;
   absl::optional<std::chrono::milliseconds> max_connection_duration_;
   const float per_upstream_preconnect_ratio_;
   const float peekahead_ratio_;
-  const uint32_t per_connection_buffer_limit_bytes_;
   TransportSocketMatcherPtr socket_matcher_;
   Stats::ScopeSharedPtr stats_scope_;
   mutable LazyClusterTrafficStats traffic_stats_;
@@ -967,29 +1011,14 @@ private:
   mutable ResourceManagers resource_managers_;
   const std::string maintenance_mode_runtime_key_;
   std::shared_ptr<UpstreamLocalAddressSelector> upstream_local_address_selector_;
-  LoadBalancerType lb_type_;
-  const std::unique_ptr<const envoy::config::cluster::v3::Cluster::RoundRobinLbConfig>
-      lb_round_robin_config_;
-  const std::unique_ptr<const envoy::config::cluster::v3::Cluster::LeastRequestLbConfig>
-      lb_least_request_config_;
-  const std::unique_ptr<const envoy::config::cluster::v3::Cluster::RingHashLbConfig>
-      lb_ring_hash_config_;
-  const std::unique_ptr<const envoy::config::cluster::v3::Cluster::MaglevLbConfig>
-      lb_maglev_config_;
-  const std::unique_ptr<const envoy::config::cluster::v3::Cluster::OriginalDstLbConfig>
-      lb_original_dst_config_;
-  absl::optional<envoy::config::core::v3::TypedExtensionConfig> upstream_config_;
-  const bool added_via_api_;
-  LoadBalancerSubsetInfoImpl lb_subset_;
+  const std::unique_ptr<const LBPolicyConfig> lb_policy_config_;
+  std::unique_ptr<envoy::config::core::v3::TypedExtensionConfig> upstream_config_;
+  std::unique_ptr<LoadBalancerSubsetInfoImpl> lb_subset_;
   const envoy::config::core::v3::Metadata metadata_;
   Envoy::Config::TypedMetadataImpl<ClusterTypedMetadataFactory> typed_metadata_;
   ProtobufTypes::MessagePtr load_balancing_policy_;
   TypedLoadBalancerFactory* load_balancer_factory_ = nullptr;
   const envoy::config::cluster::v3::Cluster::CommonLbConfig common_lb_config_;
-  const bool drain_connections_on_host_removal_;
-  const bool connection_pool_per_downstream_connection_;
-  const bool warm_hosts_;
-  const bool set_local_interface_name_on_upstream_connections_;
   const absl::optional<envoy::config::core::v3::UpstreamHttpProtocolOptions>
       upstream_http_protocol_options_;
   absl::optional<std::string> eds_service_name_;
@@ -997,12 +1026,24 @@ private:
   const std::unique_ptr<Server::Configuration::CommonFactoryContext> factory_context_;
   std::vector<Network::FilterFactoryCb> filter_factories_;
   Http::FilterChainUtility::FilterFactoriesList http_filter_factories_;
-  // true iff the cluster proto specified upstream http filters.
-  bool has_configured_http_filters_{false};
   mutable Http::Http1::CodecStats::AtomicPtr http1_codec_stats_;
   mutable Http::Http2::CodecStats::AtomicPtr http2_codec_stats_;
   mutable Http::Http3::CodecStats::AtomicPtr http3_codec_stats_;
   UpstreamHttpFactoryContextImpl upstream_context_;
+
+  // Keep small values like bools and enums at the end of the class to reduce
+  // overhead via alignment
+  const uint32_t per_connection_buffer_limit_bytes_;
+  const uint32_t max_response_headers_count_;
+  LoadBalancerType lb_type_;
+  const envoy::config::cluster::v3::Cluster::DiscoveryType type_;
+  const bool drain_connections_on_host_removal_ : 1;
+  const bool connection_pool_per_downstream_connection_ : 1;
+  const bool warm_hosts_ : 1;
+  const bool set_local_interface_name_on_upstream_connections_ : 1;
+  const bool added_via_api_ : 1;
+  // true iff the cluster proto specified upstream http filters.
+  bool has_configured_http_filters_ : 1;
 };
 
 /**
