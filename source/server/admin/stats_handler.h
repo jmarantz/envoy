@@ -67,6 +67,7 @@ public:
    */
   static void prometheusRender(Stats::Store& stats,
                                const Stats::CustomStatNamespaces& custom_namespaces,
+                               const Upstream::ClusterManager& cluster_manager,
                                const StatsParams& params, Buffer::Instance& response);
 
   Http::Code handlerContention(Http::ResponseHeaderMap& response_headers,
@@ -95,6 +96,7 @@ public:
 
   Admin::RequestPtr makeRequest(AdminStream&, bool active_html);
   static Admin::RequestPtr makeRequest(Stats::Store& stats, const StatsParams& params,
+                                       const Upstream::ClusterManager& cm,
                                        StatsRequest::UrlHandlerFn url_handler_fn = nullptr);
 
 private:
