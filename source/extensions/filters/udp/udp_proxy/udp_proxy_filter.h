@@ -1,5 +1,7 @@
 #pragma once
 
+#include <queue>
+
 #include "envoy/access_log/access_log.h"
 #include "envoy/config/accesslog/v3/accesslog.pb.h"
 #include "envoy/event/file_event.h"
@@ -26,7 +28,7 @@
 #include "source/common/protobuf/utility.h"
 #include "source/common/router/header_parser.h"
 #include "source/common/stream_info/stream_info_impl.h"
-#include "source/common/upstream/load_balancer_impl.h"
+#include "source/common/upstream/load_balancer_context_base.h"
 #include "source/extensions/filters/udp/udp_proxy/hash_policy_impl.h"
 #include "source/extensions/filters/udp/udp_proxy/router/router_impl.h"
 #include "source/extensions/filters/udp/udp_proxy/session_filters/filter.h"
@@ -597,6 +599,7 @@ private:
     ClusterInfo& cluster_;
     const Network::UdpRecvData::LocalPeerAddresses addresses_;
     Upstream::HostConstSharedPtr host_;
+    uint64_t session_id_;
     // TODO(mattklein123): Consider replacing an idle timer for each session with a last used
     // time stamp and a periodic scan of all sessions to look for timeouts. This solution is simple,
     // though it might not perform well for high volume traffic. Note that this is how TCP proxy
@@ -607,11 +610,11 @@ private:
 
     UdpProxySessionStats session_stats_{};
     StreamInfo::StreamInfoImpl udp_session_info_;
-    uint64_t session_id_;
     std::list<ActiveReadFilterPtr> read_filters_;
     std::list<ActiveWriteFilterPtr> write_filters_;
 
   private:
+    std::shared_ptr<Network::ConnectionInfoSetterImpl> createDownstreamConnectionInfoProvider();
     void onAccessLogFlushInterval();
     void rearmAccessLogFlushTimer();
     void disableAccessLogFlushTimer();
@@ -635,7 +638,8 @@ private:
     // Network::UdpPacketProcessor
     void processPacket(Network::Address::InstanceConstSharedPtr local_address,
                        Network::Address::InstanceConstSharedPtr peer_address,
-                       Buffer::InstancePtr buffer, MonotonicTime receive_time) override;
+                       Buffer::InstancePtr buffer, MonotonicTime receive_time,
+                       uint8_t tos) override;
 
     uint64_t maxDatagramSize() const override {
       return cluster_.filter_.config_->upstreamSocketConfig().max_rx_datagram_size_;

@@ -1,4 +1,3 @@
-#include "processor_state.h"
 #include "source/extensions/filters/http/ext_proc/processor_state.h"
 
 #include "source/common/buffer/buffer_impl.h"
@@ -266,7 +265,7 @@ absl::Status ProcessorState::handleBodyResponse(const BodyResponse& response) {
     } else if (callback_state_ == CallbackState::StreamedBodyCallback) {
       Buffer::OwnedImpl chunk_data;
       auto chunk = dequeueStreamingChunk(chunk_data);
-      ENVOY_BUG(chunk, "Bad streamed body callback state");
+      ENVOY_BUG(chunk != nullptr, "Bad streamed body callback state");
       if (common_response.has_body_mutation()) {
         ENVOY_LOG(debug, "Applying body response to chunk of data. Size = {}", chunk->length);
         MutationUtils::applyBodyMutations(common_response.body_mutation(), chunk_data);
@@ -289,7 +288,7 @@ absl::Status ProcessorState::handleBodyResponse(const BodyResponse& response) {
       // Apply changes to the buffer that we sent to the server
       Buffer::OwnedImpl chunk_data;
       auto chunk = dequeueStreamingChunk(chunk_data);
-      ENVOY_BUG(chunk, "Bad partial body callback state");
+      ENVOY_BUG(chunk != nullptr, "Bad partial body callback state");
       if (common_response.has_header_mutation()) {
         if (headers_ != nullptr) {
           ENVOY_LOG(debug, "Applying header mutations to buffered body message");
@@ -421,22 +420,45 @@ void DecodingProcessorState::clearWatermark() {
 }
 
 void DecodingProcessorState::clearRouteCache(const CommonResponse& common_response) {
-  if (!common_response.clear_route_cache()) {
+  bool response_clear_route_cache = common_response.clear_route_cache();
+  if (filter_.config().isUpstream()) {
+    if (response_clear_route_cache) {
+      filter_.stats().clear_route_cache_upstream_ignored_.inc();
+      ENVOY_LOG(debug, "NOT clearing route cache. The filter is in upstream filter chain.");
+    }
     return;
   }
-  // Only clear the route cache if there is a mutation to the header and clearing is allowed.
-  if (filter_.config().disableClearRouteCache()) {
-    filter_.stats().clear_route_cache_disabled_.inc();
-    ENVOY_LOG(debug, "NOT clearing route cache, it is disabled in the config");
+
+  if (!common_response.has_header_mutation()) {
+    if (response_clear_route_cache) {
+      filter_.stats().clear_route_cache_ignored_.inc();
+      ENVOY_LOG(debug, "NOT clearing route cache. No header mutation in the response");
+    }
     return;
   }
-  if (common_response.has_header_mutation()) {
-    ENVOY_LOG(debug, "clearing route cache");
+
+  // Filter is in downstream and response has header mutation.
+  switch (filter_.config().routeCacheAction()) {
+    PANIC_ON_PROTO_ENUM_SENTINEL_VALUES;
+  case envoy::extensions::filters::http::ext_proc::v3::ExternalProcessor::DEFAULT:
+    if (response_clear_route_cache) {
+      ENVOY_LOG(debug, "Clearing route cache due to the filter RouterCacheAction is configured "
+                       "with DEFAULT and response has clear_route_cache set.");
+      decoder_callbacks_->downstreamCallbacks()->clearRouteCache();
+    }
+    break;
+  case envoy::extensions::filters::http::ext_proc::v3::ExternalProcessor::CLEAR:
+    ENVOY_LOG(debug,
+              "Clearing route cache due to the filter RouterCacheAction is configured with CLEAR");
     decoder_callbacks_->downstreamCallbacks()->clearRouteCache();
-    return;
+    break;
+  case envoy::extensions::filters::http::ext_proc::v3::ExternalProcessor::RETAIN:
+    if (response_clear_route_cache) {
+      filter_.stats().clear_route_cache_disabled_.inc();
+      ENVOY_LOG(debug, "NOT clearing route cache, it is disabled by the filter config");
+    }
+    break;
   }
-  filter_.stats().clear_route_cache_ignored_.inc();
-  ENVOY_LOG(debug, "NOT clearing route cache, no header mutations detected");
 }
 
 void EncodingProcessorState::setProcessingModeInternal(const ProcessingMode& mode) {

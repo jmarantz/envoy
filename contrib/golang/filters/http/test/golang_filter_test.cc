@@ -76,6 +76,7 @@ public:
     if (filter_ != nullptr) {
       filter_->onDestroy();
     }
+    Dso::DsoManager<Dso::HttpFilterDsoImpl>::cleanUpForTest();
   }
 
   void setup(const std::string& lib_id, const std::string& lib_path,
@@ -131,7 +132,7 @@ public:
     test_time.setSystemTime(std::chrono::microseconds(1583879145572237));
 
     filter_ = std::make_unique<TestFilter>(
-        config_, Dso::DsoManager<Dso::HttpFilterDsoImpl>::getDsoByPluginName(plugin_name));
+        config_, Dso::DsoManager<Dso::HttpFilterDsoImpl>::getDsoByPluginName(plugin_name), 0);
     filter_->setDecoderFilterCallbacks(decoder_callbacks_);
     filter_->setEncoderFilterCallbacks(encoder_callbacks_);
   }
@@ -176,8 +177,11 @@ TEST_F(GolangHttpFilterTest, ScriptHeadersOnlyRequestHeadersOnly) {
 TEST_F(GolangHttpFilterTest, SetHeaderAtWrongStage) {
   InSequence s;
   setup(PASSTHROUGH, genSoPath(PASSTHROUGH), PASSTHROUGH);
+  auto req = new HttpRequestInternal(*filter_);
 
-  EXPECT_EQ(CAPINotInGo, filter_->setHeader("foo", "bar", HeaderSet));
+  EXPECT_EQ(CAPINotInGo, filter_->setHeader(req->decodingState(), "foo", "bar", HeaderSet));
+
+  delete req;
 }
 
 // invalid config for routeconfig filter

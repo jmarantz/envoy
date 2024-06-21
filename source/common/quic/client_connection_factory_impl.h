@@ -9,8 +9,8 @@
 #include "source/common/quic/envoy_quic_client_session.h"
 #include "source/common/quic/envoy_quic_connection_helper.h"
 #include "source/common/quic/envoy_quic_utils.h"
+#include "source/common/tls/client_ssl_socket.h"
 #include "source/extensions/quic/crypto_stream/envoy_quic_crypto_client_stream.h"
-#include "source/extensions/transport_sockets/tls/ssl_socket.h"
 
 #include "quiche/quic/core/quic_utils.h"
 
@@ -44,7 +44,8 @@ std::unique_ptr<Network::ClientConnection> createQuicNetworkConnection(
     OptRef<Http::HttpServerPropertiesCache> rtt_cache, Stats::Scope& scope,
     const Network::ConnectionSocket::OptionsSharedPtr& options,
     const Network::TransportSocketOptionsConstSharedPtr& transport_socket_options,
-    quic::ConnectionIdGeneratorInterface& generator);
+    quic::ConnectionIdGeneratorInterface& generator,
+    Network::UpstreamTransportSocketFactory& transport_socket_factory);
 
 } // namespace Quic
 } // namespace Envoy

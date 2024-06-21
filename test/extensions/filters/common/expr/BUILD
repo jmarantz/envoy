@@ -17,6 +17,7 @@ envoy_extension_cc_test(
     name = "context_test",
     srcs = ["context_test.cc"],
     extension_names = ["envoy.filters.http.rbac"],
+    tags = ["skip_on_windows"],
     deps = [
         "//source/common/network:filter_state_dst_address_lib",
         "//source/common/router:string_accessor_lib",
@@ -30,6 +31,7 @@ envoy_extension_cc_test(
         "//test/mocks/ssl:ssl_mocks",
         "//test/mocks/stream_info:stream_info_mocks",
         "//test/mocks/upstream:host_mocks",
+        "//test/test_common:test_runtime_lib",
         "//test/test_common:utility_lib",
     ],
 )
@@ -38,8 +40,10 @@ envoy_extension_cc_test(
     name = "evaluator_test",
     srcs = ["evaluator_test.cc"],
     extension_names = ["envoy.filters.http.rbac"],
+    tags = ["skip_on_windows"],
     deps = [
         "//source/extensions/filters/common/expr:evaluator_lib",
+        "//test/mocks/stream_info:stream_info_mocks",
         "//test/test_common:utility_lib",
         "@com_google_cel_cpp//eval/public/structs:cel_proto_wrapper",
     ],
@@ -58,6 +62,7 @@ envoy_cc_fuzz_test(
     name = "evaluator_fuzz_test",
     srcs = ["evaluator_fuzz_test.cc"],
     corpus = "evaluator_corpus",
+    tags = ["skip_on_windows"],
     deps = [
         ":evaluator_fuzz_proto_cc_proto",
         "//source/extensions/filters/common/expr:evaluator_lib",

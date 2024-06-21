@@ -97,10 +97,10 @@ struct OptionsLimits {
  * Validates settings/options already set in |options| and initializes any remaining fields with
  * defaults.
  */
-envoy::config::core::v3::Http2ProtocolOptions
+absl::StatusOr<envoy::config::core::v3::Http2ProtocolOptions>
 initializeAndValidateOptions(const envoy::config::core::v3::Http2ProtocolOptions& options);
 
-envoy::config::core::v3::Http2ProtocolOptions
+absl::StatusOr<envoy::config::core::v3::Http2ProtocolOptions>
 initializeAndValidateOptions(const envoy::config::core::v3::Http2ProtocolOptions& options,
                              bool hcm_stream_error_set,
                              const ProtobufWkt::BoolValue& hcm_stream_error);
@@ -202,6 +202,12 @@ public:
    * NOTE: the space character is encoded as %20, NOT as the + character
    */
   static std::string urlEncodeQueryParameter(absl::string_view value);
+
+  /**
+   * Exactly the same as above, but returns false when it finds a character that should be %-encoded
+   * but is not.
+   */
+  static bool queryParameterIsUrlEncoded(absl::string_view value);
 
   /**
    * Decodes string view that represents URL in x-www-form-urlencoded query parameter.
@@ -626,6 +632,33 @@ getMergedPerFilterConfig(const Http::StreamFilterCallbacks* callbacks,
   return merged;
 }
 
+/**
+ * Return all the available per route filter configs.
+ *
+ * @param callbacks The stream filter callbacks to check for route configs.
+ *
+ * @return The all available per route config. The returned pointers are guaranteed to be non-null
+ * and their lifetime is the same as the matched route.
+ */
+template <class ConfigType>
+absl::InlinedVector<const ConfigType*, 3>
+getAllPerFilterConfig(const Http::StreamFilterCallbacks* callbacks) {
+  ASSERT(callbacks != nullptr);
+
+  absl::InlinedVector<const ConfigType*, 3> all_configs;
+  callbacks->traversePerFilterConfig([&all_configs](const Router::RouteSpecificFilterConfig& cfg) {
+    const ConfigType* typed_cfg = dynamic_cast<const ConfigType*>(&cfg);
+    if (typed_cfg == nullptr) {
+      ENVOY_LOG_MISC(debug, "Failed to retrieve the correct type of route specific filter config");
+      return;
+    }
+
+    all_configs.push_back(typed_cfg);
+  });
+
+  return all_configs;
+}
+
 struct AuthorityAttributes {
   // whether parsed authority is pure ip address(IPv4/IPv6), if it is true
   // passed that are not FQDN
@@ -647,11 +680,10 @@ struct AuthorityAttributes {
 AuthorityAttributes parseAuthority(absl::string_view host);
 
 /**
- * It validates RetryPolicy defined in core api. It should be called at the main thread as
- * it may throw exception.
+ * It validates RetryPolicy defined in core api. It will return an error status if invalid.
  * @param retry_policy core retry policy
  */
-void validateCoreRetryPolicy(const envoy::config::core::v3::RetryPolicy& retry_policy);
+absl::Status validateCoreRetryPolicy(const envoy::config::core::v3::RetryPolicy& retry_policy);
 
 /**
  * It returns RetryPolicy defined in core api to route api.

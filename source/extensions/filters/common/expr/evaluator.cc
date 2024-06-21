@@ -16,7 +16,7 @@ namespace {
 
 #define ACTIVATION_TOKENS(_f)                                                                      \
   _f(Request) _f(Response) _f(Connection) _f(Upstream) _f(Source) _f(Destination) _f(Metadata)     \
-      _f(FilterState) _f(XDS)
+      _f(FilterState) _f(XDS) _f(UpstreamFilterState)
 
 #define _DECLARE(_t) _t,
 enum class ActivationToken { ACTIVATION_TOKENS(_DECLARE) };
@@ -34,15 +34,19 @@ const ActivationLookupTable& getActivationTokens() {
 
 absl::optional<CelValue> StreamActivation::FindValue(absl::string_view name,
                                                      Protobuf::Arena* arena) const {
-  if (activation_info_ == nullptr) {
-    return {};
-  }
-  const StreamInfo::StreamInfo& info = *activation_info_;
   const auto& tokens = getActivationTokens();
   const auto token = tokens.find(name);
   if (token == tokens.end()) {
     return {};
   }
+  if (token->second == ActivationToken::XDS) {
+    return CelValue::CreateMap(
+        Protobuf::Arena::Create<XDSWrapper>(arena, *arena, activation_info_, local_info_));
+  }
+  if (activation_info_ == nullptr) {
+    return {};
+  }
+  const StreamInfo::StreamInfo& info = *activation_info_;
   switch (token->second) {
   case ActivationToken::Request:
     return CelValue::CreateMap(
@@ -64,8 +68,13 @@ absl::optional<CelValue> StreamActivation::FindValue(absl::string_view name,
     return CelValue::CreateMap(
         Protobuf::Arena::Create<FilterStateWrapper>(arena, *arena, info.filterState()));
   case ActivationToken::XDS:
-    return CelValue::CreateMap(
-        Protobuf::Arena::Create<XDSWrapper>(arena, *arena, info, local_info_));
+    return {};
+  case ActivationToken::UpstreamFilterState:
+    if (info.upstreamInfo().has_value() &&
+        info.upstreamInfo().value().get().upstreamFilterState() != nullptr) {
+      return CelValue::CreateMap(Protobuf::Arena::Create<FilterStateWrapper>(
+          arena, *arena, *info.upstreamInfo().value().get().upstreamFilterState()));
+    }
   }
   return {};
 }

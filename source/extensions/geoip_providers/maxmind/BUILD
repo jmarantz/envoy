@@ -16,6 +16,7 @@ envoy_cc_extension(
     name = "config",
     srcs = select({
         "//bazel:linux": ["config.cc"],
+        "//bazel:darwin_any": ["config.cc"],
         "//conditions:default": [],
     }),
     hdrs = ["config.h"],
@@ -34,12 +35,13 @@ envoy_cc_library(
     name = "provider_impl",
     srcs = select({
         "//bazel:linux": ["geoip_provider.cc"],
+        "//bazel:darwin_any": ["geoip_provider.cc"],
         "//conditions:default": [],
     }),
     hdrs = ["geoip_provider.h"],
-    external_deps = ["maxmind"],
     tags = ["skip_on_windows"],
     deps = [
+        "//bazel/foreign_cc:maxmind_linux_darwin",
         "//envoy/geoip:geoip_provider_driver_interface",
         "@envoy_api//envoy/extensions/geoip_providers/maxmind/v3:pkg_cc_proto",
     ],

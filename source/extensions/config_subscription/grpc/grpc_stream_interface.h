@@ -11,6 +11,8 @@ namespace Config {
 template <class RequestProto, class ResponseProto>
 class GrpcStreamInterface : public Grpc::AsyncStreamCallbacks<ResponseProto> {
 public:
+  ~GrpcStreamInterface() override = default;
+
   // Attempt to establish a new gRPC stream to the xDS server.
   virtual void establishNewStream() PURE;
 
@@ -31,9 +33,12 @@ public:
   // The rate-limiting counters may be updated by this method.
   virtual bool checkRateLimitAllowsDrain() PURE;
 
-  // Returns the current close-status, if set.
-  virtual absl::optional<Grpc::Status::GrpcStatus> getCloseStatusForTest() const PURE;
+  // Intentionally close the gRPC stream and reset to the pre-establishNewStream() state.
+  // Prevents the retry timer from reconnecting.
+  virtual void closeStream() PURE;
 };
 
+template <class RequestProto, class ResponseProto>
+using GrpcStreamInterfacePtr = std::unique_ptr<GrpcStreamInterface<RequestProto, ResponseProto>>;
 } // namespace Config
 } // namespace Envoy

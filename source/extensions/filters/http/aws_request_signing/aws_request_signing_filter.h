@@ -54,7 +54,7 @@ public:
   virtual const std::string& hostRewrite() const PURE;
 
   /**
-   * @return  whether or not to buffer and sign the payload.
+   * @return whether or not to buffer and sign the payload.
    */
   virtual bool useUnsignedPayload() const PURE;
 };

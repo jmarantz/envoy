@@ -37,7 +37,7 @@ jobs:
       contents: read
       packages: read
     uses: ./.github/workflows/_mobile_container_ci.yml
-    if: ${{ fromJSON(needs.load.outputs.request).run.mobile-compile-time-options }}
+    if: ${{ fromJSON(needs.load.outputs.request).run.mobile-compile-time-cc }}
     needs: load
     with:
       args: ${{ matrix.args }}
@@ -50,29 +50,24 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        - name: Running C++ test with YAML disabled
-          target: cc-test-no-yaml
-          args: >-
-            build
-            --config=mobile-remote-ci-cc-no-yaml
-            //test/common/integration:client_integration_test
         - name: Running C++ build with exceptions disabled
           target: cc-no-build-exceptions
           args: >-
             build
             --config=mobile-remote-ci-cc-no-exceptions
             //test/performance:test_binary_size //library/cc/...
-        - name: Running C++ test
-          target: cc-test
+        - name: Running C++ tests with xDS enabled
+          target: cc-tests-xds-enabled
           args: >-
             test
-            --config=mobile-remote-ci-cc-test
-          entrypoint: |
-            #!/bin/bash -e
-            export PATH=/opt/llvm/bin:$PATH
-            cd /source/mobile
-            EXTRA_ARGS=$(bazel query //test/cc/... + //test/common/... except //test/common/integration:client_integration_test)
-            exec "$@" $EXTRA_ARGS
+            --config=mobile-remote-ci-cc-xds-enabled
+            //test/common/integration/...
+        - name: Running C++ tests with full protos enabled
+          target: cc-tests-full-protos-enabled
+          args: >-
+            test
+            --config=mobile-remote-ci-cc-full-protos-enabled
+            //test/common/... //test/cc/...
 
   build:
     permissions:
@@ -97,29 +92,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        - name: kotlin-build
-          args: >-
-            build
-            --config=mobile-remote-ci-macos-kotlin
-            //:android_dist
-          source: |
-            . ./ci/mac_ci_setup.sh --android
-            echo "ANDROID_NDK_HOME=${ANDROID_NDK_HOME}" >> $GITHUB_ENV
-            export ANDROID_NDK_HOME
-          steps-pre: |
-            - uses: actions/setup-java@0ab4596768b603586c0de567f2430c30f5b0d2b0  # v3.13.0
-              with:
-                java-version: '8'
-                java-package: jdk
-                architecture: x64
-                distribution: zulu
         - name: swift-build
           args: >-
             build
             --config=mobile-remote-ci-macos-swift
             //library/swift:ios_framework
           source: |
-            ./ci/mac_ci_setup.sh
+            source ./ci/mac_ci_setup.sh
             ./bazelw shutdown
 
   request:
@@ -133,7 +112,8 @@ jobs:
     if: >-
       ${{ always()
           && github.event.workflow_run.conclusion == 'success'
-          && fromJSON(needs.load.outputs.request).run.mobile-compile-time-options }}
+          && (fromJSON(needs.load.outputs.request).run.mobile-compile-time-options
+              || fromJSON(needs.load.outputs.request).run.mobile-compile-time-cc) }}
     needs:
     - load
     - cc

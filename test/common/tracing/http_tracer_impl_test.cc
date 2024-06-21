@@ -350,7 +350,7 @@ TEST_F(HttpConnManFinalizerImplTest, UnixDomainSocketPeerAddressTag) {
   Http::TestResponseHeaderMapImpl response_headers;
   Http::TestResponseTrailerMapImpl response_trailers;
   const std::string path_{TestEnvironment::unixDomainSocketPath("foo")};
-  const auto remote_address = Network::Utility::resolveUrl("unix://" + path_);
+  const auto remote_address = *Network::Utility::resolveUrl("unix://" + path_);
 
   stream_info.downstream_connection_info_provider_->setDirectRemoteAddressForTest(remote_address);
 
@@ -519,9 +519,7 @@ TEST_F(HttpConnManFinalizerImplTest, SpanPopulatedFailureResponse) {
   absl::optional<uint32_t> response_code(503);
   EXPECT_CALL(stream_info, responseCode()).WillRepeatedly(ReturnPointee(&response_code));
   EXPECT_CALL(stream_info, bytesSent()).WillOnce(Return(100));
-  ON_CALL(stream_info, hasResponseFlag(StreamInfo::ResponseFlag::UpstreamRequestTimeout))
-      .WillByDefault(Return(true));
-  stream_info.upstreamInfo()->setUpstreamHost(nullptr);
+  stream_info.setResponseFlag(StreamInfo::CoreResponseFlag::UpstreamRequestTimeout);
 
   EXPECT_CALL(span, setTag(Eq(Tracing::Tags::get().Error), Eq(Tracing::Tags::get().True)));
   EXPECT_CALL(span, setTag(Eq(Tracing::Tags::get().HttpStatusCode), Eq("503")));

@@ -67,6 +67,7 @@ class AdminImpl : public Admin,
                   public Network::FilterChainFactory,
                   public Http::FilterChainFactory,
                   public Http::ConnectionManagerConfig,
+                  public std::enable_shared_from_this<AdminImpl>,
                   Logger::Loggable<Logger::Id::admin> {
 public:
   AdminImpl(const std::string& profile_path, Server::Instance& server,
@@ -162,6 +163,7 @@ public:
   OptRef<const Router::ScopeKeyBuilder> scopeKeyBuilder() override { return scope_key_builder_; }
   const std::string& serverName() const override { return Http::DefaultServerString::get(); }
   const absl::optional<std::string>& schemeToSet() const override { return scheme_; }
+  bool shouldSchemeMatchUpstream() const override { return scheme_match_upstream_; }
   HttpConnectionManagerProto::ServerHeaderTransformation
   serverHeaderTransformation() const override {
     return HttpConnectionManagerProto::OVERWRITE;
@@ -219,6 +221,7 @@ public:
   GenRequestFn createRequestFunction() const {
     return [this](AdminStream& admin_stream) -> RequestPtr { return makeRequest(admin_stream, false); };
   }
+
   uint64_t maxRequestsPerConnection() const override { return 0; }
   const HttpConnectionManagerProto::ProxyStatusConfig* proxyStatusConfig() const override {
     return proxy_status_config_.get();
@@ -235,6 +238,7 @@ public:
     return nullptr;
 #endif
   }
+  bool appendLocalOverload() const override { return false; }
   bool appendXForwardedPort() const override { return false; }
   bool addProxyProtocolConnectionState() const override { return true; }
 
@@ -248,7 +252,8 @@ private:
   /**
    * Creates a Request from the request in the admin stream.
    */
-  RequestPtr makeRequest(AdminStream& admin_stream, bool html_active) const;
+  //RequestPtr makeRequest(AdminStream& admin_stream, bool html_active) const;
+  RequestPtr makeRequest(AdminStream& admin_stream) const override;
 
   /**
    * Creates a UrlHandler structure from a non-chunked callback.
@@ -407,6 +412,7 @@ private:
     }
     Init::Manager& initManager() override { return *init_manager_; }
     bool ignoreGlobalConnLimit() const override { return ignore_global_conn_limit_; }
+    bool shouldBypassOverloadManager() const override { return true; }
 
     AdminImpl& parent_;
     const std::string name_;
@@ -498,6 +504,7 @@ private:
   const std::vector<Http::OriginalIPDetectionSharedPtr> detection_extensions_{};
   const std::vector<Http::EarlyHeaderMutationPtr> early_header_mutations_{};
   const absl::optional<std::string> scheme_{};
+  const bool scheme_match_upstream_ = false;
   const bool ignore_global_conn_limit_;
   std::unique_ptr<HttpConnectionManagerProto::ProxyStatusConfig> proxy_status_config_;
   const Http::HeaderValidatorFactoryPtr header_validator_factory_;

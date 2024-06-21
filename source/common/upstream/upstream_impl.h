@@ -57,7 +57,8 @@
 #include "source/common/network/utility.h"
 #include "source/common/shared_pool/shared_pool.h"
 #include "source/common/stats/isolated_store_impl.h"
-#include "source/common/upstream/load_balancer_impl.h"
+#include "source/common/upstream/edf_scheduler.h"
+#include "source/common/upstream/load_balancer_context_base.h"
 #include "source/common/upstream/resource_manager_impl.h"
 #include "source/common/upstream/transport_socket_match_impl.h"
 #include "source/common/upstream/upstream_factory_context_impl.h"
@@ -70,6 +71,9 @@
 
 namespace Envoy {
 namespace Upstream {
+
+// Priority levels and localities are considered overprovisioned with this factor.
+static constexpr uint32_t kDefaultOverProvisioningFactor = 140;
 
 using ClusterProto = envoy::config::cluster::v3::Cluster;
 
@@ -91,55 +95,6 @@ public:
   static absl::StatusOr<Result>
   getTypedLbConfigFromLegacyProto(const ClusterProto& cluster,
                                   ProtobufMessage::ValidationVisitor& visitor);
-};
-
-/**
- * Class for LBPolicies
- * Uses a absl::variant to store pointers for the LBPolicy
- */
-class LBPolicyConfig {
-public:
-  LBPolicyConfig(const envoy::config::cluster::v3::Cluster& config);
-
-  OptRef<const envoy::config::cluster::v3::Cluster::RoundRobinLbConfig> lbRoundRobinConfig() const {
-    return getConfig<envoy::config::cluster::v3::Cluster::RoundRobinLbConfig>();
-  }
-
-  OptRef<const envoy::config::cluster::v3::Cluster::LeastRequestLbConfig>
-  lbLeastRequestConfig() const {
-    return getConfig<envoy::config::cluster::v3::Cluster::LeastRequestLbConfig>();
-  }
-
-  OptRef<const envoy::config::cluster::v3::Cluster::RingHashLbConfig> lbRingHashConfig() const {
-    return getConfig<envoy::config::cluster::v3::Cluster::RingHashLbConfig>();
-  }
-
-  OptRef<const envoy::config::cluster::v3::Cluster::MaglevLbConfig> lbMaglevConfig() const {
-    return getConfig<envoy::config::cluster::v3::Cluster::MaglevLbConfig>();
-  }
-
-  OptRef<const envoy::config::cluster::v3::Cluster::OriginalDstLbConfig>
-  lbOriginalDstConfig() const {
-    return getConfig<envoy::config::cluster::v3::Cluster::OriginalDstLbConfig>();
-  }
-
-private:
-  template <typename T> OptRef<const T> getConfig() const {
-    // Condition checks for the type of LbConfig, it also checks that the value is not nullptr
-    // The Round Robin config being set to nullptr is the default value of the variant
-    if (const auto lbPtr = absl::get_if<std::unique_ptr<const T>>(&lb_policy_); lbPtr && *lbPtr) {
-      return *(*lbPtr);
-    } else {
-      return absl::nullopt;
-    }
-  }
-
-  absl::variant<std::unique_ptr<const envoy::config::cluster::v3::Cluster::RoundRobinLbConfig>,
-                std::unique_ptr<const envoy::config::cluster::v3::Cluster::LeastRequestLbConfig>,
-                std::unique_ptr<const envoy::config::cluster::v3::Cluster::RingHashLbConfig>,
-                std::unique_ptr<const envoy::config::cluster::v3::Cluster::MaglevLbConfig>,
-                std::unique_ptr<const envoy::config::cluster::v3::Cluster::OriginalDstLbConfig>>
-      lb_policy_;
 };
 
 /**
@@ -183,12 +138,25 @@ private:
 };
 
 /**
- * Implementation of Upstream::HostDescription.
+ * Base implementation of most of Upstream::HostDescription, shared between
+ * HostDescriptionImpl and LogicalHost, which is in
+ * source/extensions/clusters/common/logical_host.h. These differ in threading.
+ *
+ * HostDescriptionImpl and HostImpl are intended to be initialized in the main
+ * thread, and are thereafter read-only, and thus do not require locking.
+ *
+ * LogicalHostImpl is intended to be dynamically changed due to DNS resolution
+ * and Happy Eyeballs from multiple threads, and thus requires an address_lock
+ * and lock annotations to enforce this.
+ *
+ * The two level implementation inheritance allows most of the implementation
+ * to be shared, but sinks the ones requiring different lock semantics into
+ * the leaf subclasses.
  */
-class HostDescriptionImpl : virtual public HostDescription,
-                            protected Logger::Loggable<Logger::Id::upstream> {
+class HostDescriptionImplBase : virtual public HostDescription,
+                                protected Logger::Loggable<Logger::Id::upstream> {
 public:
-  HostDescriptionImpl(
+  HostDescriptionImplBase(
       ClusterInfoConstSharedPtr cluster, const std::string& hostname,
       Network::Address::InstanceConstSharedPtr dest_address, MetadataConstSharedPtr metadata,
       const envoy::config::core::v3::Locality& locality,
@@ -214,7 +182,7 @@ public:
     return metadata_;
   }
   void metadata(MetadataConstSharedPtr new_metadata) override {
-    auto& new_socket_factory = resolveTransportSocketFactory(address_, new_metadata.get());
+    auto& new_socket_factory = resolveTransportSocketFactory(address(), new_metadata.get());
     {
       absl::WriterMutexLock lock(&metadata_mutex_);
       metadata_ = new_metadata;
@@ -253,13 +221,6 @@ public:
   LoadMetricStats& loadMetricStats() const override { return load_metric_stats_; }
   const std::string& hostnameForHealthChecks() const override { return health_checks_hostname_; }
   const std::string& hostname() const override { return hostname_; }
-  Network::Address::InstanceConstSharedPtr address() const override { return address_; }
-  const std::vector<Network::Address::InstanceConstSharedPtr>& addressList() const override {
-    return address_list_;
-  }
-  Network::Address::InstanceConstSharedPtr healthCheckAddress() const override {
-    return health_check_address_;
-  }
   const envoy::config::core::v3::Locality& locality() const override { return locality_; }
   Stats::StatName localityZoneStatName() const override {
     return locality_zone_stat_name_.statName();
@@ -268,41 +229,33 @@ public:
   void priority(uint32_t priority) override { priority_ = priority; }
   Network::UpstreamTransportSocketFactory&
   resolveTransportSocketFactory(const Network::Address::InstanceConstSharedPtr& dest_address,
-                                const envoy::config::core::v3::Metadata* metadata) const;
+                                const envoy::config::core::v3::Metadata* metadata) const override;
   absl::optional<MonotonicTime> lastHcPassTime() const override { return last_hc_pass_time_; }
 
-  void setAddressList(const std::vector<Network::Address::InstanceConstSharedPtr>& address_list) {
-    address_list_ = address_list;
-    ASSERT(address_list_.empty() || *address_list_.front() == *address_);
-  }
-
-protected:
-  void setAddress(Network::Address::InstanceConstSharedPtr address) { address_ = address; }
-
-  void setHealthCheckAddress(Network::Address::InstanceConstSharedPtr address) {
-    health_check_address_ = address;
-  }
-
-  void setHealthCheckerImpl(HealthCheckHostMonitorPtr&& health_checker) {
+  void setHealthChecker(HealthCheckHostMonitorPtr&& health_checker) override {
     health_checker_ = std::move(health_checker);
   }
 
-  void setOutlierDetectorImpl(Outlier::DetectorHostMonitorPtr&& outlier_detector) {
+  void setOutlierDetector(Outlier::DetectorHostMonitorPtr&& outlier_detector) override {
     outlier_detector_ = std::move(outlier_detector);
   }
 
-  void setLastHcPassTimeImpl(MonotonicTime last_hc_pass_time) {
+  void setLastHcPassTime(MonotonicTime last_hc_pass_time) override {
     last_hc_pass_time_.emplace(std::move(last_hc_pass_time));
   }
+
+protected:
+  /**
+   * @return nullptr if address_list is empty, otherwise a shared_ptr copy of address_list.
+   */
+  static SharedConstAddressVector
+  makeAddressListOrNull(const Network::Address::InstanceConstSharedPtr& address,
+                        const AddressVector& address_list);
 
 private:
   ClusterInfoConstSharedPtr cluster_;
   const std::string hostname_;
   const std::string health_checks_hostname_;
-  Network::Address::InstanceConstSharedPtr address_;
-  // The first entry in the address_list_ should match the value in address_.
-  std::vector<Network::Address::InstanceConstSharedPtr> address_list_;
-  Network::Address::InstanceConstSharedPtr health_check_address_;
   std::atomic<bool> canary_;
   mutable absl::Mutex metadata_mutex_;
   MetadataConstSharedPtr metadata_ ABSL_GUARDED_BY(metadata_mutex_);
@@ -320,25 +273,54 @@ private:
 };
 
 /**
+ * Final implementation of most of Upstream::HostDescription, providing const
+ * of the address-related member variables.
+ *
+ * See also LogicalHostDescriptionImpl in
+ * source/extensions/clusters/common/logical_host.h for a variant that allows
+ * safe dynamic update to addresses.
+ */
+class HostDescriptionImpl : public HostDescriptionImplBase {
+public:
+  HostDescriptionImpl(
+      ClusterInfoConstSharedPtr cluster, const std::string& hostname,
+      Network::Address::InstanceConstSharedPtr dest_address, MetadataConstSharedPtr metadata,
+      const envoy::config::core::v3::Locality& locality,
+      const envoy::config::endpoint::v3::Endpoint::HealthCheckConfig& health_check_config,
+      uint32_t priority, TimeSource& time_source, const AddressVector& address_list = {});
+
+  // HostDescription
+  Network::Address::InstanceConstSharedPtr address() const override { return address_; }
+  Network::Address::InstanceConstSharedPtr healthCheckAddress() const override {
+    return health_check_address_;
+  }
+  SharedConstAddressVector addressListOrNull() const override { return address_list_or_null_; }
+
+private:
+  // No locks are required in this implementation: all address-related member
+  // variables are set at construction and never change. See
+  // LogicalHostDescription in source/extensions/clusters/common/logical_host.h
+  // for an alternative that supports dynamic update.
+  const Network::Address::InstanceConstSharedPtr address_;
+  const SharedConstAddressVector address_list_or_null_;
+  const Network::Address::InstanceConstSharedPtr health_check_address_;
+};
+
+/**
  * Implementation of Upstream::Host.
  */
-class HostImpl : public HostDescriptionImpl,
-                 public Host,
-                 public std::enable_shared_from_this<HostImpl> {
+class HostImplBase : public Host,
+                     protected Logger::Loggable<Logger::Id::upstream>,
+                     public std::enable_shared_from_this<HostImplBase> {
 public:
-  HostImpl(ClusterInfoConstSharedPtr cluster, const std::string& hostname,
-           Network::Address::InstanceConstSharedPtr address, MetadataConstSharedPtr metadata,
-           uint32_t initial_weight, const envoy::config::core::v3::Locality& locality,
-           const envoy::config::endpoint::v3::Endpoint::HealthCheckConfig& health_check_config,
-           uint32_t priority, const envoy::config::core::v3::HealthStatus health_status,
-           TimeSource& time_source)
-      : HostDescriptionImpl(cluster, hostname, address, metadata, locality, health_check_config,
-                            priority, time_source),
-        disable_active_health_check_(health_check_config.disable_active_health_check()) {
+  HostImplBase(uint32_t initial_weight,
+               const envoy::config::endpoint::v3::Endpoint::HealthCheckConfig& health_check_config,
+               const envoy::config::core::v3::HealthStatus health_status)
+      : disable_active_health_check_(health_check_config.disable_active_health_check()) {
     // This EDS flags setting is still necessary for stats, configuration dump, canonical
     // coarseHealth() etc.
-    HostImpl::setEdsHealthStatus(health_status);
-    HostImpl::weight(initial_weight);
+    HostImplBase::setEdsHealthStatus(health_status);
+    HostImplBase::weight(initial_weight);
   }
 
   bool disableActiveHealthCheck() const override { return disable_active_health_check_; }
@@ -369,17 +351,6 @@ public:
   uint32_t healthFlagsGetAll() const override { return health_flags_; }
   void healthFlagsSetAll(uint32_t bits) override { health_flags_ |= bits; }
 
-  void setHealthChecker(HealthCheckHostMonitorPtr&& health_checker) override {
-    setHealthCheckerImpl(std::move(health_checker));
-  }
-  void setOutlierDetector(Outlier::DetectorHostMonitorPtr&& outlier_detector) override {
-    setOutlierDetectorImpl(std::move(outlier_detector));
-  }
-
-  void setLastHcPassTime(MonotonicTime last_hc_pass_time) override {
-    setLastHcPassTimeImpl(std::move(last_hc_pass_time));
-  }
-
   Host::HealthStatus healthStatus() const override {
     // Evaluate active health status first.
 
@@ -409,7 +380,8 @@ public:
     // If any of the unhealthy flags are set, host is unhealthy.
     if (healthFlagsGet(enumToInt(HealthFlag::FAILED_ACTIVE_HC) |
                        enumToInt(HealthFlag::FAILED_OUTLIER_CHECK) |
-                       enumToInt(HealthFlag::FAILED_EDS_HEALTH))) {
+                       enumToInt(HealthFlag::FAILED_EDS_HEALTH) |
+                       enumToInt(HealthFlag::EDS_STATUS_DRAINING))) {
       return Host::Health::Unhealthy;
     }
 
@@ -443,7 +415,7 @@ protected:
   static CreateConnectionData
   createConnection(Event::Dispatcher& dispatcher, const ClusterInfo& cluster,
                    const Network::Address::InstanceConstSharedPtr& address,
-                   const std::vector<Network::Address::InstanceConstSharedPtr>& address_list,
+                   const SharedConstAddressVector& address_list,
                    Network::UpstreamTransportSocketFactory& socket_factory,
                    const Network::ConnectionSocket::OptionsSharedPtr& options,
                    Network::TransportSocketOptionsConstSharedPtr transport_socket_options,
@@ -464,7 +436,7 @@ private:
   std::atomic<Host::HealthStatus> eds_health_status_{};
 
   struct HostHandleImpl : HostHandle {
-    HostHandleImpl(const std::shared_ptr<const HostImpl>& parent) : parent_(parent) {
+    HostHandleImpl(const std::shared_ptr<const HostImplBase>& parent) : parent_(parent) {
       parent->handle_count_++;
     }
     ~HostHandleImpl() override {
@@ -473,9 +445,22 @@ private:
         host->handle_count_--;
       }
     }
-    const std::weak_ptr<const HostImpl> parent_;
+    const std::weak_ptr<const HostImplBase> parent_;
   };
   mutable std::atomic<uint32_t> handle_count_{};
+};
+
+class HostImpl : public HostImplBase, public HostDescriptionImpl {
+public:
+  HostImpl(ClusterInfoConstSharedPtr cluster, const std::string& hostname,
+           Network::Address::InstanceConstSharedPtr address, MetadataConstSharedPtr metadata,
+           uint32_t initial_weight, const envoy::config::core::v3::Locality& locality,
+           const envoy::config::endpoint::v3::Endpoint::HealthCheckConfig& health_check_config,
+           uint32_t priority, const envoy::config::core::v3::HealthStatus health_status,
+           TimeSource& time_source, const AddressVector& address_list = {})
+      : HostImplBase(initial_weight, health_check_config, health_status),
+        HostDescriptionImpl(cluster, hostname, address, metadata, locality, health_check_config,
+                            priority, time_source, address_list) {}
 };
 
 class HostsPerLocalityImpl : public HostsPerLocality {
@@ -600,13 +585,13 @@ public:
 
   void updateHosts(PrioritySet::UpdateHostsParams&& update_hosts_params,
                    LocalityWeightsConstSharedPtr locality_weights, const HostVector& hosts_added,
-                   const HostVector& hosts_removed,
+                   const HostVector& hosts_removed, uint64_t seed,
                    absl::optional<bool> weighted_priority_health = absl::nullopt,
                    absl::optional<uint32_t> overprovisioning_factor = absl::nullopt);
 
 protected:
   virtual void runUpdateCallbacks(const HostVector& hosts_added, const HostVector& hosts_removed) {
-    member_update_cb_helper_.runCallbacks(priority_, hosts_added, hosts_removed);
+    THROW_IF_NOT_OK(member_update_cb_helper_.runCallbacks(priority_, hosts_added, hosts_removed));
   }
 
 private:
@@ -656,13 +641,18 @@ private:
   // @param locality_weights the weighting of each locality.
   // @param overprovisioning_factor the overprovisioning factor to use when computing the effective
   // weight of a locality.
-  static void rebuildLocalityScheduler(
-      std::unique_ptr<EdfScheduler<LocalityEntry>>& locality_scheduler,
-      std::vector<std::shared_ptr<LocalityEntry>>& locality_entries,
-      const HostsPerLocality& eligible_hosts_per_locality, const HostVector& eligible_hosts,
-      HostsPerLocalityConstSharedPtr all_hosts_per_locality,
-      HostsPerLocalityConstSharedPtr excluded_hosts_per_locality,
-      LocalityWeightsConstSharedPtr locality_weights, uint32_t overprovisioning_factor);
+  // @param seed a random number of initial picks to "invoke" on the locality scheduler. This
+  // allows to distribute the load between different localities across worker threads and a fleet
+  // of Envoys.
+  static void
+  rebuildLocalityScheduler(std::unique_ptr<EdfScheduler<LocalityEntry>>& locality_scheduler,
+                           std::vector<std::shared_ptr<LocalityEntry>>& locality_entries,
+                           const HostsPerLocality& eligible_hosts_per_locality,
+                           const HostVector& eligible_hosts,
+                           HostsPerLocalityConstSharedPtr all_hosts_per_locality,
+                           HostsPerLocalityConstSharedPtr excluded_hosts_per_locality,
+                           LocalityWeightsConstSharedPtr locality_weights,
+                           uint32_t overprovisioning_factor, uint64_t seed);
 
   static absl::optional<uint32_t> chooseLocality(EdfScheduler<LocalityEntry>* locality_scheduler);
 
@@ -700,7 +690,7 @@ public:
 
   void updateHosts(uint32_t priority, UpdateHostsParams&& update_hosts_params,
                    LocalityWeightsConstSharedPtr locality_weights, const HostVector& hosts_added,
-                   const HostVector& hosts_removed,
+                   const HostVector& hosts_removed, uint64_t seed,
                    absl::optional<bool> weighted_priority_health = absl::nullopt,
                    absl::optional<uint32_t> overprovisioning_factor = absl::nullopt,
                    HostMapConstSharedPtr cross_priority_host_map = nullptr) override;
@@ -722,11 +712,11 @@ protected:
 
 protected:
   virtual void runUpdateCallbacks(const HostVector& hosts_added, const HostVector& hosts_removed) {
-    member_update_cb_helper_.runCallbacks(hosts_added, hosts_removed);
+    THROW_IF_NOT_OK(member_update_cb_helper_.runCallbacks(hosts_added, hosts_removed));
   }
   virtual void runReferenceUpdateCallbacks(uint32_t priority, const HostVector& hosts_added,
                                            const HostVector& hosts_removed) {
-    priority_update_cb_helper_.runCallbacks(priority, hosts_added, hosts_removed);
+    THROW_IF_NOT_OK(priority_update_cb_helper_.runCallbacks(priority, hosts_added, hosts_removed));
   }
   // This vector will generally have at least one member, for priority level 0.
   // It will expand as host sets are added but currently does not shrink to
@@ -759,7 +749,8 @@ private:
 
     void updateHosts(uint32_t priority, PrioritySet::UpdateHostsParams&& update_hosts_params,
                      LocalityWeightsConstSharedPtr locality_weights, const HostVector& hosts_added,
-                     const HostVector& hosts_removed, absl::optional<bool> weighted_priority_health,
+                     const HostVector& hosts_removed, uint64_t seed,
+                     absl::optional<bool> weighted_priority_health,
                      absl::optional<uint32_t> overprovisioning_factor) override;
 
     absl::node_hash_set<HostSharedPtr> all_hosts_added_;
@@ -780,7 +771,7 @@ public:
   // PrioritySet
   void updateHosts(uint32_t priority, UpdateHostsParams&& update_hosts_params,
                    LocalityWeightsConstSharedPtr locality_weights, const HostVector& hosts_added,
-                   const HostVector& hosts_removed,
+                   const HostVector& hosts_removed, uint64_t seed,
                    absl::optional<bool> weighted_priority_health = absl::nullopt,
                    absl::optional<uint32_t> overprovisioning_factor = absl::nullopt,
                    HostMapConstSharedPtr cross_priority_host_map = nullptr) override;
@@ -828,7 +819,10 @@ public:
   OptRef<const LoadBalancerConfig> loadBalancerConfig() const override {
     return makeOptRefFromPtr<const LoadBalancerConfig>(load_balancer_config_.get());
   }
-  TypedLoadBalancerFactory* loadBalancerFactory() const override { return load_balancer_factory_; }
+  TypedLoadBalancerFactory& loadBalancerFactory() const override {
+    ASSERT(load_balancer_factory_ != nullptr, "null load balancer factory");
+    return *load_balancer_factory_;
+  }
   const envoy::config::cluster::v3::Cluster::CommonLbConfig& lbConfig() const override {
     return *common_lb_config_;
   }
@@ -880,11 +874,10 @@ public:
   const envoy::config::core::v3::HttpProtocolOptions& commonHttpProtocolOptions() const override {
     return http_protocol_options_->common_http_protocol_options_;
   }
-  void configureLbPolicies(const envoy::config::cluster::v3::Cluster& config,
-                           Server::Configuration::ServerFactoryContext& context);
+  absl::Status configureLbPolicies(const envoy::config::cluster::v3::Cluster& config,
+                                   Server::Configuration::ServerFactoryContext& context);
   ProtocolOptionsConfigConstSharedPtr
   extensionProtocolOptions(const std::string& name) const override;
-  LoadBalancerType lbType() const override { return lb_type_; }
   envoy::config::cluster::v3::Cluster::DiscoveryType type() const override { return type_; }
 
   OptRef<const envoy::config::cluster::v3::Cluster::CustomClusterType>
@@ -893,46 +886,6 @@ public:
       return absl::nullopt;
     }
     return *cluster_type_;
-  }
-  OptRef<const envoy::config::cluster::v3::Cluster::RoundRobinLbConfig>
-  lbRoundRobinConfig() const override {
-    if (lb_policy_config_ == nullptr) {
-      return {};
-    }
-
-    return lb_policy_config_->lbRoundRobinConfig();
-  }
-  OptRef<const envoy::config::cluster::v3::Cluster::LeastRequestLbConfig>
-  lbLeastRequestConfig() const override {
-    if (lb_policy_config_ == nullptr) {
-      return {};
-    }
-
-    return lb_policy_config_->lbLeastRequestConfig();
-  }
-  OptRef<const envoy::config::cluster::v3::Cluster::RingHashLbConfig>
-  lbRingHashConfig() const override {
-    if (lb_policy_config_ == nullptr) {
-      return {};
-    }
-
-    return lb_policy_config_->lbRingHashConfig();
-  }
-  OptRef<const envoy::config::cluster::v3::Cluster::MaglevLbConfig>
-  lbMaglevConfig() const override {
-    if (lb_policy_config_ == nullptr) {
-      return {};
-    }
-
-    return lb_policy_config_->lbMaglevConfig();
-  }
-  OptRef<const envoy::config::cluster::v3::Cluster::OriginalDstLbConfig>
-  lbOriginalDstConfig() const override {
-    if (lb_policy_config_ == nullptr) {
-      return {};
-    }
-
-    return lb_policy_config_->lbOriginalDstConfig();
   }
   OptRef<const envoy::config::core::v3::TypedExtensionConfig> upstreamConfig() const override {
     if (upstream_config_ == nullptr) {
@@ -984,12 +937,6 @@ public:
 
   UpstreamLocalAddressSelectorConstSharedPtr getUpstreamLocalAddressSelector() const override {
     return upstream_local_address_selector_;
-  }
-  const LoadBalancerSubsetInfo& lbSubsetInfo() const override {
-    if (lb_subset_ != nullptr) {
-      return *lb_subset_;
-    }
-    return DefaultLoadBalancerSubsetInfoImpl::get();
   }
   using DefaultMetadata = ConstSingleton<envoy::config::core::v3::Metadata>;
   const envoy::config::core::v3::Metadata& metadata() const override {
@@ -1053,6 +1000,11 @@ public:
   Http::Http3::CodecStats& http3CodecStats() const override;
   Http::ClientHeaderValidatorPtr makeHeaderValidator(Http::Protocol protocol) const override;
 
+  const absl::optional<envoy::config::cluster::v3::UpstreamConnectionOptions::HappyEyeballsConfig>
+  happyEyeballsConfig() const override {
+    return happy_eyeballs_config_;
+  }
+
 protected:
   // Gets the retry budget percent/concurrency from the circuit breaker thresholds. If the retry
   // budget message is specified, defaults will be filled in if either params are unspecified.
@@ -1068,10 +1020,10 @@ private:
     ResourceManagers(const envoy::config::cluster::v3::Cluster& config, Runtime::Loader& runtime,
                      const std::string& cluster_name, Stats::Scope& stats_scope,
                      const ClusterCircuitBreakersStatNames& circuit_breakers_stat_names);
-    ResourceManagerImplPtr load(const envoy::config::cluster::v3::Cluster& config,
-                                Runtime::Loader& runtime, const std::string& cluster_name,
-                                Stats::Scope& stats_scope,
-                                const envoy::config::core::v3::RoutingPriority& priority);
+    absl::StatusOr<ResourceManagerImplPtr>
+    load(const envoy::config::cluster::v3::Cluster& config, Runtime::Loader& runtime,
+         const std::string& cluster_name, Stats::Scope& stats_scope,
+         const envoy::config::core::v3::RoutingPriority& priority);
 
     using Managers = std::array<ResourceManagerImplPtr, NumResourcePriorities>;
 
@@ -1116,9 +1068,7 @@ private:
   mutable ResourceManagers resource_managers_;
   const std::string maintenance_mode_runtime_key_;
   UpstreamLocalAddressSelectorConstSharedPtr upstream_local_address_selector_;
-  std::unique_ptr<const LBPolicyConfig> lb_policy_config_;
   std::unique_ptr<envoy::config::core::v3::TypedExtensionConfig> upstream_config_;
-  std::unique_ptr<LoadBalancerSubsetInfoImpl> lb_subset_;
   std::unique_ptr<const envoy::config::core::v3::Metadata> metadata_;
   std::unique_ptr<ClusterTypedMetadata> typed_metadata_;
   LoadBalancerConfigPtr load_balancer_config_;
@@ -1127,10 +1077,11 @@ private:
       common_lb_config_;
   std::unique_ptr<const envoy::config::cluster::v3::Cluster::CustomClusterType> cluster_type_;
   // TODO(ohadvano): http_filter_config_provider_manager_ and
-  // network_filter_config_provider_manager_ should be maintained in the ClusterManager object as a
-  // singleton. This is currently not possible due to circular dependency (filter config provider
-  // manager depends on the ClusterManager object). The circular dependency can be resolved when the
-  // following issue is resolved: https://github.com/envoyproxy/envoy/issues/26653.
+  // network_filter_config_provider_manager_ should be maintained in the ClusterManager object as
+  // a singleton. This is currently not possible due to circular dependency (filter config
+  // provider manager depends on the ClusterManager object). The circular dependency can be
+  // resolved when the following issue is resolved:
+  // https://github.com/envoyproxy/envoy/issues/26653.
   std::shared_ptr<Http::UpstreamFilterConfigProviderManager> http_filter_config_provider_manager_;
   std::shared_ptr<UpstreamNetworkFilterConfigProviderManager>
       network_filter_config_provider_manager_;
@@ -1145,7 +1096,6 @@ private:
   // overhead via alignment
   const uint32_t per_connection_buffer_limit_bytes_;
   const uint32_t max_response_headers_count_;
-  LoadBalancerType lb_type_;
   const envoy::config::cluster::v3::Cluster::DiscoveryType type_;
   const bool drain_connections_on_host_removal_ : 1;
   const bool connection_pool_per_downstream_connection_ : 1;
@@ -1155,6 +1105,8 @@ private:
   // true iff the cluster proto specified upstream http filters.
   bool has_configured_http_filters_ : 1;
   const bool per_endpoint_stats_ : 1;
+  const absl::optional<envoy::config::cluster::v3::UpstreamConnectionOptions::HappyEyeballsConfig>
+      happy_eyeballs_config_;
 };
 
 /**
@@ -1162,7 +1114,7 @@ private:
  * given a cluster configuration and transport socket factory
  * context.
  */
-Network::UpstreamTransportSocketFactoryPtr
+absl::StatusOr<Network::UpstreamTransportSocketFactoryPtr>
 createTransportSocketFactory(const envoy::config::cluster::v3::Cluster& config,
                              Server::Configuration::TransportSocketFactoryContext& factory_context);
 
@@ -1195,7 +1147,7 @@ public:
    * @param address supplies the address proto to resolve.
    * @return Network::Address::InstanceConstSharedPtr the resolved address.
    */
-  const Network::Address::InstanceConstSharedPtr
+  absl::StatusOr<const Network::Address::InstanceConstSharedPtr>
   resolveProtoAddress(const envoy::config::core::v3::Address& address);
 
   // Partitions the provided list of hosts into three new lists containing the healthy, degraded
@@ -1204,8 +1156,8 @@ public:
                     ExcludedHostVectorConstSharedPtr>
   partitionHostList(const HostVector& hosts);
 
-  // Partitions the provided list of hosts per locality into three new lists containing the healthy,
-  // degraded and excluded hosts respectively.
+  // Partitions the provided list of hosts per locality into three new lists containing the
+  // healthy, degraded and excluded hosts respectively.
   static std::tuple<HostsPerLocalityConstSharedPtr, HostsPerLocalityConstSharedPtr,
                     HostsPerLocalityConstSharedPtr>
   partitionHostsPerLocality(const HostsPerLocality& hosts);
@@ -1227,8 +1179,8 @@ protected:
                   ClusterFactoryContext& cluster_context);
 
   /**
-   * Overridden by every concrete cluster. The cluster should do whatever pre-init is needed. E.g.,
-   * query DNS, contact EDS, etc.
+   * Overridden by every concrete cluster. The cluster should do whatever pre-init is needed.
+   * E.g., query DNS, contact EDS, etc.
    */
   virtual void startPreInit() PURE;
 
@@ -1241,8 +1193,8 @@ protected:
 
   /**
    * Called by every concrete cluster after all targets registered at init manager are
-   * initialized. At this point, shared init takes over and determines if there is an initial health
-   * check pass needed, etc.
+   * initialized. At this point, shared init takes over and determines if there is an initial
+   * health check pass needed, etc.
    */
   void onInitDone();
 
@@ -1251,13 +1203,13 @@ protected:
   absl::Status parseDropOverloadConfig(
       const envoy::config::endpoint::v3::ClusterLoadAssignment& cluster_load_assignment);
 
-  // This init manager is shared via TransportSocketFactoryContext. The initialization targets that
-  // register with this init manager are expected to be for implementations of SdsApi (see
+  // This init manager is shared via TransportSocketFactoryContext. The initialization targets
+  // that register with this init manager are expected to be for implementations of SdsApi (see
   // SdsApi::init_target_).
   Init::ManagerImpl init_manager_;
 
-  // Once all targets are initialized (i.e. once all dynamic secrets are loaded), this watcher calls
-  // onInitDone() above.
+  // Once all targets are initialized (i.e. once all dynamic secrets are loaded), this watcher
+  // calls onInitDone() above.
   Init::WatcherImpl init_watcher_;
 
   Runtime::Loader& runtime_;
@@ -1270,14 +1222,16 @@ protected:
   Server::Configuration::TransportSocketFactoryContextImplPtr transport_factory_context_{};
 
 protected:
+  Random::RandomGenerator& random_;
   TimeSource& time_source_;
   MainPrioritySetImpl priority_set_;
 
-  void validateEndpointsForZoneAwareRouting(
+  absl::Status validateEndpointsForZoneAwareRouting(
       const envoy::config::endpoint::v3::LocalityLbEndpoints& endpoints) const;
 
 private:
   static const absl::string_view DoNotValidateAlpnRuntimeKey;
+  static const absl::string_view DropOverloadRuntimeKey;
 
   void finishInitialization();
   void reloadHealthyHosts(const HostSharedPtr& host);
@@ -1302,20 +1256,20 @@ using ClusterImplBaseSharedPtr = std::shared_ptr<ClusterImplBase>;
 class PriorityStateManager : protected Logger::Loggable<Logger::Id::upstream> {
 public:
   PriorityStateManager(ClusterImplBase& cluster, const LocalInfo::LocalInfo& local_info,
-                       PrioritySet::HostUpdateCb* update_cb);
+                       PrioritySet::HostUpdateCb* update_cb, Random::RandomGenerator& random);
 
   // Initializes the PriorityState vector based on the priority specified in locality_lb_endpoint.
   void initializePriorityFor(
       const envoy::config::endpoint::v3::LocalityLbEndpoints& locality_lb_endpoint);
 
-  // Registers a host based on its address to the PriorityState based on the specified priority (the
-  // priority is specified by locality_lb_endpoint.priority()).
+  // Registers a host based on its address to the PriorityState based on the specified priority
+  // (the priority is specified by locality_lb_endpoint.priority()).
   //
   // The specified health_checker_flag is used to set the registered-host's health-flag when the
   // lb_endpoint health status is unhealthy, draining or timeout.
   void registerHostForPriority(
       const std::string& hostname, Network::Address::InstanceConstSharedPtr address,
-      const std::vector<Network::Address::InstanceConstSharedPtr>& address_list,
+      const HostDescription::AddressVector& address_list,
       const envoy::config::endpoint::v3::LocalityLbEndpoints& locality_lb_endpoint,
       const envoy::config::endpoint::v3::LbEndpoint& lb_endpoint, TimeSource& time_source);
 
@@ -1339,6 +1293,7 @@ private:
   PriorityState priority_state_;
   const envoy::config::core::v3::Node& local_info_node_;
   PrioritySet::HostUpdateCb* update_cb_;
+  Random::RandomGenerator& random_;
 };
 
 using PriorityStateManagerPtr = std::unique_ptr<PriorityStateManager>;
@@ -1355,8 +1310,8 @@ protected:
    * with existing hosts.
    *
    * @param new_hosts the full lists of hosts in the new configuration.
-   * @param current_priority_hosts the full lists of hosts for the priority to be updated. The list
-   * will be modified to contain the updated list of hosts.
+   * @param current_priority_hosts the full lists of hosts for the priority to be updated. The
+   * list will be modified to contain the updated list of hosts.
    * @param hosts_added_to_current_priority will be populated with hosts added to the priority.
    * @param hosts_removed_from_current_priority will be populated with hosts removed from the
    * priority.

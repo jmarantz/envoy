@@ -55,7 +55,6 @@ void AdminImpl::startHttpListener(std::list<AccessLog::InstanceSharedPtr> access
                                   Network::Socket::OptionsSharedPtr socket_options) {
   access_logs_ = std::move(access_logs);
 
-  null_overload_manager_.start();
   socket_ = std::make_shared<Network::TcpListenSocket>(address, socket_options, true);
   RELEASE_ASSERT(0 == socket_->ioHandle().listen(ENVOY_TCP_BACKLOG_SIZE).return_value_,
                  "listen() failed on admin listener");
@@ -114,7 +113,7 @@ AdminImpl::AdminImpl(const std::string& profile_path, Server::Instance& server,
           server_.api().randomGenerator())),
       profile_path_(profile_path), stats_(Http::ConnectionManagerImpl::generateStats(
                                        "http.admin.", *server_.stats().rootScope())),
-      null_overload_manager_(server_.threadLocal(), false),
+      null_overload_manager_(server.threadLocal(), false),
       tracing_stats_(Http::ConnectionManagerImpl::generateTracingStats("http.admin.",
                                                                        *no_op_store_.rootScope())),
       route_config_provider_(server.timeSource()),
@@ -222,7 +221,11 @@ AdminImpl::AdminImpl(const std::string& profile_path, Server::Instance& server,
                         "Render text_readouts as new gaugues with value 0 (increases Prometheus "
                         "data size)"},
                        {ParamDescriptor::Type::String, "filter",
-                        "Regular expression (Google re2) for filtering stats"}}),
+                        "Regular expression (Google re2) for filtering stats"},
+                       {ParamDescriptor::Type::Enum,
+                        "histogram_buckets",
+                        "Histogram bucket display mode",
+                        {"cumulative", "summary"}}}),
           makeHandler("/stats/recentlookups", "Show recent stat-name lookups",
                       MAKE_ADMIN_HANDLER(stats_handler_.handlerStatsRecentLookups), false, false),
           makeHandler("/stats/recentlookups/clear", "clear list of stat-name lookups and counter",
@@ -274,7 +277,8 @@ Http::ServerConnectionPtr AdminImpl::createCodec(Network::Connection& connection
       connection, data, callbacks, *server_.stats().rootScope(), server_.api().randomGenerator(),
       http1_codec_stats_, http2_codec_stats_, Http::Http1Settings(),
       ::Envoy::Http2::Utility::initializeAndValidateOptions(
-          envoy::config::core::v3::Http2ProtocolOptions()),
+          envoy::config::core::v3::Http2ProtocolOptions())
+          .value(),
       maxRequestHeadersKb(), maxRequestHeadersCount(), headersWithUnderscoresAction(),
       overload_manager);
 }
@@ -284,16 +288,16 @@ bool AdminImpl::createNetworkFilterChain(Network::Connection& connection,
   // Pass in the null overload manager so that the admin interface is accessible even when Envoy
   // is overloaded.
   connection.addReadFilter(Network::ReadFilterSharedPtr{new Http::ConnectionManagerImpl(
-      *this, server_.drainManager(), server_.api().randomGenerator(), server_.httpContext(),
-      server_.runtime(), server_.localInfo(), server_.clusterManager(), null_overload_manager_,
-      server_.timeSource())});
+      shared_from_this(), server_.drainManager(), server_.api().randomGenerator(),
+      server_.httpContext(), server_.runtime(), server_.localInfo(), server_.clusterManager(),
+      server_.nullOverloadManager(), server_.timeSource())});
   return true;
 }
 
 bool AdminImpl::createFilterChain(Http::FilterChainManager& manager, bool,
                                   const Http::FilterChainOptions&) const {
   Http::FilterFactoryCb factory = [this](Http::FilterChainFactoryCallbacks& callbacks) {
-    callbacks.addStreamFilter(std::make_shared<AdminFilter>(createRequestFunction()));
+    callbacks.addStreamFilter(std::make_shared<AdminFilter>(*this));
   };
   manager.applyFilterFactoryCb({}, factory);
   return true;
@@ -494,7 +498,7 @@ bool AdminImpl::removeHandler(const std::string& prefix) {
 
 Http::Code AdminImpl::request(absl::string_view path_and_query, absl::string_view method,
                               Http::ResponseHeaderMap& response_headers, std::string& body) {
-  AdminFilter filter(createRequestFunction());
+  AdminFilter filter(*this);
 
   auto request_headers = Http::RequestHeaderMapImpl::create();
   request_headers->setMethod(method);

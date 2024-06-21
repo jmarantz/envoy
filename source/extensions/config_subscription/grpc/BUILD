@@ -29,6 +29,7 @@ envoy_cc_extension(
     deps = [
         ":eds_resources_cache_lib",
         ":grpc_mux_context_lib",
+        ":grpc_mux_failover_lib",
         ":grpc_stream_lib",
         ":xds_source_id_lib",
         "//envoy/config:custom_config_validators_interface",
@@ -62,6 +63,7 @@ envoy_cc_library(
         ":delta_subscription_state_lib",
         ":eds_resources_cache_lib",
         ":grpc_mux_context_lib",
+        ":grpc_mux_failover_lib",
         ":grpc_stream_lib",
         ":pausable_ack_queue_lib",
         ":watch_map_lib",
@@ -194,6 +196,14 @@ envoy_cc_library(
         "//source/common/config:utility_lib",
         "//source/common/grpc:async_client_lib",
         "//source/common/protobuf",
+    ],
+)
+
+envoy_cc_library(
+    name = "grpc_mux_failover_lib",
+    hdrs = ["grpc_mux_failover.h"],
+    deps = [
+        ":grpc_stream_lib",
     ],
 )
 

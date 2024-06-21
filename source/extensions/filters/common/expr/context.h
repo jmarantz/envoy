@@ -6,6 +6,7 @@
 #include "source/common/grpc/status.h"
 #include "source/common/http/header_utility.h"
 #include "source/common/http/headers.h"
+#include "source/common/runtime/runtime_features.h"
 #include "source/common/singleton/const_singleton.h"
 
 #include "eval/public/cel_value.h"
@@ -52,6 +53,7 @@ constexpr absl::string_view Metadata = "metadata";
 
 // Per-request or per-connection filter state
 constexpr absl::string_view FilterState = "filter_state";
+constexpr absl::string_view UpstreamFilterState = "upstream_filter_state";
 
 // Connection properties
 constexpr absl::string_view Connection = "connection";
@@ -116,15 +118,23 @@ public:
       return {};
     }
     auto str = std::string(key.StringOrDie().value());
-    if (!::Envoy::Http::validHeaderString(str)) {
-      // Reject key if it is an invalid header string
-      return {};
+    if (Runtime::runtimeFeatureEnabled("envoy.reloadable_features.consistent_header_validation")) {
+      if (!Http::HeaderUtility::headerNameIsValid(str)) {
+        // Reject key if it is an invalid header string
+        return {};
+      }
+    } else {
+      if (!::Envoy::Http::validHeaderString(str)) {
+        // Reject key if it is an invalid header string
+        return {};
+      }
     }
     return convertHeaderEntry(arena_, ::Envoy::Http::HeaderUtility::getAllOfHeaderAsString(
                                           *value_, ::Envoy::Http::LowerCaseString(str)));
   }
   int size() const override { return ListKeys().value()->size(); }
   bool empty() const override { return value_ == nullptr ? true : value_->empty(); }
+  using CelMap::ListKeys;
   absl::StatusOr<const google::api::expr::runtime::CelList*> ListKeys() const override {
     if (value_ == nullptr) {
       return &WrapperFields::get().Empty;
@@ -158,6 +168,7 @@ class BaseWrapper : public google::api::expr::runtime::CelMap {
 public:
   BaseWrapper(Protobuf::Arena& arena) : arena_(arena) {}
   int size() const override { return 0; }
+  using CelMap::ListKeys;
   absl::StatusOr<const google::api::expr::runtime::CelList*> ListKeys() const override {
     return absl::UnimplementedError("ListKeys() is not implemented");
   }
@@ -235,13 +246,13 @@ private:
 
 class XDSWrapper : public BaseWrapper {
 public:
-  XDSWrapper(Protobuf::Arena& arena, const StreamInfo::StreamInfo& info,
+  XDSWrapper(Protobuf::Arena& arena, const StreamInfo::StreamInfo* info,
              const LocalInfo::LocalInfo* local_info)
       : BaseWrapper(arena), info_(info), local_info_(local_info) {}
   absl::optional<CelValue> operator[](CelValue key) const override;
 
 private:
-  const StreamInfo::StreamInfo& info_;
+  const StreamInfo::StreamInfo* info_;
   const LocalInfo::LocalInfo* local_info_;
 };
 

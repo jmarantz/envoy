@@ -86,7 +86,6 @@ bool DrainManagerImpl::drainClose() const {
 }
 
 Common::CallbackHandlePtr DrainManagerImpl::addOnDrainCloseCb(DrainCloseCb cb) const {
-  ASSERT_IS_MAIN_OR_TEST_THREAD();
   ASSERT(dispatcher_.isThreadSafe());
 
   if (draining_) {
@@ -109,7 +108,7 @@ Common::CallbackHandlePtr DrainManagerImpl::addOnDrainCloseCb(DrainCloseCb cb) c
         }
       }
     }
-    cb(drain_delay);
+    THROW_IF_NOT_OK(cb(drain_delay));
     return nullptr;
   }
 
@@ -117,7 +116,7 @@ Common::CallbackHandlePtr DrainManagerImpl::addOnDrainCloseCb(DrainCloseCb cb) c
 }
 
 void DrainManagerImpl::addDrainCompleteCallback(std::function<void()> cb) {
-  ASSERT_IS_MAIN_OR_TEST_THREAD();
+  ASSERT(dispatcher_.isThreadSafe());
   ASSERT(draining_);
 
   // If the drain-tick-timer is active, add the callback to the queue. If not defined
@@ -130,7 +129,7 @@ void DrainManagerImpl::addDrainCompleteCallback(std::function<void()> cb) {
 }
 
 void DrainManagerImpl::startDrainSequence(std::function<void()> drain_complete_cb) {
-  ASSERT_IS_MAIN_OR_TEST_THREAD();
+  ASSERT(dispatcher_.isThreadSafe());
   ASSERT(drain_complete_cb);
 
   // If we've already started draining (either through direct invocation or through
@@ -188,14 +187,14 @@ void DrainManagerImpl::startDrainSequence(std::function<void()> drain_complete_c
 
   uint32_t step_count = 0;
   size_t num_cbs = cbs_.size();
-  cbs_.runCallbacksWith([&]() {
+  THROW_IF_NOT_OK(cbs_.runCallbacksWith([&]() {
     // switch to floating-point math to avoid issues with integer division
     std::chrono::milliseconds delay{static_cast<int64_t>(
         static_cast<double>(step_count) / 4 / num_cbs *
         std::chrono::duration_cast<std::chrono::milliseconds>(remaining_time).count())};
     step_count++;
     return delay;
-  });
+  }));
 }
 
 void DrainManagerImpl::startParentShutdownSequence() {

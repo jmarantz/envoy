@@ -119,7 +119,7 @@ RBAC):
    connection.dns_san_peer_certificate, string, The first DNS entry in the SAN field of the peer certificate in the downstream TLS connection
    connection.uri_san_local_certificate, string, The first URI entry in the SAN field of the local certificate in the downstream TLS connection
    connection.uri_san_peer_certificate, string, The first URI entry in the SAN field of the peer certificate in the downstream TLS connection
-   connection.sha256_peer_certificate_digest, SHA256 digest of the peer certificate in the downstream TLS connection if present
+   connection.sha256_peer_certificate_digest, string, SHA256 digest of the peer certificate in the downstream TLS connection if present
    connection.transport_failure_reason, string, The transport failure reason e.g. certificate validation failed
 
 The following additional attributes are available upon the downstream connection termination:
@@ -148,7 +148,7 @@ The following attributes are available once the upstream connection is establish
    upstream.dns_san_peer_certificate, string, The first DNS entry in the SAN field of the peer certificate in the upstream TLS connection
    upstream.uri_san_local_certificate, string, The first URI entry in the SAN field of the local certificate in the upstream TLS connection
    upstream.uri_san_peer_certificate, string, The first URI entry in the SAN field of the peer certificate in the upstream TLS connection
-   upstream.sha256_peer_certificate_digest, SHA256 digest of the peer certificate in the upstream TLS connection if present
+   upstream.sha256_peer_certificate_digest, string, SHA256 digest of the peer certificate in the upstream TLS connection if present
    upstream.local_address, string, The local address of the upstream connection
    upstream.transport_failure_reason, string, The upstream transport failure reason e.g. certificate validation failed
 
@@ -162,7 +162,17 @@ Data exchanged between filters is available as the following attributes:
    :widths: 1, 1, 4
 
    metadata, :ref:`Metadata<envoy_v3_api_msg_config.core.v3.metadata>`, Dynamic request metadata
-   filter_state, "map<string, bytes>", Mapping from a filter state name to its serialized string value
+   filter_state, "map<string, Value>", Mapping from the filter state name to the object value
+   upstream_filter_state, "map<string, Value>", Mapping from the upstream filter state name to the object value
+
+Filter state value representation is determined based on the filter state
+declaration in the following order:
+
+* If the value is represented as a dynamic ``CelValue`` wrapper, ``CelValue``
+  is returned verbatim.
+* If the key is well-known and has a field reflection enabled, then it is
+  returned as a map from the field names to the field values.
+* Otherwise, the value is returned as the serialized bytes.
 
 Note that these attributes may change during the life of a request as the data can be
 updated by filters at any point.

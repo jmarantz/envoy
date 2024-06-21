@@ -2,11 +2,11 @@ agent-ubuntu: ubuntu-22.04
 build-image:
   # Authoritative configuration for build image/s
   repo: envoyproxy/envoy-build-ubuntu
-  sha: 1386a26f687826850ba488d66a6cd5337c5941b3b8793d08cfa6f9df12aa2fcf
-  mobile-sha: 1db9bac6578115179fe686cd0e58ee340e2cb3737d19d9136a264d5d94351961
+  sha: 2dd96b6f43c08ccabd5f4747fce5854f5f96af509b32e5cf6493f136e9833649
+  mobile-sha: c9b6001d0c24170ae77b0ad39e1b0fcda49580c72a8578755dc65aec9be85be3
   # this is authoritative, but is not currently used in github ci
-  gcr-sha: b0c0e07c97337fdd56423ddd6749a4250adaea9f66f85763a8d9cec36162c972
-  tag: fd9ec000fdd72d5c5e4e4ef16db4f9103058779e
+  gcr-sha: 7adc40c09508f957624c4d2e0f5aeecb73a59207ee6ded53b107eac828c091b2
+  tag: f94a38f62220a2b017878b790b6ea98a0f6c5f9c
 
 config:
   envoy:
@@ -51,12 +51,8 @@ checks:
   mobile-compile-time-options:
     name: Mobile/Compile time options
     on-run:
+    - mobile-compile-time-cc
     - mobile-compile-time-options
-  mobile-core:
-    name: Mobile/Core
-    required: true
-    on-run:
-    - mobile-core
   mobile-coverage:
     name: Mobile/Coverage
     required: true
@@ -149,26 +145,8 @@ checks:
     - publish
     - verify
     required: true
-  windows:
-    name: Envoy/Windows
-    required: true
-    on-run:
-    - build-windows
 
 run:
-  build-windows:
-    paths:
-    - .bazelrc
-    - .bazelversion
-    - .github/config.yml
-    - api/**/*
-    - bazel/**/*
-    - ci/**/*
-    - configs/**/*
-    - contrib/**/*
-    - envoy/**/*
-    - source/**/*
-    - test/**/*
   build-macos:
     paths:
     - .bazelrc
@@ -189,6 +167,7 @@ run:
     - .github/config.yml
     - bazel/external/quiche.BUILD
     - bazel/repository_locations.bzl
+    - mobile/.bazelrc
     - mobile/**/*
     - tools/code_format/check_format.py
   mobile-android-all:
@@ -198,6 +177,7 @@ run:
     - .github/config.yml
     - bazel/external/quiche.BUILD
     - bazel/repository_locations.bzl
+    - mobile/.bazelrc
     - mobile/**/*
     - tools/code_format/check_format.py
     push: never
@@ -208,6 +188,7 @@ run:
     - .github/config.yml
     - bazel/external/quiche.BUILD
     - bazel/repository_locations.bzl
+    - mobile/.bazelrc
     - mobile/**/*
     - tools/code_format/check_format.py
   mobile-asan:
@@ -217,6 +198,7 @@ run:
     - .github/config.yml
     - bazel/external/quiche.BUILD
     - bazel/repository_locations.bzl
+    - mobile/.bazelrc
     - mobile/**/*
     - tools/code_format/check_format.py
   mobile-cc:
@@ -224,10 +206,33 @@ run:
     - .bazelrc
     - .bazelversion
     - .github/config.yml
+    - api/**/*
     - bazel/external/quiche.BUILD
     - bazel/repository_locations.bzl
+    - envoy/**/*
+    - mobile/.bazelrc
     - mobile/**/*
-    - tools/code_format/check_format.py
+    - source/**/*
+    - test/config/**/*
+    - test/integration/*
+    - test/mocks/**/*
+    - test/test_common/**/*
+  mobile-compile-time-cc:
+    paths:
+    - .bazelrc
+    - .bazelversion
+    - .github/config.yml
+    - api/**/*
+    - bazel/external/quiche.BUILD
+    - bazel/repository_locations.bzl
+    - envoy/**/*
+    - mobile/.bazelrc
+    - mobile/**/*
+    - source/**/*
+    - test/config/**/*
+    - test/integration/*
+    - test/mocks/**/*
+    - test/test_common/**/*
   mobile-compile-time-options:
     paths:
     - .bazelrc
@@ -235,6 +240,7 @@ run:
     - .github/config.yml
     - bazel/external/quiche.BUILD
     - bazel/repository_locations.bzl
+    - mobile/.bazelrc
     - mobile/**/*
     - tools/code_format/check_format.py
   mobile-coverage:
@@ -244,15 +250,7 @@ run:
     - .github/config.yml
     - bazel/external/quiche.BUILD
     - bazel/repository_locations.bzl
-    - mobile/**/*
-    - tools/code_format/check_format.py
-  mobile-core:
-    paths:
-    - .bazelrc
-    - .bazelversion
-    - .github/config.yml
-    - bazel/external/quiche.BUILD
-    - bazel/repository_locations.bzl
+    - mobile/.bazelrc
     - mobile/**/*
     - tools/code_format/check_format.py
   mobile-format:
@@ -262,6 +260,7 @@ run:
     - .github/config.yml
     - bazel/external/quiche.BUILD
     - bazel/repository_locations.bzl
+    - mobile/.bazelrc
     - mobile/**/*
     - tools/code_format/check_format.py
   mobile-ios:
@@ -271,6 +270,7 @@ run:
     - .github/config.yml
     - bazel/external/quiche.BUILD
     - bazel/repository_locations.bzl
+    - mobile/.bazelrc
     - mobile/**/*
     - tools/code_format/check_format.py
   mobile-ios-all:
@@ -280,6 +280,7 @@ run:
     - .github/config.yml
     - bazel/external/quiche.BUILD
     - bazel/repository_locations.bzl
+    - mobile/.bazelrc
     - mobile/**/*
     - tools/code_format/check_format.py
     push: never
@@ -290,6 +291,7 @@ run:
     - .github/config.yml
     - bazel/external/quiche.BUILD
     - bazel/repository_locations.bzl
+    - mobile/.bazelrc
     - mobile/**/*
     - tools/code_format/check_format.py
   mobile-perf:
@@ -299,6 +301,7 @@ run:
     - .github/config.yml
     - bazel/external/quiche.BUILD
     - bazel/repository_locations.bzl
+    - mobile/.bazelrc
     - mobile/**/*
     - tools/code_format/check_format.py
   mobile-release-validation:
@@ -308,6 +311,7 @@ run:
     - .github/config.yml
     - bazel/external/quiche.BUILD
     - bazel/repository_locations.bzl
+    - mobile/.bazelrc
     - mobile/**/*
     - tools/code_format/check_format.py
   mobile-tsan:
@@ -317,6 +321,7 @@ run:
     - .github/config.yml
     - bazel/external/quiche.BUILD
     - bazel/repository_locations.bzl
+    - mobile/.bazelrc
     - mobile/**/*
     - tools/code_format/check_format.py
   precheck-deps:
@@ -344,6 +349,7 @@ run:
     - examples/**/*
     - source/**/*
     - tools/**/*
+    - VERSION.txt
   verify:
     paths:
     - .bazelrc
@@ -357,6 +363,7 @@ run:
     - examples/**/*
     - source/**/*
     - tools/**/*
+    - VERSION.txt
     push: paths
 
 tables:

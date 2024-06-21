@@ -24,7 +24,7 @@ namespace LocalRateLimitFilter {
 
 class LocalRateLimitTestBase : public testing::Test, public Event::TestUsingSimulatedTime {
 public:
-  LocalRateLimitTestBase() : singleton_manager_(Thread::threadFactoryForTest()) {}
+  LocalRateLimitTestBase() = default;
 
   uint64_t initialize(const std::string& filter_yaml, bool expect_timer_create = true) {
     envoy::extensions::filters::network::local_ratelimit::v3::LocalRateLimit proto_config;
@@ -93,7 +93,7 @@ token_bucket:
   // Second connection should be rate limited.
   ActiveFilter active_filter2(config_);
   EXPECT_CALL(active_filter2.read_filter_callbacks_.connection_.stream_info_,
-              setResponseFlag(StreamInfo::ResponseFlag::UpstreamRetryLimitExceeded));
+              setResponseFlag(StreamInfo::CoreResponseFlag::UpstreamRetryLimitExceeded));
   EXPECT_CALL(active_filter2.read_filter_callbacks_.connection_,
               close(Network::ConnectionCloseType::NoFlush, "local_ratelimit_close_over_limit"));
   EXPECT_EQ(Network::FilterStatus::StopIteration, active_filter2.filter_.onNewConnection());

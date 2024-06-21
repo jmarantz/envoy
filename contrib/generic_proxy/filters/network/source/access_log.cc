@@ -7,39 +7,46 @@ namespace Extensions {
 namespace NetworkFilters {
 namespace GenericProxy {
 
-class StringValueFormatterProvider : public FormatterProvider {
-public:
-  using ValueExtractor = std::function<absl::optional<std::string>(const FormatterContext&,
-                                                                   const StreamInfo::StreamInfo&)>;
-
-  StringValueFormatterProvider(ValueExtractor f, absl::optional<size_t> max_length = absl::nullopt)
-      : value_extractor_(f), max_length_(max_length) {}
-
-  // FormatterProvider
-  absl::optional<std::string>
-  formatWithContext(const FormatterContext& context,
-                    const StreamInfo::StreamInfo& stream_info) const override {
-    auto optional_str = value_extractor_(context, stream_info);
-    if (!optional_str) {
-      return absl::nullopt;
-    }
-    if (max_length_.has_value()) {
-      if (optional_str->length() > max_length_.value()) {
-        optional_str->resize(max_length_.value());
-      }
-    }
-    return optional_str;
+absl::optional<std::string>
+StringValueFormatterProvider::formatWithContext(const FormatterContext& context,
+                                                const StreamInfo::StreamInfo& stream_info) const {
+  auto optional_str = value_extractor_(context, stream_info);
+  if (!optional_str) {
+    return absl::nullopt;
   }
-  ProtobufWkt::Value
-  formatValueWithContext(const FormatterContext& context,
-                         const StreamInfo::StreamInfo& stream_info) const override {
-    return ValueUtil::optionalStringValue(formatWithContext(context, stream_info));
+  if (max_length_.has_value()) {
+    if (optional_str->length() > max_length_.value()) {
+      optional_str->resize(max_length_.value());
+    }
+  }
+  return optional_str;
+}
+ProtobufWkt::Value StringValueFormatterProvider::formatValueWithContext(
+    const FormatterContext& context, const StreamInfo::StreamInfo& stream_info) const {
+  return ValueUtil::optionalStringValue(formatWithContext(context, stream_info));
+}
+
+absl::optional<std::string>
+GenericStatusCodeFormatterProvider::formatWithContext(const FormatterContext& context,
+                                                      const StreamInfo::StreamInfo&) const {
+  if (context.response_ == nullptr) {
+    return absl::nullopt;
   }
 
-private:
-  ValueExtractor value_extractor_;
-  absl::optional<size_t> max_length_;
-};
+  const int code = context.response_->status().code();
+  return std::to_string(code);
+}
+
+ProtobufWkt::Value
+GenericStatusCodeFormatterProvider::formatValueWithContext(const FormatterContext& context,
+                                                           const StreamInfo::StreamInfo&) const {
+  if (context.response_ == nullptr) {
+    return ValueUtil::nullValue();
+  }
+
+  const int code = context.response_->status().code();
+  return ValueUtil::numberValue(code);
+}
 
 class SimpleCommandParser : public CommandParser {
 public:
@@ -138,6 +145,13 @@ private:
                      }
                      return std::string(optional_view.value());
                    });
+             }},
+            // A formatter for the response status code. This supports the case where the response
+            // code is minus value and will override the common RESPONSE_CODE formatter for generic
+            // proxy.
+            {"RESPONSE_CODE",
+             [](absl::string_view, absl::optional<size_t>) -> FormatterProviderPtr {
+               return std::make_unique<GenericStatusCodeFormatterProvider>();
              }},
         });
   }

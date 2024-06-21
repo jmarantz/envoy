@@ -293,7 +293,7 @@ TEST_F(ReverseBridgeTest, GrpcRequest) {
 
     Grpc::Decoder decoder;
     std::vector<Grpc::Frame> frames;
-    decoder.decode(buffer, frames);
+    std::ignore = decoder.decode(buffer, frames);
 
     EXPECT_EQ(1, frames.size());
     EXPECT_EQ(12, frames[0].length_);
@@ -376,7 +376,7 @@ TEST_F(ReverseBridgeTest, GrpcRequestNoContentLength) {
 
     Grpc::Decoder decoder;
     std::vector<Grpc::Frame> frames;
-    decoder.decode(buffer, frames);
+    std::ignore = decoder.decode(buffer, frames);
 
     EXPECT_EQ(1, frames.size());
     EXPECT_EQ(12, frames[0].length_);
@@ -481,6 +481,7 @@ TEST_F(ReverseBridgeTest, GrpcRequestInternalError) {
       {{":status", "400"}, {"content-type", "application/x-protobuf"}});
   EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->encodeHeaders(headers, false));
   EXPECT_THAT(headers, HeaderValueOf(Http::Headers::get().ContentType, "application/grpc"));
+  EXPECT_THAT(headers, HeaderValueOf(Http::Headers::get().Status, "200"));
 
   {
     // First few calls should drain the buffer
@@ -508,7 +509,7 @@ TEST_F(ReverseBridgeTest, GrpcRequestInternalError) {
 
     Grpc::Decoder decoder;
     std::vector<Grpc::Frame> frames;
-    decoder.decode(buffer, frames);
+    std::ignore = decoder.decode(buffer, frames);
 
     EXPECT_EQ(1, frames.size());
     EXPECT_EQ(12, frames[0].length_);
@@ -721,7 +722,7 @@ TEST_F(ReverseBridgeTest, FilterConfigPerRouteEnabled) {
 
     Grpc::Decoder decoder;
     std::vector<Grpc::Frame> frames;
-    decoder.decode(buffer, frames);
+    std::ignore = decoder.decode(buffer, frames);
 
     EXPECT_EQ(1, frames.size());
     EXPECT_EQ(12, frames[0].length_);
@@ -798,7 +799,7 @@ TEST_F(ReverseBridgeTest, RouteWithTrailers) {
 
     Grpc::Decoder decoder;
     std::vector<Grpc::Frame> frames;
-    decoder.decode(buffer, frames);
+    std::ignore = decoder.decode(buffer, frames);
 
     EXPECT_EQ(4, trailers.size());
     EXPECT_EQ(1, frames.size());

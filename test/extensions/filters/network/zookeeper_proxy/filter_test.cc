@@ -31,14 +31,16 @@ public:
   void initialize(
       const bool enable_per_opcode_request_bytes_metrics = true,
       const bool enable_per_opcode_response_bytes_metrics = true,
+      const bool enable_per_opcode_decoder_error_metrics = true,
       const bool enable_latency_threshold_metrics = true,
       const std::chrono::milliseconds default_latency_threshold = std::chrono::milliseconds(100),
       const LatencyThresholdOverrideList& latency_threshold_overrides =
           LatencyThresholdOverrideList()) {
     config_ = std::make_shared<ZooKeeperFilterConfig>(
         stat_prefix_, 1048576, enable_per_opcode_request_bytes_metrics,
-        enable_per_opcode_response_bytes_metrics, enable_latency_threshold_metrics,
-        default_latency_threshold, latency_threshold_overrides, scope_);
+        enable_per_opcode_response_bytes_metrics, enable_per_opcode_decoder_error_metrics,
+        enable_latency_threshold_metrics, default_latency_threshold, latency_threshold_overrides,
+        scope_);
     filter_ = std::make_unique<ZooKeeperFilter>(config_, time_system_);
     filter_->initializeReadFilterCallbacks(filter_callbacks_);
   }
@@ -221,15 +223,18 @@ public:
     return buffer;
   }
 
-  Buffer::OwnedImpl
-  encodePathWatch(const std::string& path, const bool watch, const int32_t xid = 1000,
-                  const int32_t opcode = enumToSignedInt(OpCodes::GetData)) const {
+  Buffer::OwnedImpl encodePathWatch(const std::string& path, const bool watch,
+                                    const int32_t xid = 1000,
+                                    const int32_t opcode = enumToSignedInt(OpCodes::GetData),
+                                    const bool txn = false) const {
     Buffer::OwnedImpl buffer;
 
-    buffer.writeBEInt<int32_t>(13 + path.length());
-    buffer.writeBEInt<int32_t>(xid);
-    // Opcode.
-    buffer.writeBEInt<int32_t>(opcode);
+    if (!txn) {
+      buffer.writeBEInt<int32_t>(13 + path.length());
+      buffer.writeBEInt<int32_t>(xid);
+      buffer.writeBEInt<int32_t>(opcode);
+    }
+
     // Path.
     addString(buffer, path);
     // Watch.
@@ -291,8 +296,13 @@ public:
                       const int32_t opcode = enumToSignedInt(OpCodes::Create)) const {
     Buffer::OwnedImpl buffer;
 
+    int32_t min_len = 24;
+    if (opcode == enumToSignedInt(OpCodes::CreateTtl)) {
+      min_len = 32;
+    }
+
     if (!txn) {
-      buffer.writeBEInt<int32_t>(24 + path.length() + data.length());
+      buffer.writeBEInt<int32_t>(min_len + path.length() + data.length());
       buffer.writeBEInt<int32_t>(xid);
       buffer.writeBEInt<int32_t>(opcode);
     }
@@ -306,16 +316,26 @@ public:
     // Flags.
     buffer.writeBEInt<int32_t>(create_flag_val);
 
+    if (opcode == enumToSignedInt(OpCodes::CreateTtl)) {
+      // Ttl.
+      buffer.writeBEInt<int64_t>(3000);
+    }
+
     return buffer;
   }
 
-  Buffer::OwnedImpl encodeCreateRequestWithNegativeDataLen(
+  Buffer::OwnedImpl encodeCreateRequestWithoutZnodeData(
       const std::string& path, const int32_t create_flag_val, const bool txn = false,
       const int32_t opcode = enumToSignedInt(OpCodes::Create)) const {
     Buffer::OwnedImpl buffer;
 
+    int32_t min_len = 24;
+    if (opcode == enumToSignedInt(OpCodes::CreateTtl)) {
+      min_len = 32;
+    }
+
     if (!txn) {
-      buffer.writeBEInt<int32_t>(24 + path.length());
+      buffer.writeBEInt<int32_t>(min_len + path.length());
       buffer.writeBEInt<int32_t>(1000);
       buffer.writeBEInt<int32_t>(opcode);
     }
@@ -329,6 +349,11 @@ public:
     // Flags.
     buffer.writeBEInt<int32_t>(create_flag_val);
 
+    if (opcode == enumToSignedInt(OpCodes::CreateTtl)) {
+      // Ttl.
+      buffer.writeBEInt<int64_t>(3000);
+    }
+
     return buffer;
   }
 
@@ -337,15 +362,39 @@ public:
       const int32_t xid = 1000, const int32_t opcode = enumToSignedInt(OpCodes::Create)) const {
     Buffer::OwnedImpl buffer;
 
+    int32_t min_len = 24;
+    if (opcode == enumToSignedInt(OpCodes::CreateTtl)) {
+      min_len = 32;
+    }
+
     if (!txn) {
-      buffer.writeBEInt<int32_t>(24 + path.length() + data.length());
+      buffer.writeBEInt<int32_t>(min_len + path.length() + data.length());
       buffer.writeBEInt<int32_t>(xid);
       buffer.writeBEInt<int32_t>(opcode);
     }
 
     addString(buffer, path);
     addString(buffer, data);
-    // Deliberately not adding acls and flags to the buffer.
+    // Deliberately not adding acls, flags (and/or ttl) to the buffer.
+    return buffer;
+  }
+
+  Buffer::OwnedImpl
+  encodeTooSmallCreateRequest(const std::string& path, const std::string& data,
+                              const bool txn = false, const int32_t xid = 1000,
+                              const int32_t opcode = enumToSignedInt(OpCodes::Create)) const {
+    Buffer::OwnedImpl buffer;
+
+    if (!txn) {
+      buffer.writeBEInt<int32_t>(16 + path.length() + data.length());
+      buffer.writeBEInt<int32_t>(xid);
+      buffer.writeBEInt<int32_t>(opcode);
+    }
+
+    addString(buffer, path);
+    addString(buffer, data);
+    // Deliberately not adding acls, flags (and/or ttl) to the buffer and change the length
+    // accordingly.
     return buffer;
   }
 
@@ -556,42 +605,37 @@ public:
     case OpCodes::CreateTtl:
       opname = "createttl";
       break;
+    case OpCodes::Create2:
+      opname = "create2";
+      break;
     default:
       break;
+    }
+
+    int32_t rq_bytes = 35;
+    if (opcode == OpCodes::CreateTtl) {
+      rq_bytes = 43;
     }
 
     expectSetDynamicMetadata(
         {{{"opname", opname}, {"path", "/foo"}, {"create_type", createFlagsToString(flag)}},
-         {{"bytes", "35"}}});
+         {{"bytes", std::to_string(rq_bytes)}}});
 
     EXPECT_EQ(Envoy::Network::FilterStatus::Continue, filter_->onData(data, false));
-
-    switch (opcode) {
-    case OpCodes::Create:
-      EXPECT_EQ(1UL, config_->stats().create_rq_.value());
-      EXPECT_EQ(35UL, store_.counter("test.zookeeper.create_rq_bytes").value());
-      break;
-    case OpCodes::CreateContainer:
-      EXPECT_EQ(1UL, config_->stats().createcontainer_rq_.value());
-      EXPECT_EQ(35UL, store_.counter("test.zookeeper.createcontainer_rq_bytes").value());
-      break;
-    case OpCodes::CreateTtl:
-      EXPECT_EQ(1UL, config_->stats().createttl_rq_.value());
-      EXPECT_EQ(35UL, store_.counter("test.zookeeper.createttl_rq_bytes").value());
-      break;
-    default:
-      break;
-    }
-
-    EXPECT_EQ(35UL, config_->stats().request_bytes_.value());
+    EXPECT_EQ(1UL, store_.counter(absl::StrCat("test.zookeeper.", opname, "_rq")).value());
+    EXPECT_EQ(static_cast<unsigned long>(rq_bytes), config_->stats().request_bytes_.value());
+    EXPECT_EQ(static_cast<unsigned long>(rq_bytes),
+              store_.counter(absl::StrCat("test.zookeeper.", opname, "_rq_bytes")).value());
     EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
+    EXPECT_EQ(0UL,
+              store_.counter(absl::StrCat("test.zookeeper.", opname, "_decoder_error")).value());
   }
 
-  void testCreateWithNegativeDataLen(CreateFlags flag, const int32_t flag_val,
-                                     const OpCodes opcode = OpCodes::Create) {
+  void testCreateWithoutZnodeData(CreateFlags flag, const int32_t flag_val,
+                                  const OpCodes opcode = OpCodes::Create) {
     initialize();
     Buffer::OwnedImpl data =
-        encodeCreateRequestWithNegativeDataLen("/foo", flag_val, false, enumToSignedInt(opcode));
+        encodeCreateRequestWithoutZnodeData("/foo", flag_val, false, enumToSignedInt(opcode));
     std::string opname = "create";
 
     switch (opcode) {
@@ -600,6 +644,9 @@ public:
       break;
     case OpCodes::CreateTtl:
       opname = "createttl";
+      break;
+    case OpCodes::Create2:
+      opname = "create2";
       break;
     default:
       break;
@@ -610,24 +657,12 @@ public:
          {{"bytes", "32"}}});
 
     EXPECT_EQ(Envoy::Network::FilterStatus::Continue, filter_->onData(data, false));
-
-    switch (opcode) {
-    case OpCodes::Create:
-      EXPECT_EQ(1UL, config_->stats().create_rq_.value());
-      break;
-    case OpCodes::CreateContainer:
-      EXPECT_EQ(1UL, config_->stats().createcontainer_rq_.value());
-      break;
-    case OpCodes::CreateTtl:
-      EXPECT_EQ(1UL, config_->stats().createttl_rq_.value());
-      break;
-    default:
-      break;
-    }
-
+    EXPECT_EQ(1UL, store_.counter(absl::StrCat("test.zookeeper.", opname, "_rq")).value());
     EXPECT_EQ(32UL, config_->stats().request_bytes_.value());
-    EXPECT_EQ(32UL, store_.counter("test.zookeeper.create_rq_bytes").value());
+    EXPECT_EQ(32UL, store_.counter(absl::StrCat("test.zookeeper.", opname, "_rq_bytes")).value());
     EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
+    EXPECT_EQ(0UL,
+              store_.counter(absl::StrCat("test.zookeeper.", opname, "_decoder_error")).value());
   }
 
   void testRequest(Buffer::OwnedImpl& data, const std::vector<StrStrMap>& metadata_values) {
@@ -653,6 +688,8 @@ public:
     EXPECT_EQ(request_bytes,
               store_.counter(absl::StrCat("test.zookeeper.", opcode, "_rq_bytes")).value());
     EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
+    EXPECT_EQ(0UL,
+              store_.counter(absl::StrCat("test.zookeeper.", opcode, "_decoder_error")).value());
   }
 
   void testControlRequest(Buffer::OwnedImpl& data, const std::vector<StrStrMap>& metadata_values,
@@ -681,11 +718,11 @@ public:
     expectSetDynamicMetadata(metadata_values);
 
     Buffer::OwnedImpl data = encodeResponseHeader(xid, zxid, 0);
-    std::string resp = "";
+    std::string response = "";
     for (const auto& metadata : metadata_values) {
       auto it = metadata.find("opname");
       if (it != metadata.end()) {
-        resp = it->second;
+        response = it->second;
       }
     }
 
@@ -693,9 +730,17 @@ public:
     // However, its corresponding metric names have `_resp` suffix.
     std::string long_resp_suffix = "_response";
     std::string short_resp_suffix = "_resp";
-    size_t pos = resp.rfind(long_resp_suffix);
+    std::string resp = response;
+    size_t pos = response.rfind(long_resp_suffix);
     if (pos != std::string::npos) {
       resp.replace(pos, long_resp_suffix.length(), short_resp_suffix);
+    }
+
+    // Fetch opcode by trimming the `_resp` suffix.
+    std::string opcode = resp;
+    pos = opcode.rfind(short_resp_suffix);
+    if (pos != std::string::npos) {
+      opcode.replace(pos, short_resp_suffix.length(), "");
     }
 
     EXPECT_EQ(Envoy::Network::FilterStatus::Continue, filter_->onWrite(data, false));
@@ -707,8 +752,9 @@ public:
     EXPECT_EQ(20UL * response_count,
               store_.counter(absl::StrCat("test.zookeeper.", resp, "_bytes")).value());
     EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
-    const auto histogram_name =
-        fmt::format("test.zookeeper.{}_latency", metadata_values[0].find("opname")->second);
+    EXPECT_EQ(0UL,
+              store_.counter(absl::StrCat("test.zookeeper.", opcode, "_decoder_error")).value());
+    const auto histogram_name = fmt::format("test.zookeeper.{}_latency", response);
     EXPECT_NE(absl::nullopt, findHistogram(histogram_name));
   }
 
@@ -731,7 +777,7 @@ TEST_F(ZooKeeperFilterTest, DisableErrorBudgetCalculation) {
   std::chrono::milliseconds default_latency_threshold(200);
   LatencyThresholdOverrideList latency_threshold_overrides;
 
-  initialize(true, true, false, default_latency_threshold, latency_threshold_overrides);
+  initialize(true, true, true, false, default_latency_threshold, latency_threshold_overrides);
 
   EXPECT_EQ(config_->errorBudgetDecision(OpCodes::Connect, std::chrono::milliseconds(50)),
             ErrorBudgetResponseType::None);
@@ -754,7 +800,7 @@ TEST_F(ZooKeeperFilterTest, ErrorBudgetDecisionWithDefaultLatencyThresholdConfig
   std::chrono::milliseconds default_latency_threshold(200);
   LatencyThresholdOverrideList latency_threshold_overrides;
 
-  initialize(true, true, true, default_latency_threshold, latency_threshold_overrides);
+  initialize(true, true, true, true, default_latency_threshold, latency_threshold_overrides);
 
   EXPECT_EQ(config_->errorBudgetDecision(OpCodes::Connect, std::chrono::milliseconds(50)),
             ErrorBudgetResponseType::Fast);
@@ -781,7 +827,7 @@ TEST_F(ZooKeeperFilterTest, ErrorBudgetDecisionWithMultiLatencyThresholdConfig) 
   threshold_override->set_opcode(LatencyThresholdOverride::Multi);
   threshold_override->mutable_threshold()->set_nanos(200000000); // 200 milliseconds
 
-  initialize(true, true, true, default_latency_threshold, latency_threshold_overrides);
+  initialize(true, true, true, true, default_latency_threshold, latency_threshold_overrides);
 
   EXPECT_EQ(config_->errorBudgetDecision(OpCodes::Connect, std::chrono::milliseconds(50)),
             ErrorBudgetResponseType::Fast);
@@ -811,7 +857,7 @@ TEST_F(ZooKeeperFilterTest, ErrorBudgetDecisionWithDefaultAndOtherLatencyThresho
   threshold_override->set_opcode(LatencyThresholdOverride::Create);
   threshold_override->mutable_threshold()->set_nanos(200000000); // 200 milliseconds
 
-  initialize(true, true, true, default_latency_threshold, latency_threshold_overrides);
+  initialize(true, true, true, true, default_latency_threshold, latency_threshold_overrides);
 
   EXPECT_EQ(config_->errorBudgetDecision(OpCodes::Connect, std::chrono::milliseconds(150)),
             ErrorBudgetResponseType::Fast);
@@ -840,16 +886,17 @@ TEST_F(ZooKeeperFilterTest, DisablePerOpcodeRequestAndResponseBytesMetrics) {
   std::chrono::milliseconds default_latency_threshold(100);
   LatencyThresholdOverrideList latency_threshold_overrides;
 
-  initialize(false, false, true, default_latency_threshold, latency_threshold_overrides);
+  initialize(false, false, true, true, default_latency_threshold, latency_threshold_overrides);
 
   Buffer::OwnedImpl data = encodeConnect();
   expectSetDynamicMetadata({{{"opname", "connect"}}, {{"bytes", "32"}}});
 
   EXPECT_EQ(Envoy::Network::FilterStatus::Continue, filter_->onData(data, false));
-  EXPECT_EQ(1UL, store_.counter("test.zookeeper.connect_rq").value());
+  EXPECT_EQ(1UL, config_->stats().connect_rq_.value());
   EXPECT_EQ(32UL, config_->stats().request_bytes_.value());
-  EXPECT_EQ(0UL, store_.counter("test.zookeeper.connect_rq_bytes").value());
+  EXPECT_EQ(0UL, config_->stats().connect_rq_bytes_.value());
   EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
+  EXPECT_EQ(0UL, config_->stats().connect_decoder_error_.value());
 
   data = encodeConnectResponse();
   expectSetDynamicMetadata({{{"opname", "connect_response"},
@@ -862,8 +909,9 @@ TEST_F(ZooKeeperFilterTest, DisablePerOpcodeRequestAndResponseBytesMetrics) {
   EXPECT_EQ(1UL, config_->stats().connect_resp_fast_.value());
   EXPECT_EQ(0UL, config_->stats().connect_resp_slow_.value());
   EXPECT_EQ(24UL, config_->stats().response_bytes_.value());
-  EXPECT_EQ(0UL, store_.counter("test.zookeeper.connect_resp_bytes").value());
+  EXPECT_EQ(0UL, config_->stats().connect_resp_bytes_.value());
   EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
+  EXPECT_EQ(0UL, config_->stats().connect_decoder_error_.value());
   EXPECT_NE(absl::nullopt, findHistogram("test.zookeeper.connect_response_latency"));
 }
 
@@ -871,16 +919,17 @@ TEST_F(ZooKeeperFilterTest, DisablePerOpcodeRequestBytesMetrics) {
   std::chrono::milliseconds default_latency_threshold(100);
   LatencyThresholdOverrideList latency_threshold_overrides;
 
-  initialize(false, true, true, default_latency_threshold, latency_threshold_overrides);
+  initialize(false, true, true, true, default_latency_threshold, latency_threshold_overrides);
 
   Buffer::OwnedImpl data = encodeConnect();
   expectSetDynamicMetadata({{{"opname", "connect"}}, {{"bytes", "32"}}});
 
   EXPECT_EQ(Envoy::Network::FilterStatus::Continue, filter_->onData(data, false));
-  EXPECT_EQ(1UL, store_.counter("test.zookeeper.connect_rq").value());
+  EXPECT_EQ(1UL, config_->stats().connect_rq_.value());
   EXPECT_EQ(32UL, config_->stats().request_bytes_.value());
-  EXPECT_EQ(0UL, store_.counter("test.zookeeper.connect_rq_bytes").value());
+  EXPECT_EQ(0UL, config_->stats().connect_rq_bytes_.value());
   EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
+  EXPECT_EQ(0UL, config_->stats().connect_decoder_error_.value());
 
   data = encodeConnectResponse();
   expectSetDynamicMetadata({{{"opname", "connect_response"},
@@ -893,8 +942,9 @@ TEST_F(ZooKeeperFilterTest, DisablePerOpcodeRequestBytesMetrics) {
   EXPECT_EQ(1UL, config_->stats().connect_resp_fast_.value());
   EXPECT_EQ(0UL, config_->stats().connect_resp_slow_.value());
   EXPECT_EQ(24UL, config_->stats().response_bytes_.value());
-  EXPECT_EQ(24UL, store_.counter("test.zookeeper.connect_resp_bytes").value());
+  EXPECT_EQ(24UL, config_->stats().connect_resp_bytes_.value());
   EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
+  EXPECT_EQ(0UL, config_->stats().connect_decoder_error_.value());
   EXPECT_NE(absl::nullopt, findHistogram("test.zookeeper.connect_response_latency"));
 }
 
@@ -902,16 +952,17 @@ TEST_F(ZooKeeperFilterTest, DisablePerOpcodeResponseBytesMetrics) {
   std::chrono::milliseconds default_latency_threshold(100);
   LatencyThresholdOverrideList latency_threshold_overrides;
 
-  initialize(true, false, true, default_latency_threshold, latency_threshold_overrides);
+  initialize(true, false, true, true, default_latency_threshold, latency_threshold_overrides);
 
   Buffer::OwnedImpl data = encodeConnect();
   expectSetDynamicMetadata({{{"opname", "connect"}}, {{"bytes", "32"}}});
 
   EXPECT_EQ(Envoy::Network::FilterStatus::Continue, filter_->onData(data, false));
-  EXPECT_EQ(1UL, store_.counter("test.zookeeper.connect_rq").value());
+  EXPECT_EQ(1UL, config_->stats().connect_rq_.value());
   EXPECT_EQ(32UL, config_->stats().request_bytes_.value());
-  EXPECT_EQ(32UL, store_.counter("test.zookeeper.connect_rq_bytes").value());
+  EXPECT_EQ(32UL, config_->stats().connect_rq_bytes_.value());
   EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
+  EXPECT_EQ(0UL, config_->stats().connect_decoder_error_.value());
 
   data = encodeConnectResponse();
   expectSetDynamicMetadata({{{"opname", "connect_response"},
@@ -924,8 +975,9 @@ TEST_F(ZooKeeperFilterTest, DisablePerOpcodeResponseBytesMetrics) {
   EXPECT_EQ(1UL, config_->stats().connect_resp_fast_.value());
   EXPECT_EQ(0UL, config_->stats().connect_resp_slow_.value());
   EXPECT_EQ(24UL, config_->stats().response_bytes_.value());
-  EXPECT_EQ(0UL, store_.counter("test.zookeeper.connect_resp_bytes").value());
+  EXPECT_EQ(0UL, config_->stats().connect_resp_bytes_.value());
   EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
+  EXPECT_EQ(0UL, config_->stats().connect_decoder_error_.value());
   EXPECT_NE(absl::nullopt, findHistogram("test.zookeeper.connect_response_latency"));
 }
 
@@ -947,8 +999,9 @@ TEST_F(ZooKeeperFilterTest, Connect) {
   EXPECT_EQ(1UL, config_->stats().connect_resp_fast_.value());
   EXPECT_EQ(0UL, config_->stats().connect_resp_slow_.value());
   EXPECT_EQ(24UL, config_->stats().response_bytes_.value());
-  EXPECT_EQ(24UL, store_.counter("test.zookeeper.connect_resp_bytes").value());
+  EXPECT_EQ(24UL, config_->stats().connect_resp_bytes_.value());
   EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
+  EXPECT_EQ(0UL, config_->stats().connect_decoder_error_.value());
   EXPECT_NE(absl::nullopt, findHistogram("test.zookeeper.connect_response_latency"));
 }
 
@@ -971,8 +1024,9 @@ TEST_F(ZooKeeperFilterTest, ConnectReadonly) {
   EXPECT_EQ(1UL, config_->stats().connect_resp_fast_.value());
   EXPECT_EQ(0UL, config_->stats().connect_resp_slow_.value());
   EXPECT_EQ(25UL, config_->stats().response_bytes_.value());
-  EXPECT_EQ(25UL, store_.counter("test.zookeeper.connect_resp_bytes").value());
+  EXPECT_EQ(25UL, config_->stats().connect_resp_bytes_.value());
   EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
+  EXPECT_EQ(0UL, config_->stats().connect_decoder_error_.value());
   EXPECT_NE(absl::nullopt, findHistogram("test.zookeeper.connect_response_latency"));
 }
 
@@ -1069,8 +1123,8 @@ TEST_F(ZooKeeperFilterTest, CreateRequestPersistent) {
   testResponse({{{"opname", "create_resp"}, {"zxid", "2000"}, {"error", "0"}}, {{"bytes", "20"}}});
 }
 
-TEST_F(ZooKeeperFilterTest, CreateRequestPersistentWithNegativeDataLen) {
-  testCreateWithNegativeDataLen(CreateFlags::Persistent, 0);
+TEST_F(ZooKeeperFilterTest, CreateRequestPersistentWithoutZnodeData) {
+  testCreateWithoutZnodeData(CreateFlags::Persistent, 0);
   testResponse({{{"opname", "create_resp"}, {"zxid", "2000"}, {"error", "0"}}, {{"bytes", "20"}}});
 }
 
@@ -1108,14 +1162,39 @@ TEST_F(ZooKeeperFilterTest, CreateRequestTTLSequential) {
 }
 
 TEST_F(ZooKeeperFilterTest, CreateRequest2) {
+  testCreate(CreateFlags::Persistent, 0, OpCodes::Create2);
+  testResponse({{{"opname", "create2_resp"}, {"zxid", "2000"}, {"error", "0"}}, {{"bytes", "20"}}});
+}
+
+TEST_F(ZooKeeperFilterTest, TooSmallCreateRequest) {
   initialize();
 
   Buffer::OwnedImpl data =
-      encodeCreateRequest("/foo", "bar", 0, false, 1000, enumToSignedInt(OpCodes::Create2));
+      encodeTooSmallCreateRequest("/foo", "bar", false, 1000, enumToSignedInt(OpCodes::Create));
 
-  testRequest(data, {{{"opname", "create2"}, {"path", "/foo"}, {"create_type", "persistent"}},
-                     {{"bytes", "35"}}});
-  testResponse({{{"opname", "create2_resp"}, {"zxid", "2000"}, {"error", "0"}}, {{"bytes", "20"}}});
+  EXPECT_EQ(Envoy::Network::FilterStatus::Continue, filter_->onData(data, false));
+  EXPECT_EQ(0UL, config_->stats().create_rq_.value());
+  EXPECT_EQ(0UL, config_->stats().request_bytes_.value());
+  EXPECT_EQ(0UL, config_->stats().create_rq_bytes_.value());
+  EXPECT_EQ(1UL, config_->stats().decoder_error_.value());
+  EXPECT_EQ(1UL, config_->stats().create_decoder_error_.value());
+}
+
+TEST_F(ZooKeeperFilterTest, TooSmallCreateRequestWithDisabledPerOpcodeDecoderErrorMetrics) {
+  std::chrono::milliseconds default_latency_threshold(100);
+  LatencyThresholdOverrideList latency_threshold_overrides;
+
+  initialize(true, true, false, true, default_latency_threshold, latency_threshold_overrides);
+
+  Buffer::OwnedImpl data =
+      encodeTooSmallCreateRequest("/foo", "bar", false, 1000, enumToSignedInt(OpCodes::Create));
+
+  EXPECT_EQ(Envoy::Network::FilterStatus::Continue, filter_->onData(data, false));
+  EXPECT_EQ(0UL, config_->stats().create_rq_.value());
+  EXPECT_EQ(0UL, config_->stats().request_bytes_.value());
+  EXPECT_EQ(0UL, config_->stats().create_rq_bytes_.value());
+  EXPECT_EQ(1UL, config_->stats().decoder_error_.value());
+  EXPECT_EQ(0UL, config_->stats().create_decoder_error_.value());
 }
 
 TEST_F(ZooKeeperFilterTest, SetRequest) {
@@ -1229,8 +1308,9 @@ TEST_F(ZooKeeperFilterTest, CheckRequest) {
   EXPECT_EQ(Envoy::Network::FilterStatus::Continue, filter_->onData(data, false));
   EXPECT_EQ(1UL, config_->stats().check_rq_.value());
   EXPECT_EQ(24UL, config_->stats().request_bytes_.value());
-  EXPECT_EQ(24UL, store_.counter("test.zookeeper.check_rq_bytes").value());
+  EXPECT_EQ(24UL, config_->stats().check_rq_bytes_.value());
   EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
+  EXPECT_EQ(0UL, config_->stats().check_decoder_error_.value());
 
   testResponse({{{"opname", "check_resp"}, {"zxid", "2000"}, {"error", "0"}}, {{"bytes", "20"}}});
 }
@@ -1238,34 +1318,52 @@ TEST_F(ZooKeeperFilterTest, CheckRequest) {
 TEST_F(ZooKeeperFilterTest, MultiRequest) {
   initialize();
 
-  Buffer::OwnedImpl create1 = encodeCreateRequest("/foo", "1", 0, true);
-  Buffer::OwnedImpl create2 = encodeCreateRequest("/bar", "1", 0, true);
-  Buffer::OwnedImpl create3 = encodeCreateRequestWithNegativeDataLen("/baz", 0, true);
-  Buffer::OwnedImpl check1 = encodePathVersion("/foo", 100, enumToSignedInt(OpCodes::Check), true);
-  Buffer::OwnedImpl set1 = encodeSetRequest("/bar", "2", -1, true);
+  Buffer::OwnedImpl create1 =
+      encodeCreateRequest("/foo", "1", 0, true, 1000, enumToSignedInt(OpCodes::Create));
+  Buffer::OwnedImpl create2 =
+      encodeCreateRequest("/bar", "1", 0, true, 1000, enumToSignedInt(OpCodes::Create2));
+  Buffer::OwnedImpl create3 =
+      encodeCreateRequest("/baz", "1", 0, true, 1000, enumToSignedInt(OpCodes::CreateContainer));
+  Buffer::OwnedImpl create4 =
+      encodeCreateRequestWithoutZnodeData("/qux", 0, true, enumToSignedInt(OpCodes::CreateTtl));
+  Buffer::OwnedImpl check = encodePathVersion("/foo", 100, enumToSignedInt(OpCodes::Check), true);
+  Buffer::OwnedImpl set = encodeSetRequest("/bar", "2", -1, true);
   Buffer::OwnedImpl delete1 = encodeDeleteRequest("/abcd", 1, true);
   Buffer::OwnedImpl delete2 = encodeDeleteRequest("/efg", 2, true);
+  Buffer::OwnedImpl getchildren =
+      encodePathWatch("/foo", false, 1000, enumToSignedInt(OpCodes::GetChildren), true);
+  Buffer::OwnedImpl getdata =
+      encodePathWatch("/bar", true, 1000, enumToSignedInt(OpCodes::GetData), true);
 
   std::vector<std::pair<int32_t, Buffer::OwnedImpl>> ops;
   ops.push_back(std::make_pair(enumToSignedInt(OpCodes::Create), std::move(create1)));
-  ops.push_back(std::make_pair(enumToSignedInt(OpCodes::Create), std::move(create2)));
-  ops.push_back(std::make_pair(enumToSignedInt(OpCodes::Create), std::move(create3)));
-  ops.push_back(std::make_pair(enumToSignedInt(OpCodes::Check), std::move(check1)));
-  ops.push_back(std::make_pair(enumToSignedInt(OpCodes::SetData), std::move(set1)));
+  ops.push_back(std::make_pair(enumToSignedInt(OpCodes::Create2), std::move(create2)));
+  ops.push_back(std::make_pair(enumToSignedInt(OpCodes::CreateContainer), std::move(create3)));
+  ops.push_back(std::make_pair(enumToSignedInt(OpCodes::CreateTtl), std::move(create4)));
+  ops.push_back(std::make_pair(enumToSignedInt(OpCodes::Check), std::move(check)));
+  ops.push_back(std::make_pair(enumToSignedInt(OpCodes::SetData), std::move(set)));
   ops.push_back(std::make_pair(enumToSignedInt(OpCodes::Delete), std::move(delete1)));
   ops.push_back(std::make_pair(enumToSignedInt(OpCodes::Delete), std::move(delete2)));
+  ops.push_back(std::make_pair(enumToSignedInt(OpCodes::GetChildren), std::move(getchildren)));
+  ops.push_back(std::make_pair(enumToSignedInt(OpCodes::GetData), std::move(getdata)));
 
   Buffer::OwnedImpl data = encodeMultiRequest(ops);
 
   EXPECT_EQ(Envoy::Network::FilterStatus::Continue, filter_->onData(data, false));
   EXPECT_EQ(1UL, config_->stats().multi_rq_.value());
-  EXPECT_EQ(200UL, config_->stats().request_bytes_.value());
-  EXPECT_EQ(200UL, store_.counter("test.zookeeper.multi_rq_bytes").value());
-  EXPECT_EQ(3UL, config_->stats().create_rq_.value());
-  EXPECT_EQ(1UL, config_->stats().setdata_rq_.value());
+  EXPECT_EQ(274UL, config_->stats().request_bytes_.value());
+  EXPECT_EQ(274UL, config_->stats().multi_rq_bytes_.value());
+  EXPECT_EQ(1UL, config_->stats().create_rq_.value());
+  EXPECT_EQ(1UL, config_->stats().create2_rq_.value());
+  EXPECT_EQ(1UL, config_->stats().createcontainer_rq_.value());
+  EXPECT_EQ(1UL, config_->stats().createttl_rq_.value());
   EXPECT_EQ(1UL, config_->stats().check_rq_.value());
+  EXPECT_EQ(1UL, config_->stats().setdata_rq_.value());
   EXPECT_EQ(2UL, config_->stats().delete_rq_.value());
+  EXPECT_EQ(1UL, config_->stats().getchildren_rq_.value());
+  EXPECT_EQ(1UL, config_->stats().getdata_rq_.value());
   EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
+  EXPECT_EQ(0UL, config_->stats().multi_decoder_error_.value());
 
   testResponse({{{"opname", "multi_resp"}, {"zxid", "2000"}, {"error", "0"}}, {{"bytes", "20"}}});
 }
@@ -1386,7 +1484,7 @@ TEST_F(ZooKeeperFilterTest, WatchEvent) {
   // WATCH_XID is generated by the server, it has no corresponding opcode.
   // Below expectation makes sure that WATCH_XID does not return the default opcode (which is
   // connect).
-  EXPECT_EQ(0UL, store_.counter("test.zookeeper.connect_resp_bytes").value());
+  EXPECT_EQ(0UL, config_->stats().connect_resp_bytes_.value());
   EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
 }
 
@@ -1415,8 +1513,9 @@ TEST_F(ZooKeeperFilterTest, OneRequestWithMultipleOnDataCalls) {
   EXPECT_EQ(Envoy::Network::FilterStatus::Continue, filter_->onData(data, false));
   EXPECT_EQ(0UL, config_->stats().create_rq_.value());
   EXPECT_EQ(0UL, config_->stats().request_bytes_.value());
-  EXPECT_EQ(0UL, store_.counter("test.zookeeper.create_rq_bytes").value());
+  EXPECT_EQ(0UL, config_->stats().create_rq_bytes_.value());
   EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
+  EXPECT_EQ(0UL, config_->stats().create_decoder_error_.value());
   // Mock the buffer is drained by the tcp_proxy filter.
   data.drain(data.length());
 
@@ -1430,8 +1529,9 @@ TEST_F(ZooKeeperFilterTest, OneRequestWithMultipleOnDataCalls) {
   EXPECT_EQ(Envoy::Network::FilterStatus::Continue, filter_->onData(data, false));
   EXPECT_EQ(1UL, config_->stats().create_rq_.value());
   EXPECT_EQ(35UL, config_->stats().request_bytes_.value());
-  EXPECT_EQ(35UL, store_.counter("test.zookeeper.create_rq_bytes").value());
+  EXPECT_EQ(35UL, config_->stats().create_rq_bytes_.value());
   EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
+  EXPECT_EQ(0UL, config_->stats().create_decoder_error_.value());
 
   // Response.
   testResponse({{{"opname", "create_resp"}, {"zxid", "2000"}, {"error", "0"}}, {{"bytes", "20"}}});
@@ -1450,8 +1550,9 @@ TEST_F(ZooKeeperFilterTest, MultipleRequestsWithOneOnDataCall) {
   EXPECT_EQ(Envoy::Network::FilterStatus::Continue, filter_->onData(data, false));
   EXPECT_EQ(2UL, config_->stats().create_rq_.value());
   EXPECT_EQ(71UL, config_->stats().request_bytes_.value());
-  EXPECT_EQ(71UL, store_.counter("test.zookeeper.create_rq_bytes").value());
+  EXPECT_EQ(71UL, config_->stats().create_rq_bytes_.value());
   EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
+  EXPECT_EQ(0UL, config_->stats().create_decoder_error_.value());
 
   // Responses.
   testResponse({{{"opname", "create_resp"}, {"zxid", "2000"}, {"error", "0"}}, {{"bytes", "20"}}});
@@ -1471,8 +1572,9 @@ TEST_F(ZooKeeperFilterTest, MultipleControlRequestsWithOneOnDataCall) {
   EXPECT_EQ(Envoy::Network::FilterStatus::Continue, filter_->onData(data, false));
   EXPECT_EQ(2UL, store_.counter("test.zookeeper.auth.digest_rq").value());
   EXPECT_EQ(72UL, config_->stats().request_bytes_.value());
-  EXPECT_EQ(72UL, store_.counter("test.zookeeper.auth_rq_bytes").value());
+  EXPECT_EQ(72UL, config_->stats().auth_rq_bytes_.value());
   EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
+  EXPECT_EQ(0UL, config_->stats().auth_decoder_error_.value());
 
   // Responses.
   testResponse({{{"opname", "auth_response"}, {"zxid", "2000"}, {"error", "0"}}, {{"bytes", "20"}}},
@@ -1494,9 +1596,11 @@ TEST_F(ZooKeeperFilterTest, MixedControlAndDataRequestsWithOneOnDataCall) {
   EXPECT_EQ(1UL, store_.counter("test.zookeeper.auth.digest_rq").value());
   EXPECT_EQ(1UL, config_->stats().create_rq_.value());
   EXPECT_EQ(71UL, config_->stats().request_bytes_.value());
-  EXPECT_EQ(36UL, store_.counter("test.zookeeper.auth_rq_bytes").value());
-  EXPECT_EQ(35UL, store_.counter("test.zookeeper.create_rq_bytes").value());
+  EXPECT_EQ(36UL, config_->stats().auth_rq_bytes_.value());
+  EXPECT_EQ(35UL, config_->stats().create_rq_bytes_.value());
   EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
+  EXPECT_EQ(0UL, config_->stats().auth_decoder_error_.value());
+  EXPECT_EQ(0UL, config_->stats().create_decoder_error_.value());
 
   // Responses.
   testResponse({{{"opname", "auth_response"}, {"zxid", "2000"}, {"error", "0"}}, {{"bytes", "20"}}},
@@ -1510,9 +1614,11 @@ TEST_F(ZooKeeperFilterTest, MixedControlAndDataRequestsWithOneOnDataCall) {
   EXPECT_EQ(1UL, config_->stats().create_resp_fast_.value());
   EXPECT_EQ(0UL, config_->stats().create_resp_slow_.value());
   EXPECT_EQ(40UL, config_->stats().response_bytes_.value());
-  EXPECT_EQ(20UL, store_.counter("test.zookeeper.auth_resp_bytes").value());
-  EXPECT_EQ(20UL, store_.counter("test.zookeeper.create_resp_bytes").value());
+  EXPECT_EQ(20UL, config_->stats().auth_resp_bytes_.value());
+  EXPECT_EQ(20UL, config_->stats().create_resp_bytes_.value());
   EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
+  EXPECT_EQ(0UL, config_->stats().auth_decoder_error_.value());
+  EXPECT_EQ(0UL, config_->stats().create_decoder_error_.value());
   EXPECT_NE(absl::nullopt, findHistogram("test.zookeeper.create_resp_latency"));
 }
 
@@ -1528,8 +1634,9 @@ TEST_F(ZooKeeperFilterTest, MultipleRequestsWithMultipleOnDataCalls) {
   EXPECT_EQ(Envoy::Network::FilterStatus::Continue, filter_->onData(data, false));
   EXPECT_EQ(0UL, config_->stats().create_rq_.value());
   EXPECT_EQ(0UL, config_->stats().request_bytes_.value());
-  EXPECT_EQ(0UL, store_.counter("test.zookeeper.create_rq_bytes").value());
+  EXPECT_EQ(0UL, config_->stats().create_rq_bytes_.value());
   EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
+  EXPECT_EQ(0UL, config_->stats().create_decoder_error_.value());
   // Mock the buffer is drained by the tcp_proxy filter.
   data.drain(data.length());
 
@@ -1547,8 +1654,9 @@ TEST_F(ZooKeeperFilterTest, MultipleRequestsWithMultipleOnDataCalls) {
   EXPECT_EQ(Envoy::Network::FilterStatus::Continue, filter_->onData(data, false));
   EXPECT_EQ(1UL, config_->stats().create_rq_.value());
   EXPECT_EQ(35UL, config_->stats().request_bytes_.value());
-  EXPECT_EQ(35UL, store_.counter("test.zookeeper.create_rq_bytes").value());
+  EXPECT_EQ(35UL, config_->stats().create_rq_bytes_.value());
   EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
+  EXPECT_EQ(0UL, config_->stats().create_decoder_error_.value());
   // Mock the buffer is drained by the tcp_proxy filter.
   data.drain(data.length());
 
@@ -1564,8 +1672,9 @@ TEST_F(ZooKeeperFilterTest, MultipleRequestsWithMultipleOnDataCalls) {
   EXPECT_EQ(Envoy::Network::FilterStatus::Continue, filter_->onData(data, false));
   EXPECT_EQ(2UL, config_->stats().create_rq_.value());
   EXPECT_EQ(71UL, config_->stats().request_bytes_.value());
-  EXPECT_EQ(71UL, store_.counter("test.zookeeper.create_rq_bytes").value());
+  EXPECT_EQ(71UL, config_->stats().create_rq_bytes_.value());
   EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
+  EXPECT_EQ(0UL, config_->stats().create_decoder_error_.value());
 
   // Responses.
   testResponse({{{"opname", "create_resp"}, {"zxid", "2000"}, {"error", "0"}}, {{"bytes", "20"}}},
@@ -1586,8 +1695,9 @@ TEST_F(ZooKeeperFilterTest, MultipleRequestsWithMultipleOnDataCalls2) {
   EXPECT_EQ(Envoy::Network::FilterStatus::Continue, filter_->onData(data, false));
   EXPECT_EQ(0UL, config_->stats().create_rq_.value());
   EXPECT_EQ(0UL, config_->stats().request_bytes_.value());
-  EXPECT_EQ(0UL, store_.counter("test.zookeeper.create_rq_bytes").value());
+  EXPECT_EQ(0UL, config_->stats().create_rq_bytes_.value());
   EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
+  EXPECT_EQ(0UL, config_->stats().create_decoder_error_.value());
   // Mock the buffer is drained by the tcp_proxy filter.
   data.drain(data.length());
 
@@ -1604,8 +1714,9 @@ TEST_F(ZooKeeperFilterTest, MultipleRequestsWithMultipleOnDataCalls2) {
   EXPECT_EQ(Envoy::Network::FilterStatus::Continue, filter_->onData(data, false));
   EXPECT_EQ(3UL, config_->stats().create_rq_.value());
   EXPECT_EQ(108UL, config_->stats().request_bytes_.value());
-  EXPECT_EQ(108UL, store_.counter("test.zookeeper.create_rq_bytes").value());
+  EXPECT_EQ(108UL, config_->stats().create_rq_bytes_.value());
   EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
+  EXPECT_EQ(0UL, config_->stats().create_decoder_error_.value());
 
   // Responses.
   testResponse({{{"opname", "create_resp"}, {"zxid", "2000"}, {"error", "0"}}, {{"bytes", "20"}}},
@@ -1631,8 +1742,9 @@ TEST_F(ZooKeeperFilterTest, MultipleRequestsWithMultipleOnDataCalls3) {
   EXPECT_EQ(Envoy::Network::FilterStatus::Continue, filter_->onData(data, false));
   EXPECT_EQ(2UL, config_->stats().create_rq_.value());
   EXPECT_EQ(71UL, config_->stats().request_bytes_.value());
-  EXPECT_EQ(71UL, store_.counter("test.zookeeper.create_rq_bytes").value());
+  EXPECT_EQ(71UL, config_->stats().create_rq_bytes_.value());
   EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
+  EXPECT_EQ(0UL, config_->stats().create_decoder_error_.value());
   // Mock the buffer is drained by the tcp_proxy filter.
   data.drain(data.length());
 
@@ -1646,8 +1758,9 @@ TEST_F(ZooKeeperFilterTest, MultipleRequestsWithMultipleOnDataCalls3) {
   EXPECT_EQ(Envoy::Network::FilterStatus::Continue, filter_->onData(data, false));
   EXPECT_EQ(3UL, config_->stats().create_rq_.value());
   EXPECT_EQ(108UL, config_->stats().request_bytes_.value());
-  EXPECT_EQ(108UL, store_.counter("test.zookeeper.create_rq_bytes").value());
+  EXPECT_EQ(108UL, config_->stats().create_rq_bytes_.value());
   EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
+  EXPECT_EQ(0UL, config_->stats().create_decoder_error_.value());
 
   // Responses.
   testResponse({{{"opname", "create_resp"}, {"zxid", "2000"}, {"error", "0"}}, {{"bytes", "20"}}},
@@ -1673,8 +1786,9 @@ TEST_F(ZooKeeperFilterTest, MultipleRequestsWithMultipleOnDataCalls4) {
   EXPECT_EQ(Envoy::Network::FilterStatus::Continue, filter_->onData(data, false));
   EXPECT_EQ(1UL, config_->stats().create_rq_.value());
   EXPECT_EQ(35UL, config_->stats().request_bytes_.value());
-  EXPECT_EQ(35UL, store_.counter("test.zookeeper.create_rq_bytes").value());
+  EXPECT_EQ(35UL, config_->stats().create_rq_bytes_.value());
   EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
+  EXPECT_EQ(0UL, config_->stats().create_decoder_error_.value());
   // Mock the buffer is drained by the tcp_proxy filter.
   data.drain(data.length());
 
@@ -1686,8 +1800,9 @@ TEST_F(ZooKeeperFilterTest, MultipleRequestsWithMultipleOnDataCalls4) {
   EXPECT_EQ(Envoy::Network::FilterStatus::Continue, filter_->onData(data, false));
   EXPECT_EQ(1UL, config_->stats().create_rq_.value());
   EXPECT_EQ(35UL, config_->stats().request_bytes_.value());
-  EXPECT_EQ(35UL, store_.counter("test.zookeeper.create_rq_bytes").value());
+  EXPECT_EQ(35UL, config_->stats().create_rq_bytes_.value());
   EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
+  EXPECT_EQ(0UL, config_->stats().create_decoder_error_.value());
   // Mock the buffer is drained by the tcp_proxy filter.
   data.drain(data.length());
 
@@ -1701,8 +1816,9 @@ TEST_F(ZooKeeperFilterTest, MultipleRequestsWithMultipleOnDataCalls4) {
   EXPECT_EQ(Envoy::Network::FilterStatus::Continue, filter_->onData(data, false));
   EXPECT_EQ(3UL, config_->stats().create_rq_.value());
   EXPECT_EQ(108UL, config_->stats().request_bytes_.value());
-  EXPECT_EQ(108UL, store_.counter("test.zookeeper.create_rq_bytes").value());
+  EXPECT_EQ(108UL, config_->stats().create_rq_bytes_.value());
   EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
+  EXPECT_EQ(0UL, config_->stats().create_decoder_error_.value());
 
   // Responses.
   testResponse({{{"opname", "create_resp"}, {"zxid", "2000"}, {"error", "0"}}, {{"bytes", "20"}}},
@@ -1724,8 +1840,9 @@ TEST_F(ZooKeeperFilterTest, OneResponseWithMultipleOnWriteCalls) {
   EXPECT_EQ(Envoy::Network::FilterStatus::Continue, filter_->onData(rq_data, false));
   EXPECT_EQ(1UL, config_->stats().getdata_rq_.value());
   EXPECT_EQ(21UL, config_->stats().request_bytes_.value());
-  EXPECT_EQ(21UL, store_.counter("test.zookeeper.getdata_rq_bytes").value());
+  EXPECT_EQ(21UL, config_->stats().getdata_rq_bytes_.value());
   EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
+  EXPECT_EQ(0UL, config_->stats().getdata_decoder_error_.value());
 
   // Response (onWrite1).
   Buffer::OwnedImpl resp_data = encodeResponseWithPartialData(1000, 2000, 0);
@@ -1735,8 +1852,9 @@ TEST_F(ZooKeeperFilterTest, OneResponseWithMultipleOnWriteCalls) {
   EXPECT_EQ(0UL, config_->stats().getdata_resp_fast_.value());
   EXPECT_EQ(0UL, config_->stats().getdata_resp_slow_.value());
   EXPECT_EQ(0UL, config_->stats().response_bytes_.value());
-  EXPECT_EQ(0UL, store_.counter("test.zookeeper.getdata_resp_bytes").value());
+  EXPECT_EQ(0UL, config_->stats().getdata_resp_bytes_.value());
   EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
+  EXPECT_EQ(0UL, config_->stats().getdata_decoder_error_.value());
   // Mock the buffer is drained by the tcp_proxy filter.
   resp_data.drain(resp_data.length());
 
@@ -1749,8 +1867,9 @@ TEST_F(ZooKeeperFilterTest, OneResponseWithMultipleOnWriteCalls) {
   EXPECT_EQ(1UL, config_->stats().getdata_resp_fast_.value());
   EXPECT_EQ(0UL, config_->stats().getdata_resp_slow_.value());
   EXPECT_EQ(24UL, config_->stats().response_bytes_.value());
-  EXPECT_EQ(24UL, store_.counter("test.zookeeper.getdata_resp_bytes").value());
+  EXPECT_EQ(24UL, config_->stats().getdata_resp_bytes_.value());
   EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
+  EXPECT_EQ(0UL, config_->stats().getdata_decoder_error_.value());
 }
 
 // |RESP1|RESP2|
@@ -1765,8 +1884,9 @@ TEST_F(ZooKeeperFilterTest, MultipleResponsesWithOneOnWriteCall) {
   EXPECT_EQ(Envoy::Network::FilterStatus::Continue, filter_->onData(rq_data, false));
   EXPECT_EQ(2UL, config_->stats().getdata_rq_.value());
   EXPECT_EQ(42UL, config_->stats().request_bytes_.value());
-  EXPECT_EQ(42UL, store_.counter("test.zookeeper.getdata_rq_bytes").value());
+  EXPECT_EQ(42UL, config_->stats().getdata_rq_bytes_.value());
   EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
+  EXPECT_EQ(0UL, config_->stats().getdata_decoder_error_.value());
 
   // Response (onWrite1).
   Buffer::OwnedImpl resp_data = encodeResponse(1000, 2000, 0, "/foo");
@@ -1777,8 +1897,9 @@ TEST_F(ZooKeeperFilterTest, MultipleResponsesWithOneOnWriteCall) {
   EXPECT_EQ(2UL, config_->stats().getdata_resp_fast_.value());
   EXPECT_EQ(0UL, config_->stats().getdata_resp_slow_.value());
   EXPECT_EQ(48UL, config_->stats().response_bytes_.value());
-  EXPECT_EQ(48UL, store_.counter("test.zookeeper.getdata_resp_bytes").value());
+  EXPECT_EQ(48UL, config_->stats().getdata_resp_bytes_.value());
   EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
+  EXPECT_EQ(0UL, config_->stats().getdata_decoder_error_.value());
 }
 
 // |RESP1 --------|RESP2 ------------|
@@ -1794,8 +1915,9 @@ TEST_F(ZooKeeperFilterTest, MultipleResponsesWithMultipleOnWriteCalls) {
   EXPECT_EQ(Envoy::Network::FilterStatus::Continue, filter_->onData(rq_data, false));
   EXPECT_EQ(2UL, config_->stats().getdata_rq_.value());
   EXPECT_EQ(42UL, config_->stats().request_bytes_.value());
-  EXPECT_EQ(42UL, store_.counter("test.zookeeper.getdata_rq_bytes").value());
+  EXPECT_EQ(42UL, config_->stats().getdata_rq_bytes_.value());
   EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
+  EXPECT_EQ(0UL, config_->stats().getdata_decoder_error_.value());
 
   // Response (onWrite1).
   Buffer::OwnedImpl resp_data = encodeResponseWithPartialData(1000, 2000, 0);
@@ -1805,8 +1927,9 @@ TEST_F(ZooKeeperFilterTest, MultipleResponsesWithMultipleOnWriteCalls) {
   EXPECT_EQ(0UL, config_->stats().getdata_resp_fast_.value());
   EXPECT_EQ(0UL, config_->stats().getdata_resp_slow_.value());
   EXPECT_EQ(0UL, config_->stats().response_bytes_.value());
-  EXPECT_EQ(0UL, store_.counter("test.zookeeper.getdata_resp_bytes").value());
+  EXPECT_EQ(0UL, config_->stats().getdata_resp_bytes_.value());
   EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
+  EXPECT_EQ(0UL, config_->stats().getdata_decoder_error_.value());
   // Mock the buffer is drained by the tcp_proxy filter.
   resp_data.drain(resp_data.length());
 
@@ -1823,8 +1946,9 @@ TEST_F(ZooKeeperFilterTest, MultipleResponsesWithMultipleOnWriteCalls) {
   EXPECT_EQ(1UL, config_->stats().getdata_resp_fast_.value());
   EXPECT_EQ(0UL, config_->stats().getdata_resp_slow_.value());
   EXPECT_EQ(24UL, config_->stats().response_bytes_.value());
-  EXPECT_EQ(24UL, store_.counter("test.zookeeper.getdata_resp_bytes").value());
+  EXPECT_EQ(24UL, config_->stats().getdata_resp_bytes_.value());
   EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
+  EXPECT_EQ(0UL, config_->stats().getdata_decoder_error_.value());
   // Mock the buffer is drained by the tcp_proxy filter.
   resp_data.drain(resp_data.length());
 
@@ -1838,8 +1962,9 @@ TEST_F(ZooKeeperFilterTest, MultipleResponsesWithMultipleOnWriteCalls) {
   EXPECT_EQ(2UL, config_->stats().getdata_resp_fast_.value());
   EXPECT_EQ(0UL, config_->stats().getdata_resp_slow_.value());
   EXPECT_EQ(50UL, config_->stats().response_bytes_.value());
-  EXPECT_EQ(50UL, store_.counter("test.zookeeper.getdata_resp_bytes").value());
+  EXPECT_EQ(50UL, config_->stats().getdata_resp_bytes_.value());
   EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
+  EXPECT_EQ(0UL, config_->stats().getdata_decoder_error_.value());
 }
 
 // |RESP1 ------|RESP2|RESP3|
@@ -1857,8 +1982,9 @@ TEST_F(ZooKeeperFilterTest, MultipleResponsesWithMultipleOnWriteCalls2) {
   EXPECT_EQ(Envoy::Network::FilterStatus::Continue, filter_->onData(rq_data, false));
   EXPECT_EQ(3UL, config_->stats().getdata_rq_.value());
   EXPECT_EQ(63UL, config_->stats().request_bytes_.value());
-  EXPECT_EQ(63UL, store_.counter("test.zookeeper.getdata_rq_bytes").value());
+  EXPECT_EQ(63UL, config_->stats().getdata_rq_bytes_.value());
   EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
+  EXPECT_EQ(0UL, config_->stats().getdata_decoder_error_.value());
 
   // Response (onWrite1).
   Buffer::OwnedImpl resp_data = encodeResponseWithPartialData(1000, 2000, 0);
@@ -1868,8 +1994,9 @@ TEST_F(ZooKeeperFilterTest, MultipleResponsesWithMultipleOnWriteCalls2) {
   EXPECT_EQ(0UL, config_->stats().getdata_resp_fast_.value());
   EXPECT_EQ(0UL, config_->stats().getdata_resp_slow_.value());
   EXPECT_EQ(0UL, config_->stats().response_bytes_.value());
-  EXPECT_EQ(0UL, store_.counter("test.zookeeper.getdata_resp_bytes").value());
+  EXPECT_EQ(0UL, config_->stats().getdata_resp_bytes_.value());
   EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
+  EXPECT_EQ(0UL, config_->stats().getdata_decoder_error_.value());
   // Mock the buffer is drained by the tcp_proxy filter.
   resp_data.drain(resp_data.length());
 
@@ -1885,8 +2012,9 @@ TEST_F(ZooKeeperFilterTest, MultipleResponsesWithMultipleOnWriteCalls2) {
   EXPECT_EQ(3UL, config_->stats().getdata_resp_fast_.value());
   EXPECT_EQ(0UL, config_->stats().getdata_resp_slow_.value());
   EXPECT_EQ(72UL, config_->stats().response_bytes_.value());
-  EXPECT_EQ(72UL, store_.counter("test.zookeeper.getdata_resp_bytes").value());
+  EXPECT_EQ(72UL, config_->stats().getdata_resp_bytes_.value());
   EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
+  EXPECT_EQ(0UL, config_->stats().getdata_decoder_error_.value());
 }
 
 // |RESP1|RESP2|RESP3 ---------|
@@ -1904,8 +2032,9 @@ TEST_F(ZooKeeperFilterTest, MultipleResponsesWithMultipleOnWriteCalls3) {
   EXPECT_EQ(Envoy::Network::FilterStatus::Continue, filter_->onData(rq_data, false));
   EXPECT_EQ(3UL, config_->stats().getdata_rq_.value());
   EXPECT_EQ(63UL, config_->stats().request_bytes_.value());
-  EXPECT_EQ(63UL, store_.counter("test.zookeeper.getdata_rq_bytes").value());
+  EXPECT_EQ(63UL, config_->stats().getdata_rq_bytes_.value());
   EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
+  EXPECT_EQ(0UL, config_->stats().getdata_decoder_error_.value());
 
   // Response (onWrite1).
   Buffer::OwnedImpl resp_data = encodeResponse(1000, 2000, 0, "abcd");
@@ -1917,8 +2046,9 @@ TEST_F(ZooKeeperFilterTest, MultipleResponsesWithMultipleOnWriteCalls3) {
   EXPECT_EQ(2UL, config_->stats().getdata_resp_fast_.value());
   EXPECT_EQ(0UL, config_->stats().getdata_resp_slow_.value());
   EXPECT_EQ(48UL, config_->stats().response_bytes_.value());
-  EXPECT_EQ(48UL, store_.counter("test.zookeeper.getdata_resp_bytes").value());
+  EXPECT_EQ(48UL, config_->stats().getdata_resp_bytes_.value());
   EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
+  EXPECT_EQ(0UL, config_->stats().getdata_decoder_error_.value());
   // Mock the buffer is drained by the tcp_proxy filter.
   resp_data.drain(resp_data.length());
 
@@ -1931,8 +2061,9 @@ TEST_F(ZooKeeperFilterTest, MultipleResponsesWithMultipleOnWriteCalls3) {
   EXPECT_EQ(3UL, config_->stats().getdata_resp_fast_.value());
   EXPECT_EQ(0UL, config_->stats().getdata_resp_slow_.value());
   EXPECT_EQ(72UL, config_->stats().response_bytes_.value());
-  EXPECT_EQ(72UL, store_.counter("test.zookeeper.getdata_resp_bytes").value());
+  EXPECT_EQ(72UL, config_->stats().getdata_resp_bytes_.value());
   EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
+  EXPECT_EQ(0UL, config_->stats().getdata_decoder_error_.value());
 }
 
 // |RESP1|RESP2 ------------------|RESP3|
@@ -1950,8 +2081,9 @@ TEST_F(ZooKeeperFilterTest, MultipleResponsesWithMultipleOnWriteCalls4) {
   EXPECT_EQ(Envoy::Network::FilterStatus::Continue, filter_->onData(rq_data, false));
   EXPECT_EQ(3UL, config_->stats().getdata_rq_.value());
   EXPECT_EQ(63UL, config_->stats().request_bytes_.value());
-  EXPECT_EQ(63UL, store_.counter("test.zookeeper.getdata_rq_bytes").value());
+  EXPECT_EQ(63UL, config_->stats().getdata_rq_bytes_.value());
   EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
+  EXPECT_EQ(0UL, config_->stats().getdata_decoder_error_.value());
 
   // Response (onWrite1).
   Buffer::OwnedImpl resp_data = encodeResponse(1000, 2000, 0, "abcd");
@@ -1962,8 +2094,9 @@ TEST_F(ZooKeeperFilterTest, MultipleResponsesWithMultipleOnWriteCalls4) {
   EXPECT_EQ(1UL, config_->stats().getdata_resp_fast_.value());
   EXPECT_EQ(0UL, config_->stats().getdata_resp_slow_.value());
   EXPECT_EQ(24UL, config_->stats().response_bytes_.value());
-  EXPECT_EQ(24UL, store_.counter("test.zookeeper.getdata_resp_bytes").value());
+  EXPECT_EQ(24UL, config_->stats().getdata_resp_bytes_.value());
   EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
+  EXPECT_EQ(0UL, config_->stats().getdata_decoder_error_.value());
   // Mock the buffer is drained by the tcp_proxy filter.
   resp_data.drain(resp_data.length());
 
@@ -1976,8 +2109,9 @@ TEST_F(ZooKeeperFilterTest, MultipleResponsesWithMultipleOnWriteCalls4) {
   EXPECT_EQ(1UL, config_->stats().getdata_resp_fast_.value());
   EXPECT_EQ(0UL, config_->stats().getdata_resp_slow_.value());
   EXPECT_EQ(24UL, config_->stats().response_bytes_.value());
-  EXPECT_EQ(24UL, store_.counter("test.zookeeper.getdata_resp_bytes").value());
+  EXPECT_EQ(24UL, config_->stats().getdata_resp_bytes_.value());
   EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
+  EXPECT_EQ(0UL, config_->stats().getdata_decoder_error_.value());
   // Mock the buffer is drained by the tcp_proxy filter.
   resp_data.drain(resp_data.length());
 
@@ -1992,8 +2126,9 @@ TEST_F(ZooKeeperFilterTest, MultipleResponsesWithMultipleOnWriteCalls4) {
   EXPECT_EQ(3UL, config_->stats().getdata_resp_fast_.value());
   EXPECT_EQ(0UL, config_->stats().getdata_resp_slow_.value());
   EXPECT_EQ(72UL, config_->stats().response_bytes_.value());
-  EXPECT_EQ(72UL, store_.counter("test.zookeeper.getdata_resp_bytes").value());
+  EXPECT_EQ(72UL, config_->stats().getdata_resp_bytes_.value());
   EXPECT_EQ(0UL, config_->stats().decoder_error_.value());
+  EXPECT_EQ(0UL, config_->stats().getdata_decoder_error_.value());
 }
 
 } // namespace ZooKeeperProxy

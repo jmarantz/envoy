@@ -148,7 +148,7 @@ public:
       if (parent_.expect_gro_) {
         EXPECT_CALL(*socket_->io_handle_, supportsUdpGro());
       }
-      EXPECT_CALL(*socket_->io_handle_, supportsMmsg()).Times(2u);
+      EXPECT_CALL(*socket_->io_handle_, supportsMmsg()).Times(1u);
       // Return the datagram.
       EXPECT_CALL(*socket_->io_handle_, recvmsg(_, 1, _, _))
           .WillOnce(
@@ -179,14 +179,13 @@ public:
               }
             }));
         // Return an EAGAIN result.
-        EXPECT_CALL(*socket_->io_handle_, supportsMmsg());
         EXPECT_CALL(*socket_->io_handle_, recvmsg(_, 1, _, _))
             .WillOnce(Return(ByMove(
                 Api::IoCallUint64Result(0, Network::IoSocketError::getIoSocketEagainError()))));
       }
 
       // Kick off the receive.
-      file_event_cb_(Event::FileReadyType::Read);
+      EXPECT_TRUE(file_event_cb_(Event::FileReadyType::Read).ok());
     }
 
     UdpProxyFilterTest& parent_;
@@ -198,11 +197,13 @@ public:
   };
 
   UdpProxyFilterTest()
-      : UdpProxyFilterTest(Network::Utility::parseInternetAddressAndPort(peer_ip_address_)) {}
+      : UdpProxyFilterTest(Network::Utility::parseInternetAddressAndPortNoThrow(peer_ip_address_)) {
+  }
 
   explicit UdpProxyFilterTest(Network::Address::InstanceConstSharedPtr&& peer_address)
       : os_calls_(&os_sys_calls_),
-        upstream_address_(Network::Utility::parseInternetAddressAndPort(upstream_ip_address_)),
+        upstream_address_(
+            Network::Utility::parseInternetAddressAndPortNoThrow(upstream_ip_address_)),
         peer_address_(std::move(peer_address)) {
     // Disable strict mock warnings.
     ON_CALL(*factory_context_.server_factory_context_.access_log_manager_.file_, write(_))
@@ -243,8 +244,8 @@ public:
   void recvDataFromDownstream(const std::string& peer_address, const std::string& local_address,
                               const std::string& buffer) {
     Network::UdpRecvData data;
-    data.addresses_.peer_ = Network::Utility::parseInternetAddressAndPort(peer_address);
-    data.addresses_.local_ = Network::Utility::parseInternetAddressAndPort(local_address);
+    data.addresses_.peer_ = Network::Utility::parseInternetAddressAndPortNoThrow(peer_address);
+    data.addresses_.local_ = Network::Utility::parseInternetAddressAndPortNoThrow(local_address);
     data.buffer_ = std::make_unique<Buffer::OwnedImpl>(buffer);
     data.receive_time_ = MonotonicTime(std::chrono::seconds(0));
     filter_->onData(data);
@@ -389,10 +390,11 @@ class UdpProxyFilterIpv6Test : public UdpProxyFilterTest {
 public:
   UdpProxyFilterIpv6Test()
       : UdpProxyFilterIpv6Test(
-            Network::Utility::parseInternetAddressAndPort(upstream_ipv6_address_)) {}
+            Network::Utility::parseInternetAddressAndPortNoThrow(upstream_ipv6_address_)) {}
 
   explicit UdpProxyFilterIpv6Test(Network::Address::InstanceConstSharedPtr&& upstream_address_v6)
-      : UdpProxyFilterTest(Network::Utility::parseInternetAddressAndPort(peer_ipv6_address_)),
+      : UdpProxyFilterTest(
+            Network::Utility::parseInternetAddressAndPortNoThrow(peer_ipv6_address_)),
         upstream_address_v6_(std::move(upstream_address_v6)) {
     EXPECT_CALL(
         *factory_context_.server_factory_context_.cluster_manager_.thread_local_cluster_.lb_.host_,
@@ -408,7 +410,7 @@ public:
 class UdpProxyFilterIpv4Ipv6Test : public UdpProxyFilterIpv6Test {
 public:
   UdpProxyFilterIpv4Ipv6Test()
-      : UdpProxyFilterIpv6Test(Network::Utility::parseInternetAddressAndPort(
+      : UdpProxyFilterIpv6Test(Network::Utility::parseInternetAddressAndPortNoThrow(
             UdpProxyFilterIpv6Test::upstream_ipv6_address_, false)) {}
 
   void ensureNoIpTransparentSocketOptions() {
@@ -428,7 +430,7 @@ public:
   }
 };
 
-// Basic UDP proxy flow with a single session. Also test disabling GRO.
+// Basic UDP proxy flow with two sessions. Also test disabling GRO.
 TEST_F(UdpProxyFilterTest, BasicFlow) {
   InSequence s;
 
@@ -437,6 +439,7 @@ TEST_F(UdpProxyFilterTest, BasicFlow) {
       "%DYNAMIC_METADATA(udp.proxy.session:datagrams_received)% "
       "%DYNAMIC_METADATA(udp.proxy.session:bytes_sent)% "
       "%DYNAMIC_METADATA(udp.proxy.session:datagrams_sent)% "
+      "%CONNECTION_ID% "
       "%DOWNSTREAM_REMOTE_ADDRESS% "
       "%DOWNSTREAM_LOCAL_ADDRESS% "
       "%UPSTREAM_HOST% "
@@ -467,6 +470,10 @@ upstream_socket_config:
                         session_access_log_format, proxy_access_log_format),
         true, false);
 
+  // Allow for two sessions.
+  factory_context_.server_factory_context_.cluster_manager_.thread_local_cluster_.cluster_.info_
+      ->resetResourceManager(2, 0, 0, 0, 0);
+
   expectSessionCreate(upstream_address_);
   test_sessions_[0].expectWriteToUpstream("hello", 0, nullptr, true);
   recvDataFromDownstream("10.0.0.1:1000", "10.0.0.2:80", "hello");
@@ -488,15 +495,26 @@ upstream_socket_config:
   test_sessions_[0].recvDataFromUpstream("world3");
   checkTransferStats(17 /*rx_bytes*/, 3 /*rx_datagrams*/, 17 /*tx_bytes*/, 3 /*tx_datagrams*/);
 
+  expectSessionCreate(upstream_address_);
+  test_sessions_[1].expectWriteToUpstream("hello4", 0, nullptr, true);
+  recvDataFromDownstream("10.0.0.3:1000", "10.0.0.2:80", "hello4");
+  EXPECT_EQ(2, config_->stats().downstream_sess_total_.value());
+  EXPECT_EQ(2, config_->stats().downstream_sess_active_.value());
+  checkTransferStats(23 /*rx_bytes*/, 4 /*rx_datagrams*/, 17 /*tx_bytes*/, 3 /*tx_datagrams*/);
+  test_sessions_[1].recvDataFromUpstream("world4");
+  checkTransferStats(23 /*rx_bytes*/, 4 /*rx_datagrams*/, 23 /*tx_bytes*/, 4 /*tx_datagrams*/);
+
   filter_.reset();
-  EXPECT_EQ(output_.size(), 2);
-  EXPECT_EQ(output_.front(), "17 3 17 3 0 1 0");
+  EXPECT_EQ(output_.size(), 3);
+  EXPECT_EQ(output_[0], "23 4 23 4 0 2 0");
+
   const std::string session_access_log_regex =
-      "17 3 17 3 10.0.0.1:1000 10.0.0.2:80 20.0.0.1:443 "
+      "(17 3 17 3 0|6 1 6 1 1) 10.0.0.(1|3):1000 10.0.0.2:80 20.0.0.1:443 "
       "[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12} " +
       AccessLogType_Name(AccessLog::AccessLogType::UdpSessionEnd);
 
-  EXPECT_TRUE(std::regex_match(output_.back(), std::regex(session_access_log_regex)));
+  EXPECT_TRUE(std::regex_match(output_[1], std::regex(session_access_log_regex)));
+  EXPECT_TRUE(std::regex_match(output_[2], std::regex(session_access_log_regex)));
 }
 
 // Route with source IP.
@@ -811,6 +829,51 @@ matcher:
   EXPECT_EQ(0, config_->stats().downstream_sess_active_.value());
 }
 
+// Test updates to existing cluster (e.g. priority set changes, etc).
+TEST_F(UdpProxyFilterTest, ClusterDynamicInfoMapUpdate) {
+  InSequence s;
+
+  setup(readConfig(R"EOF(
+stat_prefix: foo
+matcher:
+  on_no_match:
+    action:
+      name: route
+      typed_config:
+        '@type': type.googleapis.com/envoy.extensions.filters.udp.udp_proxy.v3.Route
+        cluster: fake_cluster
+  )EOF"),
+        false);
+
+  // Initial ThreadLocalCluster, scoped lifetime
+  // mimics replacement of old ThreadLocalCluster via postThreadLocalClusterUpdate.
+  {
+    NiceMock<Upstream::MockThreadLocalCluster> other_thread_local_cluster;
+    other_thread_local_cluster.cluster_.info_->name_ = "fake_cluster";
+    Upstream::ThreadLocalClusterCommand command =
+        [&other_thread_local_cluster]() -> Upstream::ThreadLocalCluster& {
+      return other_thread_local_cluster;
+    };
+    cluster_update_callbacks_->onClusterAddOrUpdate(other_thread_local_cluster.info()->name(),
+                                                    command);
+  }
+
+  // Push new cluster (getter), we expect this to result in new ClusterInfos object in map.
+  {
+    Upstream::ThreadLocalClusterCommand command = [this]() -> Upstream::ThreadLocalCluster& {
+      return factory_context_.server_factory_context_.cluster_manager_.thread_local_cluster_;
+    };
+    cluster_update_callbacks_->onClusterAddOrUpdate(
+        factory_context_.server_factory_context_.cluster_manager_.thread_local_cluster_.info()
+            ->name(),
+        command);
+  }
+
+  expectSessionCreate(upstream_address_);
+  test_sessions_[0].expectWriteToUpstream("hello", 0, nullptr, true);
+  recvDataFromDownstream("10.0.0.1:1000", "10.0.0.2:80", "hello");
+}
+
 // Hitting the maximum per-cluster connection/session circuit breaker.
 TEST_F(UdpProxyFilterTest, MaxSessionsCircuitBreaker) {
   InSequence s;
@@ -945,7 +1008,7 @@ matcher:
       *factory_context_.server_factory_context_.cluster_manager_.thread_local_cluster_.lb_.host_,
       coarseHealth())
       .WillRepeatedly(Return(Upstream::Host::Health::Unhealthy));
-  auto new_host_address = Network::Utility::parseInternetAddressAndPort("20.0.0.2:443");
+  auto new_host_address = Network::Utility::parseInternetAddressAndPortNoThrow("20.0.0.2:443");
   auto new_host = createHost(new_host_address);
   EXPECT_CALL(factory_context_.server_factory_context_.cluster_manager_.thread_local_cluster_.lb_,
               chooseHost(_))
@@ -1043,7 +1106,7 @@ use_per_packet_load_balancing: true
   test_sessions_[0].recvDataFromUpstream("world");
   checkTransferStats(5 /*rx_bytes*/, 1 /*rx_datagrams*/, 5 /*tx_bytes*/, 1 /*tx_datagrams*/);
 
-  auto new_host_address = Network::Utility::parseInternetAddressAndPort("20.0.0.2:443");
+  auto new_host_address = Network::Utility::parseInternetAddressAndPortNoThrow("20.0.0.2:443");
   auto new_host = createHost(new_host_address);
   EXPECT_CALL(factory_context_.server_factory_context_.cluster_manager_.thread_local_cluster_.lb_,
               chooseHost(_))
@@ -1188,7 +1251,7 @@ use_per_packet_load_balancing: true
   EXPECT_EQ(1, config_->stats().downstream_sess_total_.value());
   EXPECT_EQ(1, config_->stats().downstream_sess_active_.value());
 
-  auto new_host_address = Network::Utility::parseInternetAddressAndPort("20.0.0.2:443");
+  auto new_host_address = Network::Utility::parseInternetAddressAndPortNoThrow("20.0.0.2:443");
   auto new_host = createHost(new_host_address);
   EXPECT_CALL(factory_context_.server_factory_context_.cluster_manager_.thread_local_cluster_.lb_,
               chooseHost(_))
@@ -1637,7 +1700,7 @@ public:
       header->mutable_header()->set_value(header_to_add.value().value_);
     }
 
-    header_evaluator_ = Envoy::Router::HeaderParser::configure(headers_to_add);
+    header_evaluator_ = Envoy::Router::HeaderParser::configure(headers_to_add).value();
     config_ = std::make_unique<NiceMock<MockUdpTunnelingConfig>>(*header_evaluator_);
     upstream_ = std::make_unique<HttpUpstreamImpl>(callbacks_, *config_, stream_info_);
     upstream_->setTunnelCreationCallbacks(creation_callbacks_);
@@ -1883,7 +1946,7 @@ class TunnelingConnectionPoolImplTest : public testing::Test {
 public:
   void setup() {
     Protobuf::RepeatedPtrField<envoy::config::core::v3::HeaderValueOption> headers_to_add;
-    header_evaluator_ = Envoy::Router::HeaderParser::configure(headers_to_add);
+    header_evaluator_ = Envoy::Router::HeaderParser::configure(headers_to_add).value();
     config_ = std::make_unique<NiceMock<MockUdpTunnelingConfig>>(*header_evaluator_);
     stream_info_.downstream_connection_info_provider_->setConnectionID(0);
     session_access_logs_ = std::make_unique<std::vector<AccessLog::InstanceSharedPtr>>();

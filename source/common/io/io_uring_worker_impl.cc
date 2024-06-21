@@ -45,17 +45,17 @@ void IoUringSocketEntry::onReadCompleted() {
             "calling event callback since pending read buf has {} size data, data = {}, "
             "fd = {}",
             getReadParam()->buf_.length(), getReadParam()->buf_.toString(), fd_);
-  cb_(Event::FileReadyType::Read);
+  THROW_IF_NOT_OK(cb_(Event::FileReadyType::Read));
 }
 
 void IoUringSocketEntry::onWriteCompleted() {
   ENVOY_LOG(trace, "call event callback for write since result = {}", getWriteParam()->result_);
-  cb_(Event::FileReadyType::Write);
+  THROW_IF_NOT_OK(cb_(Event::FileReadyType::Write));
 }
 
 void IoUringSocketEntry::onRemoteClose() {
   ENVOY_LOG(trace, "onRemoteClose fd = {}", fd_);
-  cb_(Event::FileReadyType::Closed);
+  THROW_IF_NOT_OK(cb_(Event::FileReadyType::Closed));
 }
 
 IoUringWorkerImpl::IoUringWorkerImpl(uint32_t io_uring_size, bool use_submission_queue_polling,
@@ -72,8 +72,12 @@ IoUringWorkerImpl::IoUringWorkerImpl(IoUringPtr&& io_uring, uint32_t read_buffer
   // We only care about the read event of Eventfd, since we only receive the
   // event here.
   file_event_ = dispatcher_.createFileEvent(
-      event_fd, [this](uint32_t) { onFileEvent(); }, Event::PlatformDefaultTriggerType,
-      Event::FileReadyType::Read);
+      event_fd,
+      [this](uint32_t) {
+        onFileEvent();
+        return absl::OkStatus();
+      },
+      Event::PlatformDefaultTriggerType, Event::FileReadyType::Read);
 }
 
 IoUringWorkerImpl::~IoUringWorkerImpl() {
@@ -114,11 +118,38 @@ IoUringSocket& IoUringWorkerImpl::addServerSocket(os_fd_t fd, Buffer::Instance& 
   return addSocket(std::move(socket));
 }
 
+IoUringSocket& IoUringWorkerImpl::addClientSocket(os_fd_t fd, Event::FileReadyCb cb,
+                                                  bool enable_close_event) {
+  ENVOY_LOG(trace, "add client socket, fd = {}", fd);
+  // The client socket should not be read enabled until it is connected.
+  std::unique_ptr<IoUringClientSocket> socket = std::make_unique<IoUringClientSocket>(
+      fd, *this, std::move(cb), write_timeout_ms_, enable_close_event);
+  return addSocket(std::move(socket));
+}
+
 Event::Dispatcher& IoUringWorkerImpl::dispatcher() { return dispatcher_; }
 
 IoUringSocketEntry& IoUringWorkerImpl::addSocket(IoUringSocketEntryPtr&& socket) {
   LinkedList::moveIntoListBack(std::move(socket), sockets_);
   return *sockets_.back();
+}
+
+Request*
+IoUringWorkerImpl::submitConnectRequest(IoUringSocket& socket,
+                                        const Network::Address::InstanceConstSharedPtr& address) {
+  Request* req = new Request(Request::RequestType::Connect, socket);
+
+  ENVOY_LOG(trace, "submit connect request, fd = {}, req = {}", socket.fd(), fmt::ptr(req));
+
+  auto res = io_uring_->prepareConnect(socket.fd(), address, req);
+  if (res == IoUringResult::Failed) {
+    // TODO(rojkov): handle `EBUSY` in case the completion queue is never reaped.
+    submit();
+    res = io_uring_->prepareConnect(socket.fd(), address, req);
+    RELEASE_ASSERT(res == IoUringResult::Ok, "unable to prepare connect");
+  }
+  submit();
+  return req;
 }
 
 Request* IoUringWorkerImpl::submitReadRequest(IoUringSocket& socket) {
@@ -609,6 +640,42 @@ void IoUringServerSocket::submitWriteOrShutdownRequest() {
       closeInternal();
     }
   }
+}
+
+IoUringClientSocket::IoUringClientSocket(os_fd_t fd, IoUringWorkerImpl& parent,
+                                         Event::FileReadyCb cb, uint32_t write_timeout_ms,
+                                         bool enable_close_event)
+    : IoUringServerSocket(fd, parent, cb, write_timeout_ms, enable_close_event) {}
+
+void IoUringClientSocket::connect(const Network::Address::InstanceConstSharedPtr& address) {
+  // Reuse read request since there is no read on connecting and connect is cancellable.
+  ASSERT(read_req_ == nullptr);
+  read_req_ = parent_.submitConnectRequest(*this, address);
+}
+
+void IoUringClientSocket::onConnect(Request* req, int32_t result, bool injected) {
+  IoUringSocketEntry::onConnect(req, result, injected);
+  ASSERT(!injected);
+  ENVOY_LOG(trace, "onConnect with result {}, fd = {}, injected = {}, status_ = {}", result, fd_,
+            injected, status_);
+
+  read_req_ = nullptr;
+  // Socket may be closed on connecting like binding error. In this situation we may not callback
+  // on connecting completion.
+  if (status_ == Closed) {
+    if (write_or_shutdown_req_ == nullptr && read_cancel_req_ == nullptr &&
+        write_or_shutdown_cancel_req_ == nullptr) {
+      closeInternal();
+    }
+    return;
+  }
+
+  if (result == 0) {
+    enableRead();
+  }
+  // Calls parent injectCompletion() directly since we want to send connect result back to the IO
+  // handle.
+  parent_.injectCompletion(*this, Request::RequestType::Write, result);
 }
 
 } // namespace Io

@@ -116,8 +116,9 @@ Filter::NetworkFilterFactoriesList ProdListenerComponentFactory::createNetworkFi
         factory.isTerminalFilterByProto(*message,
                                         filter_chain_factory_context.serverFactoryContext()),
         is_terminal);
-    Network::FilterFactoryCb callback =
-        factory.createFilterFactoryFromProto(*message, filter_chain_factory_context);
+    Network::FilterFactoryCb callback = THROW_OR_RETURN_VALUE(
+        factory.createFilterFactoryFromProto(*message, filter_chain_factory_context),
+        Network::FilterFactoryCb);
     ret.push_back(
         config_provider_manager.createStaticFilterConfigProvider(callback, proto_config.name()));
   }
@@ -321,7 +322,10 @@ Network::SocketSharedPtr ProdListenerComponentFactory::createListenSocket(
       if (socket_type == Network::Socket::Type::Stream) {
         return std::make_shared<Network::TcpListenSocket>(std::move(io_handle), address, options);
       } else {
-        return std::make_shared<Network::UdpListenSocket>(std::move(io_handle), address, options);
+        auto socket = std::make_shared<Network::UdpListenSocket>(
+            std::move(io_handle), address, options,
+            server_.hotRestart().parentDrainedCallbackRegistrar());
+        return socket;
       }
     }
   }
@@ -364,8 +368,8 @@ ListenerManagerImpl::ListenerManagerImpl(Instance& server,
   }
 
   for (uint32_t i = 0; i < server.options().concurrency(); i++) {
-    workers_.emplace_back(
-        worker_factory.createWorker(i, server.overloadManager(), absl::StrCat("worker_", i)));
+    workers_.emplace_back(worker_factory.createWorker(
+        i, server.overloadManager(), server.nullOverloadManager(), absl::StrCat("worker_", i)));
   }
 }
 
@@ -468,7 +472,9 @@ ListenerManagerImpl::addOrUpdateListener(const envoy::config::listener::v3::List
           name));
     }
     if (!api_listener_ && !added_via_api) {
-      api_listener_ = std::make_unique<HttpApiListener>(config, server_, config.name());
+      auto listener_or_error = HttpApiListener::create(config, server_, config.name());
+      THROW_IF_STATUS_NOT_OK(listener_or_error, throw);
+      api_listener_ = std::move(listener_or_error.value());
       return true;
     } else {
       ENVOY_LOG(warn, "listener {} can not be added because currently only one ApiListener is "
@@ -1091,9 +1097,11 @@ Network::DrainableFilterChainSharedPtr ListenerFilterChainFactoryBuilder::buildF
   std::vector<std::string> server_names(filter_chain.filter_chain_match().server_names().begin(),
                                         filter_chain.filter_chain_match().server_names().end());
 
+  auto factory_or_error = config_factory.createTransportSocketFactory(*message, factory_context_,
+                                                                      std::move(server_names));
+  THROW_IF_NOT_OK(factory_or_error.status());
   auto filter_chain_res = std::make_shared<FilterChainImpl>(
-      config_factory.createTransportSocketFactory(*message, factory_context_,
-                                                  std::move(server_names)),
+      std::move(factory_or_error.value()),
       listener_component_factory_.createNetworkFilterFactoryList(filter_chain.filters(),
                                                                  *filter_chain_factory_context),
       std::chrono::milliseconds(

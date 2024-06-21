@@ -3,6 +3,10 @@ parameters:
   displayName: "CI target"
   type: string
   default: release
+- name: artifactName
+  displayName: "Artifact name"
+  type: string
+  default: ""
 - name: artifactSuffix
   displayName: "Suffix of artifact"
   type: string
@@ -318,11 +322,11 @@ steps:
 
 - script: |
     set -e
-    sudo .azure-pipelines/docker/save_cache.sh "$(Build.StagingDirectory)" /mnt/cache/all true true
+    sudo .azure-pipelines/docker/save_cache.sh "$(Build.StagingDirectory)" ${{ parameters.pathCacheTemp }}/all true true
     if id -u vsts &> /dev/null; then
-        sudo chown -R vsts:vsts /mnt/cache/all
+        sudo chown -R vsts:vsts ${{ parameters.pathCacheTemp }}/all
     else
-        sudo chown -R azure-pipelines:azure-pipelines /mnt/cache/all
+        sudo chown -R azure-pipelines:azure-pipelines ${{ parameters.pathCacheTemp }}/all
     fi
 
   displayName: "Cache/save (${{ parameters.cacheName}})"
@@ -339,6 +343,9 @@ steps:
 - task: PublishBuildArtifacts@1
   inputs:
     pathtoPublish: "$(Build.StagingDirectory)/envoy"
-    artifactName: ${{ parameters.ciTarget }}
+    ${{ if eq(parameters.artifactName, '') }}:
+      artifactName: ${{ parameters.ciTarget }}
+    ${{ if ne(parameters.artifactName, '') }}:
+      artifactName: ${{ parameters.artifactName }}
   timeoutInMinutes: 10
   condition: eq(${{ parameters.publishEnvoy }}, 'true')

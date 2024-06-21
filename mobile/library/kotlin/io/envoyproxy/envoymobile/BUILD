@@ -1,6 +1,5 @@
 load("@envoy//bazel:envoy_build_system.bzl", "envoy_mobile_package")
 load("@envoy_mobile//bazel:android_artifacts.bzl", "android_artifacts")
-load("@envoy_mobile//bazel:kotlin_lib.bzl", "envoy_mobile_kt_library")
 load("@io_bazel_rules_kotlin//kotlin:android.bzl", "kt_android_library")
 load("@rules_detekt//detekt:defs.bzl", "detekt")
 
@@ -14,8 +13,8 @@ android_artifacts(
     archive_name = "envoy",
     manifest = "EnvoyManifest.xml",
     native_deps = select({
-        "@envoy//bazel:opt_build": ["//library/common/jni:libenvoy_jni.so.debug_info"],
-        "//conditions:default": ["//library/common/jni:libenvoy_jni.so"],
+        "@envoy//bazel:opt_build": ["//library/jni:libenvoy_jni.so.debug_info"],
+        "//conditions:default": ["//library/jni:libenvoy_jni.so"],
     }),
     proguard_rules = "//library:proguard_rules",
     substitutions = {
@@ -31,8 +30,8 @@ android_artifacts(
     archive_name = "envoy_xds",
     manifest = "EnvoyManifest.xml",
     native_deps = select({
-        "@envoy//bazel:opt_build": ["//library/common/jni:libenvoy_jni.so.debug_info"],
-        "//conditions:default": ["//library/common/jni:libenvoy_jni.so"],
+        "@envoy//bazel:opt_build": ["//library/jni:libenvoy_jni.so.debug_info"],
+        "//conditions:default": ["//library/jni:libenvoy_jni.so"],
     }),
     proguard_rules = "//library:proguard_rules",
     substitutions = {
@@ -65,7 +64,7 @@ kt_android_library(
     ],
 )
 
-envoy_mobile_kt_library(
+kt_android_library(
     name = "envoy_interfaces_lib",
     srcs = glob([
         "Engine.kt",
@@ -101,7 +100,6 @@ envoy_mobile_kt_library(
         "Trailers.kt",
         "filters/*.kt",
         "grpc/*.kt",
-        "mocks/*.kt",
         "stats/*.kt",
     ]),
     visibility = ["//visibility:public"],

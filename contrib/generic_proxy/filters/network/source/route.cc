@@ -17,26 +17,47 @@ namespace Extensions {
 namespace NetworkFilters {
 namespace GenericProxy {
 
+RouteSpecificFilterConfigConstSharedPtr RouteEntryImpl::createRouteSpecificFilterConfig(
+    const std::string& name, const ProtobufWkt::Any& typed_config,
+    Server::Configuration::ServerFactoryContext& factory_context,
+    ProtobufMessage::ValidationVisitor& validator) {
+
+  auto* factory = Config::Utility::getFactoryByType<NamedFilterConfigFactory>(typed_config);
+  if (factory == nullptr) {
+    if (!Runtime::runtimeFeatureEnabled("envoy.reloadable_features.no_extension_lookup_by_name")) {
+      factory = Config::Utility::getFactoryByName<NamedFilterConfigFactory>(name);
+    }
+  }
+
+  if (factory == nullptr) {
+    ExceptionUtil::throwEnvoyException(
+        fmt::format("Didn't find a registered implementation for '{}' with type URL: '{}'", name,
+                    Config::Utility::getFactoryType(typed_config)));
+  }
+
+  ProtobufTypes::MessagePtr message = factory->createEmptyRouteConfigProto();
+  if (message == nullptr) {
+    return nullptr;
+  }
+
+  Envoy::Config::Utility::translateOpaqueConfig(typed_config, validator, *message);
+  return factory->createRouteSpecificFilterConfig(*message, factory_context, validator);
+}
+
 RouteEntryImpl::RouteEntryImpl(const ProtoRouteAction& route_action,
                                Envoy::Server::Configuration::ServerFactoryContext& context)
     : name_(route_action.name()), cluster_name_(route_action.cluster()),
-      metadata_(route_action.metadata()), typed_metadata_(metadata_) {
+      metadata_(route_action.metadata()), typed_metadata_(metadata_),
+      timeout_(PROTOBUF_GET_MS_OR_DEFAULT(route_action, timeout, DEFAULT_ROUTE_TIMEOUT_MS)),
+      retry_policy_(PROTOBUF_GET_WRAPPED_OR_DEFAULT(route_action.retry_policy(), num_retries, 1)) {
 
   for (const auto& proto_filter_config : route_action.per_filter_config()) {
-    auto& factory = Config::Utility::getAndCheckFactoryByName<NamedFilterConfigFactory>(
-        proto_filter_config.first);
-
-    ProtobufTypes::MessagePtr message = factory.createEmptyRouteConfigProto();
-    if (message == nullptr) {
-      continue;
+    auto route_config =
+        createRouteSpecificFilterConfig(proto_filter_config.first, proto_filter_config.second,
+                                        context, context.messageValidationVisitor());
+    if (route_config != nullptr) {
+      per_filter_configs_.emplace(proto_filter_config.first, std::move(route_config));
     }
-
-    Envoy::Config::Utility::translateOpaqueConfig(proto_filter_config.second,
-                                                  context.messageValidationVisitor(), *message);
-
-    auto route_config = factory.createRouteSpecificFilterConfig(*message, context,
-                                                                context.messageValidationVisitor());
-    per_filter_configs_.emplace(proto_filter_config.first, std::move(route_config));
   }
 }
 
@@ -56,8 +77,8 @@ VirtualHostImpl::VirtualHostImpl(const ProtoVirtualHost& virtual_host_config,
   RouteActionValidationVisitor validation_visitor;
   RouteActionContext action_context{context};
 
-  Matcher::MatchTreeFactory<Request, RouteActionContext> factory(action_context, context,
-                                                                 validation_visitor);
+  Matcher::MatchTreeFactory<MatchInput, RouteActionContext> factory(action_context, context,
+                                                                    validation_visitor);
 
   matcher_ = factory.create(virtual_host_config.routes())();
 
@@ -67,8 +88,8 @@ VirtualHostImpl::VirtualHostImpl(const ProtoVirtualHost& virtual_host_config,
   }
 }
 
-RouteEntryConstSharedPtr VirtualHostImpl::routeEntry(const Request& request) const {
-  auto match = Matcher::evaluateMatch<Request>(*matcher_, request);
+RouteEntryConstSharedPtr VirtualHostImpl::routeEntry(const MatchInput& request) const {
+  auto match = Matcher::evaluateMatch<MatchInput>(*matcher_, request);
 
   if (match.result_) {
     auto action = match.result_();
@@ -170,8 +191,8 @@ const VirtualHostImpl* RouteMatcherImpl::findWildcardVirtualHost(
   return nullptr;
 }
 
-const VirtualHostImpl* RouteMatcherImpl::findVirtualHost(const Request& request) const {
-  absl::string_view host = request.host();
+const VirtualHostImpl* RouteMatcherImpl::findVirtualHost(const MatchInput& request) const {
+  absl::string_view host = request.requestHeader().host();
 
   // Fast path the case where we only have a default virtual host or host property is provided.
   if (host.empty() || (virtual_hosts_.empty() && wildcard_virtual_host_suffixes_.empty() &&
@@ -204,7 +225,7 @@ const VirtualHostImpl* RouteMatcherImpl::findVirtualHost(const Request& request)
   return default_virtual_host_.get();
 }
 
-RouteEntryConstSharedPtr RouteMatcherImpl::routeEntry(const Request& request) const {
+RouteEntryConstSharedPtr RouteMatcherImpl::routeEntry(const MatchInput& request) const {
   const auto* virtual_host = findVirtualHost(request);
   if (virtual_host != nullptr) {
     return virtual_host->routeEntry(request);

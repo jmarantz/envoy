@@ -42,7 +42,11 @@ public:
                                  bool enable_close_event) override;
   IoUringSocket& addServerSocket(os_fd_t fd, Buffer::Instance& read_buf, Event::FileReadyCb cb,
                                  bool enable_close_event) override;
+  IoUringSocket& addClientSocket(os_fd_t fd, Event::FileReadyCb cb,
+                                 bool enable_close_event) override;
 
+  Request* submitConnectRequest(IoUringSocket& socket,
+                                const Network::Address::InstanceConstSharedPtr& address) override;
   Request* submitReadRequest(IoUringSocket& socket) override;
   Request* submitWriteRequest(IoUringSocket& socket, const Buffer::RawSliceVector& slices) override;
   Request* submitCloseRequest(IoUringSocket& socket) override;
@@ -101,6 +105,7 @@ public:
   void enableRead() override { status_ = ReadEnabled; }
   void disableRead() override { status_ = ReadDisabled; }
   void enableCloseEvent(bool enable) override { enable_close_event_ = enable; }
+  void connect(const Network::Address::InstanceConstSharedPtr&) override { PANIC("not implement"); }
 
   void onAccept(Request*, int32_t, bool injected) override {
     if (injected && (injected_completions_ & static_cast<uint8_t>(Request::RequestType::Accept))) {
@@ -196,6 +201,8 @@ public:
   void onShutdown(Request* req, int32_t result, bool injected) override;
   void onCancel(Request* req, int32_t result, bool injected) override;
 
+  Buffer::OwnedImpl& getReadBuffer() { return read_buf_; }
+
 protected:
   // Since the write of IoUringSocket is async, there may have write request is on the fly when
   // close the socket. This timeout is setting for a time to wait the write request done.
@@ -242,6 +249,15 @@ protected:
   void moveReadDataToBuffer(Request* req, size_t data_length);
   void onReadCompleted(int32_t result);
   void onWriteCompleted(int32_t result);
+};
+
+class IoUringClientSocket : public IoUringServerSocket {
+public:
+  IoUringClientSocket(os_fd_t fd, IoUringWorkerImpl& parent, Event::FileReadyCb cb,
+                      uint32_t write_timeout_ms, bool enable_close_event);
+
+  void connect(const Network::Address::InstanceConstSharedPtr& address) override;
+  void onConnect(Request* req, int32_t result, bool injected) override;
 };
 
 } // namespace Io

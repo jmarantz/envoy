@@ -13,6 +13,7 @@
 #include "test/mocks/ssl/mocks.h"
 #include "test/mocks/stream_info/mocks.h"
 #include "test/mocks/upstream/host.h"
+#include "test/test_common/test_runtime.h"
 #include "test/test_common/utility.h"
 
 #include "absl/time/time.h"
@@ -46,7 +47,18 @@ TEST(Context, InvalidRequest) {
   Http::TestRequestHeaderMapImpl header_map{{"referer", "dogs.com"}};
   Protobuf::Arena arena;
   HeadersWrapper<Http::RequestHeaderMap> headers(arena, &header_map);
-  auto header = headers[CelValue::CreateStringView("dogs.com\n")];
+  auto header = headers[CelValue::CreateStringView("referer\n")];
+  EXPECT_FALSE(header.has_value());
+}
+
+TEST(Context, InvalidRequestLegacy) {
+  TestScopedRuntime scoped_runtime;
+  scoped_runtime.mergeValues({{"envoy.reloadable_features.consistent_header_validation", "false"}});
+
+  Http::TestRequestHeaderMapImpl header_map{{"referer", "dogs.com"}};
+  Protobuf::Arena arena;
+  HeadersWrapper<Http::RequestHeaderMap> headers(arena, &header_map);
+  auto header = headers[CelValue::CreateStringView("referer\n")];
   EXPECT_FALSE(header.has_value());
 }
 
@@ -289,7 +301,7 @@ TEST(Context, ResponseAttributes) {
 
   EXPECT_CALL(info, responseCode()).WillRepeatedly(Return(404));
   EXPECT_CALL(info, bytesSent()).WillRepeatedly(Return(123));
-  EXPECT_CALL(info, responseFlags()).WillRepeatedly(Return(0x1));
+  EXPECT_CALL(info, legacyResponseFlags()).WillRepeatedly(Return(0x1));
 
   const absl::optional<std::string> code_details = "unauthorized";
   EXPECT_CALL(info, responseCodeDetails()).WillRepeatedly(ReturnRef(code_details));
@@ -469,13 +481,13 @@ TEST(Context, ConnectionAttributes) {
   PeerWrapper destination(arena, info, true);
 
   Network::Address::InstanceConstSharedPtr local =
-      Network::Utility::parseInternetAddress("1.2.3.4", 123, false);
+      Network::Utility::parseInternetAddressNoThrow("1.2.3.4", 123, false);
   Network::Address::InstanceConstSharedPtr remote =
-      Network::Utility::parseInternetAddress("10.20.30.40", 456, false);
+      Network::Utility::parseInternetAddressNoThrow("10.20.30.40", 456, false);
   Network::Address::InstanceConstSharedPtr upstream_address =
-      Network::Utility::parseInternetAddress("10.1.2.3", 679, false);
+      Network::Utility::parseInternetAddressNoThrow("10.1.2.3", 679, false);
   Network::Address::InstanceConstSharedPtr upstream_local_address =
-      Network::Utility::parseInternetAddress("10.1.2.3", 1000, false);
+      Network::Utility::parseInternetAddressNoThrow("10.1.2.3", 1000, false);
   const std::string sni_name = "kittens.com";
   info.downstream_connection_info_provider_->setLocalAddress(local);
   info.downstream_connection_info_provider_->setRemoteAddress(remote);
@@ -856,7 +868,7 @@ TEST(Context, XDSAttributes) {
   info.downstream_connection_info_provider_->setListenerInfo(listener_info);
 
   Protobuf::Arena arena;
-  XDSWrapper wrapper(arena, info, &local_info);
+  XDSWrapper wrapper(arena, &info, &local_info);
 
   {
     const auto value = wrapper[CelValue::CreateStringView(ClusterName)];

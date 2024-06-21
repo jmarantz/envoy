@@ -36,65 +36,99 @@ using ClusterInfoConstSharedPtr = std::shared_ptr<const ClusterInfo>;
 
 namespace StreamInfo {
 
-enum ResponseFlag {
+enum CoreResponseFlag : uint16_t {
   // Local server healthcheck failed.
-  FailedLocalHealthCheck = 0x1,
+  FailedLocalHealthCheck,
   // No healthy upstream.
-  NoHealthyUpstream = 0x2,
+  NoHealthyUpstream,
   // Request timeout on upstream.
-  UpstreamRequestTimeout = 0x4,
+  UpstreamRequestTimeout,
   // Local codec level reset was sent on the stream.
-  LocalReset = 0x8,
+  LocalReset,
   // Remote codec level reset was received on the stream.
-  UpstreamRemoteReset = 0x10,
+  UpstreamRemoteReset,
   // Local reset by a connection pool due to an initial connection failure.
-  UpstreamConnectionFailure = 0x20,
+  UpstreamConnectionFailure,
   // If the stream was locally reset due to connection termination.
-  UpstreamConnectionTermination = 0x40,
+  UpstreamConnectionTermination,
   // The stream was reset because of a resource overflow.
-  UpstreamOverflow = 0x80,
+  UpstreamOverflow,
   // No route found for a given request.
-  NoRouteFound = 0x100,
+  NoRouteFound,
   // Request was delayed before proxying.
-  DelayInjected = 0x200,
+  DelayInjected,
   // Abort with error code was injected.
-  FaultInjected = 0x400,
+  FaultInjected,
   // Request was ratelimited locally by rate limit filter.
-  RateLimited = 0x800,
+  RateLimited,
   // Request was unauthorized by external authorization service.
-  UnauthorizedExternalService = 0x1000,
+  UnauthorizedExternalService,
   // Unable to call Ratelimit service.
-  RateLimitServiceError = 0x2000,
+  RateLimitServiceError,
   // If the stream was reset due to a downstream connection termination.
-  DownstreamConnectionTermination = 0x4000,
+  DownstreamConnectionTermination,
   // Exceeded upstream retry limit.
-  UpstreamRetryLimitExceeded = 0x8000,
+  UpstreamRetryLimitExceeded,
   // Request hit the stream idle timeout, triggering a 408.
-  StreamIdleTimeout = 0x10000,
+  StreamIdleTimeout,
   // Request specified x-envoy-* header values that failed strict header checks.
-  InvalidEnvoyRequestHeaders = 0x20000,
+  InvalidEnvoyRequestHeaders,
   // Downstream request had an HTTP protocol error
-  DownstreamProtocolError = 0x40000,
+  DownstreamProtocolError,
   // Upstream request reached to user defined max stream duration.
-  UpstreamMaxStreamDurationReached = 0x80000,
+  UpstreamMaxStreamDurationReached,
   // True if the response was served from an Envoy cache filter.
-  ResponseFromCacheFilter = 0x100000,
+  ResponseFromCacheFilter,
   // Filter config was not received within the permitted warming deadline.
-  NoFilterConfigFound = 0x200000,
+  NoFilterConfigFound,
   // Request or connection exceeded the downstream connection duration.
-  DurationTimeout = 0x400000,
+  DurationTimeout,
   // Upstream response had an HTTP protocol error
-  UpstreamProtocolError = 0x800000,
+  UpstreamProtocolError,
   // No cluster found for a given request.
-  NoClusterFound = 0x1000000,
+  NoClusterFound,
   // Overload Manager terminated the stream.
-  OverloadManager = 0x2000000,
+  OverloadManager,
   // DNS resolution failed.
-  DnsResolutionFailed = 0x4000000,
+  DnsResolutionFailed,
   // Drop certain percentage of overloaded traffic.
-  DropOverLoad = 0x8000000,
+  DropOverLoad,
+  // Downstream remote codec level reset was received on the stream.
+  DownstreamRemoteReset,
   // ATTENTION: MAKE SURE THIS REMAINS EQUAL TO THE LAST FLAG.
-  LastFlag = DropOverLoad,
+  LastFlag = DownstreamRemoteReset,
+};
+
+class ResponseFlagUtils;
+
+class ResponseFlag {
+public:
+  constexpr ResponseFlag() = default;
+
+  /**
+   * Construct a response flag from the core response flag enum. The integer
+   * value of the enum is used as the raw integer value of the flag.
+   * @param flag the core response flag enum.
+   */
+  constexpr ResponseFlag(CoreResponseFlag flag) : value_(flag) {}
+
+  /**
+   * Get the raw integer value of the flag.
+   * @return uint16_t the raw integer value.
+   */
+  uint16_t value() const { return value_; }
+
+  bool operator==(const ResponseFlag& other) const { return value_ == other.value_; }
+
+private:
+  friend class ResponseFlagUtils;
+
+  // This private constructor is used to create extended response flags from
+  // uint16_t values. This can only be used by ResponseFlagUtils to ensure
+  // only validated values are used.
+  ResponseFlag(uint16_t value) : value_(value) {}
+
+  uint16_t value_{};
 };
 
 /**
@@ -146,6 +180,8 @@ struct ResponseCodeDetailValues {
   const std::string PathNormalizationFailed = "path_normalization_failed";
   // The request was rejected because it attempted an unsupported upgrade.
   const std::string UpgradeFailed = "upgrade_failed";
+  // The websocket handshake is unsuccessful and only SwitchingProtocols is considering successful.
+  const std::string WebsocketHandshakeUnsuccessful = "websocket_handshake_unsuccessful";
 
   // The request was rejected by the HCM because there was no route configuration found.
   const std::string RouteConfigurationNotFound = "route_configuration_not_found";
@@ -618,13 +654,6 @@ public:
   setConnectionTerminationDetails(absl::string_view connection_termination_details) PURE;
 
   /**
-   * @param response_flags the response_flags to intersect with.
-   * @return true if the intersection of the response_flags argument and the currently set response
-   * flags is non-empty.
-   */
-  virtual bool intersectResponseFlags(uint64_t response_flags) const PURE;
-
-  /**
    * @return std::string& the name of the route. The name is get from the route() and it is
    *         empty if there is no route.
    */
@@ -766,9 +795,15 @@ public:
   virtual bool hasAnyResponseFlag() const PURE;
 
   /**
-   * @return response flags encoded as an integer.
+   * @return all response flags that are set.
    */
-  virtual uint64_t responseFlags() const PURE;
+  virtual absl::Span<const ResponseFlag> responseFlags() const PURE;
+
+  /**
+   * @return response flags encoded as an integer. Every bit of the integer is used to represent a
+   * flag. Only flags that are declared in the enum CoreResponseFlag type are supported.
+   */
+  virtual uint64_t legacyResponseFlags() const PURE;
 
   /**
    * @return whether the request is a health check request or not.
@@ -804,6 +839,13 @@ public:
    * the same key overriding existing.
    */
   virtual void setDynamicMetadata(const std::string& name, const ProtobufWkt::Struct& value) PURE;
+
+  /**
+   * @param name the namespace used in the metadata in reverse DNS format, for example:
+   * envoy.test.my_filter.
+   * @param value of type protobuf any to set on the namespace.
+   */
+  virtual void setDynamicTypedMetadata(const std::string& name, const ProtobufWkt::Any& value) PURE;
 
   /**
    * Object on which filters can share data on a per-request basis. For singleton data objects, only
@@ -916,6 +958,20 @@ public:
    * @param failure_reason the downstream transport failure reason.
    */
   virtual void setDownstreamTransportFailureReason(absl::string_view failure_reason) PURE;
+
+  /**
+   * Checked by routing filters before forwarding a request upstream.
+   * @return to override the scheme header to match the upstream transport
+   * protocol at routing filters.
+   */
+  virtual bool shouldSchemeMatchUpstream() const PURE;
+
+  /**
+   * Called if a filter decides that the scheme should match the upstream transport protocol
+   * @param should_match_upstream true to hint to routing filters to override the scheme header
+   * to match the upstream transport protocol.
+   */
+  virtual void setShouldSchemeMatchUpstream(bool should_match_upstream) PURE;
 
   /**
    * Checked by streams after finishing serving the request.

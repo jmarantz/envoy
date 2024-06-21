@@ -223,7 +223,9 @@ std::string listenerStatsScope(const envoy::config::listener::v3::Listener& conf
   if (config.has_internal_listener()) {
     return absl::StrCat("envoy_internal_", config.name());
   }
-  return Network::Address::resolveProtoAddress(config.address())->asString();
+  auto address_or_error = Network::Address::resolveProtoAddress(config.address());
+  THROW_IF_STATUS_NOT_OK(address_or_error, throw);
+  return address_or_error.value()->asString();
 }
 } // namespace
 
@@ -264,6 +266,7 @@ ListenerImpl::ListenerImpl(const envoy::config::listener::v3::Listener& config,
           added_via_api_ ? parent_.server_.messageValidationContext().dynamicValidationVisitor()
                          : parent_.server_.messageValidationContext().staticValidationVisitor()),
       ignore_global_conn_limit_(config.ignore_global_conn_limit()),
+      bypass_overload_manager_(config.bypass_overload_manager()),
       listener_init_target_(fmt::format("Listener-init-target {}", name),
                             [this]() { dynamic_init_manager_->initialize(local_init_watcher_); }),
       dynamic_init_manager_(std::make_unique<Init::ManagerImpl>(
@@ -308,7 +311,9 @@ ListenerImpl::ListenerImpl(const envoy::config::listener::v3::Listener& config,
   } else {
     // All the addresses should be same socket type, so get the first address's socket type is
     // enough.
-    auto address = Network::Address::resolveProtoAddress(config.address());
+    auto address_or_error = Network::Address::resolveProtoAddress(config.address());
+    THROW_IF_STATUS_NOT_OK(address_or_error, throw);
+    auto address = std::move(address_or_error.value());
     checkIpv4CompatAddress(address, config.address());
     addresses_.emplace_back(address);
     address_opts_list.emplace_back(std::ref(config.socket_options()));
@@ -321,8 +326,10 @@ ListenerImpl::ListenerImpl(const envoy::config::listener::v3::Listener& config,
                         "support same socket type for all the addresses.",
                         name_));
       }
-      auto additional_address =
+      auto addresses_or_error =
           Network::Address::resolveProtoAddress(config.additional_addresses(i).address());
+      THROW_IF_STATUS_NOT_OK(addresses_or_error, throw);
+      auto additional_address = std::move(addresses_or_error.value());
       checkIpv4CompatAddress(address, config.additional_addresses(i).address());
       addresses_.emplace_back(additional_address);
       if (config.additional_addresses(i).has_socket_options()) {
@@ -394,6 +401,7 @@ ListenerImpl::ListenerImpl(ListenerImpl& origin,
           added_via_api_ ? parent_.server_.messageValidationContext().dynamicValidationVisitor()
                          : parent_.server_.messageValidationContext().staticValidationVisitor()),
       ignore_global_conn_limit_(config.ignore_global_conn_limit()),
+      bypass_overload_manager_(config.bypass_overload_manager()),
       // listener_init_target_ is not used during in place update because we expect server started.
       listener_init_target_("", nullptr),
       dynamic_init_manager_(std::make_unique<Init::ManagerImpl>(
@@ -503,12 +511,25 @@ void ListenerImpl::buildInternalListener(const envoy::config::listener::v3::List
         parent_.server_.singletonManager().getTyped<Network::InternalListenerRegistry>(
             "internal_listener_registry_singleton");
     if (internal_listener_registry == nullptr) {
-      throw EnvoyException(fmt::format(
-          "error adding listener named '{}': internal listener registry is not initialized.",
-          name_));
+      // The internal listener registry may be uninitialized when in Validate mode.
+      // Hence we check the configuration directly to ensure the bootstrap extension
+      // InternalListener is present.
+      if (absl::c_none_of(
+              listener_factory_context_->serverFactoryContext().bootstrap().bootstrap_extensions(),
+              [=](const auto& extension) {
+                return extension.typed_config().type_url() ==
+                       "type.googleapis.com/"
+                       "envoy.extensions.bootstrap.internal_listener.v3.InternalListener";
+              })) {
+        throw EnvoyException(fmt::format(
+            "error adding listener named '{}': InternalListener bootstrap extension is mandatory",
+            name_));
+      }
+      internal_listener_config_ = nullptr;
+    } else {
+      internal_listener_config_ =
+          std::make_unique<InternalListenerConfigImpl>(*internal_listener_registry);
     }
-    internal_listener_config_ =
-        std::make_unique<InternalListenerConfigImpl>(*internal_listener_registry);
   } else if (config.address().has_envoy_internal_address() ||
              std::any_of(config.additional_addresses().begin(), config.additional_addresses().end(),
                          [](const envoy::config::listener::v3::AdditionalAddress& proto_address) {
@@ -1105,13 +1126,13 @@ bool ListenerMessageUtil::socketOptionsEqual(const envoy::config::listener::v3::
     return false;
   }
 
-  bool is_equal = std::equal(lhs.socket_options().begin(), lhs.socket_options().end(),
-                             rhs.socket_options().begin(), rhs.socket_options().end(),
-                             [](const ::envoy::config::core::v3::SocketOption& option,
-                                const ::envoy::config::core::v3::SocketOption& other_option) {
-                               Protobuf::util::MessageDifferencer differencer;
-                               return differencer.Compare(option, other_option);
-                             });
+  bool is_equal =
+      std::equal(lhs.socket_options().begin(), lhs.socket_options().end(),
+                 rhs.socket_options().begin(), rhs.socket_options().end(),
+                 [](const ::envoy::config::core::v3::SocketOption& option,
+                    const ::envoy::config::core::v3::SocketOption& other_option) {
+                   return Protobuf::util::MessageDifferencer::Equals(option, other_option);
+                 });
   if (!is_equal) {
     return false;
   }
@@ -1126,15 +1147,15 @@ bool ListenerMessageUtil::socketOptionsEqual(const envoy::config::listener::v3::
       return false;
     }
     if (lhs.additional_addresses(i).has_socket_options()) {
-      is_equal = std::equal(lhs.additional_addresses(i).socket_options().socket_options().begin(),
-                            lhs.additional_addresses(i).socket_options().socket_options().end(),
-                            rhs.additional_addresses(i).socket_options().socket_options().begin(),
-                            rhs.additional_addresses(i).socket_options().socket_options().end(),
-                            [](const ::envoy::config::core::v3::SocketOption& option,
-                               const ::envoy::config::core::v3::SocketOption& other_option) {
-                              Protobuf::util::MessageDifferencer differencer;
-                              return differencer.Compare(option, other_option);
-                            });
+      is_equal =
+          std::equal(lhs.additional_addresses(i).socket_options().socket_options().begin(),
+                     lhs.additional_addresses(i).socket_options().socket_options().end(),
+                     rhs.additional_addresses(i).socket_options().socket_options().begin(),
+                     rhs.additional_addresses(i).socket_options().socket_options().end(),
+                     [](const ::envoy::config::core::v3::SocketOption& option,
+                        const ::envoy::config::core::v3::SocketOption& other_option) {
+                       return Protobuf::util::MessageDifferencer::Equals(option, other_option);
+                     });
       if (!is_equal) {
         return false;
       }
@@ -1146,6 +1167,7 @@ bool ListenerMessageUtil::socketOptionsEqual(const envoy::config::listener::v3::
 
 bool ListenerMessageUtil::filterChainOnlyChange(const envoy::config::listener::v3::Listener& lhs,
                                                 const envoy::config::listener::v3::Listener& rhs) {
+#if defined(ENVOY_ENABLE_FULL_PROTOS)
   Protobuf::util::MessageDifferencer differencer;
   differencer.set_message_field_comparison(Protobuf::util::MessageDifferencer::EQUIVALENT);
   differencer.set_repeated_field_comparison(Protobuf::util::MessageDifferencer::AS_SET);
@@ -1156,6 +1178,12 @@ bool ListenerMessageUtil::filterChainOnlyChange(const envoy::config::listener::v
   differencer.IgnoreField(envoy::config::listener::v3::Listener::GetDescriptor()->FindFieldByName(
       "filter_chain_matcher"));
   return differencer.Compare(lhs, rhs);
+#else
+  UNREFERENCED_PARAMETER(lhs);
+  UNREFERENCED_PARAMETER(rhs);
+  // Without message reflection, err on the side of reloads.
+  return false;
+#endif
 }
 
 } // namespace Server
