@@ -1065,7 +1065,8 @@ class FormatChecker:
         self.config.buildifier_path
         self.config.buildozer_path
         self.check_visibility()
-        self.run_rustfmt()
+        if os.environ.get('SKIP_RUST_FORMATTER') != None:
+            self.run_rustfmt()
         # We first run formatting on non-BUILD files, since the BUILD file format
         # requires analysis of srcs/hdrs in the BUILD file, and we don't want these
         # to be rewritten by other multiprocessing pooled processes.
