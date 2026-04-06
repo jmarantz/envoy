@@ -523,5 +523,25 @@ TEST_F(IsolatedStoreScopeMatcherTest, ChildScopeOverridesMatcher) {
   EXPECT_EQ("", rejected.name());
 }
 
+TEST_F(IsolatedStoreScopeMatcherTest, Coverage) {
+  EXPECT_EQ(0, store_->constSymbolTable().numSymbols());
+  EXPECT_EQ(0, store_->counters().size());
+  EXPECT_EQ(0, store_->gauges().size());
+  EXPECT_EQ(0, store_->histograms().size());
+  uint32_t count = 0;
+  store_->forEachHistogram(nullptr, [&count](ParentHistogram&) { ++count; });
+  EXPECT_EQ(0, count);
+  store_->evictUnused();
+  StatNamePool pool(store_->symbolTable());
+  ;
+  StatNameTagVector tags;
+  store_->extractAndAppendTags(StatName(), pool, tags);
+  EXPECT_TRUE(tags.empty());
+  store_->extractAndAppendTags("", pool, tags);
+  EXPECT_TRUE(tags.empty());
+  EXPECT_FALSE(scope_->findTextReadout(StatName()).has_value());
+  EXPECT_EQ(store_.get(), &scope_->constStore());
+}
+
 } // namespace Stats
 } // namespace Envoy
