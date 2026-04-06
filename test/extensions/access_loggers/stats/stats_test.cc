@@ -104,13 +104,12 @@ public:
   }
 
   void initialize(const envoy::extensions::access_loggers::stats::v3::Config& config) {
-    auto* gauge = new NiceMock<MockGaugeWithTags>();
-    gauge_ = gauge;
+    gauge_ = std::make_unique<NiceMock<MockGaugeWithTags>>();
+
     // Arbitrary non-zero value to represent an active gauge.
     ON_CALL(*gauge_, value()).WillByDefault(testing::Return(10));
     // Prevent eviction.
     ON_CALL(*gauge_, used()).WillByDefault(testing::Return(true));
-    gauge_ptr_ = Stats::GaugeSharedPtr(gauge_);
     gauge_->name_ = "gauge";
     gauge_->setTagExtractedName("gauge");
     ON_CALL(store_, gauge(_, _)).WillByDefault(testing::ReturnRef(*gauge_));
@@ -790,9 +789,7 @@ TEST_F(StatsAccessLoggerTest, AccessLogStateDestructorSubtractsFromSavedGauge) {
                                              store_.symbolTable().toString(tag.second));
               }
               EXPECT_FALSE(saved_tags_strs.empty());
-              auto* gauge_with_tags = dynamic_cast<MockGaugeWithTags*>(gauge_);
-              EXPECT_TRUE(gauge_with_tags != nullptr);
-              gauge_with_tags->setTags(tags->get(), store_.symbolTable());
+              gauge_->setTags(tags->get(), store_.symbolTable());
             }
             return *gauge_;
           }));

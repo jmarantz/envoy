@@ -90,8 +90,9 @@ TEST_P(StatsAccessLogIntegrationTest, Basic) {
   test_server_->waitForCounterEq("test_stat_prefix.formatcounter", 200);
   test_server_->waitUntilHistogramHasSamples("test_stat_prefix.testhistogram.tag.mytagvalue");
 
-  Stats::ParentHistogram& histogram =
+  OptRef<Stats::ParentHistogram> histogram =
       test_server_->histogram("test_stat_prefix.testhistogram.tag.mytagvalue");
+  ASSERT_TRUE(histogram.has_value());
   EXPECT_EQ(1, TestUtility::readSampleCount(test_server_->server().dispatcher(), *histogram));
   EXPECT_EQ(2, static_cast<uint32_t>(
                    TestUtility::readSampleSum(test_server_->server().dispatcher(), *histogram)));
@@ -172,8 +173,9 @@ TEST_P(StatsAccessLogIntegrationTest, PercentHistogram) {
 
   test_server_->waitUntilHistogramHasSamples("test_stat_prefix.testhistogram");
 
-  Stats::ParentHistogram& histogram =
+  OptRef<Stats::ParentHistogram> histogram =
       test_server_->histogram("test_stat_prefix.testhistogram");
+  ASSERT_TRUE(histogram.has_value());
   EXPECT_EQ(1, TestUtility::readSampleCount(test_server_->server().dispatcher(), *histogram));
 
   double p100 = histogram->cumulativeStatistics().computedQuantiles().back();
