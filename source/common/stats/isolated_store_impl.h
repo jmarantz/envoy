@@ -171,6 +171,7 @@ private:
         return {};
       }
 
+      absl::MutexLock lock(&mutex_);
       auto stat = stats_.find(name);
       if (stat != stats_.end()) {
         return *stat->second;
@@ -193,6 +194,7 @@ private:
         return {};
       }
 
+      absl::MutexLock lock(&mutex_);
       auto stat = stats_.find(name);
       if (stat != stats_.end()) {
         return *stat->second;
@@ -214,6 +216,7 @@ private:
         return {};
       }
 
+      absl::MutexLock lock(&mutex_);
       auto stat = stats_.find(name);
       if (stat != stats_.end()) {
         return *stat->second;
@@ -235,6 +238,7 @@ private:
         return {};
       }
 
+      absl::MutexLock lock(&mutex_);
       auto stat = stats_.find(name);
       if (stat != stats_.end()) {
         return *stat->second;
@@ -247,6 +251,7 @@ private:
 
     std::vector<RefcountPtr<Base>> toVector() const {
       std::vector<RefcountPtr<Base>> vec;
+      absl::MutexLock lock(&mutex_);
       vec.reserve(stats_.size());
       for (auto& stat : stats_) {
         vec.push_back(stat.second);
@@ -265,6 +270,7 @@ private:
     }
 
     void forEachStat(SizeFn f_size, StatFn<Base> f_stat) const {
+      absl::MutexLock lock(&mutex_);
       if (f_size != nullptr) {
         f_size(stats_.size());
       }
@@ -274,6 +280,7 @@ private:
     }
 
     BaseOptConstRef find(StatName name) const {
+      absl::MutexLock lock(&mutex_);
       auto stat = stats_.find(name);
       if (stat == stats_.end()) {
         return absl::nullopt;
@@ -282,7 +289,8 @@ private:
     }
 
   private:
-    StatNameHashMap<RefcountPtr<Base>> stats_;
+    StatNameHashMap<RefcountPtr<Base>> stats_ ABSL_GUARDED_BY(mutex_);
+    mutable absl::Mutex mutex_;
     CounterAllocator counter_alloc_;
     GaugeAllocator gauge_alloc_;
     HistogramAllocator histogram_alloc_;
