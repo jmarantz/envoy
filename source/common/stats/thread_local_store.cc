@@ -1125,6 +1125,7 @@ void ThreadLocalStoreImpl::forEachScope(std::function<void(std::size_t)> f_size,
 }
 
 namespace {
+
 struct MetricBag {
   explicit MetricBag(uint64_t scope_id) : scope_id_(scope_id) {}
   const uint64_t scope_id_;
@@ -1191,7 +1192,7 @@ void ThreadLocalStoreImpl::evictUnused() {
   // local caches are cleared.
   if (!evicted_metrics->empty()) {
     tls_cache_->runOnAllThreads(
-        [evicted_metrics](OptRef<TlsCache> tls_cache) {
+        [evicted_metrics = evicted_metrics.get()](OptRef<TlsCache> tls_cache) {
           for (const auto& metrics : *evicted_metrics) {
             TlsCacheEntry& entry = tls_cache->insertScope(metrics.scope_id_);
             absl::erase_if(entry.counters_,
@@ -1231,6 +1232,14 @@ void ThreadLocalStoreImpl::evictUnused() {
                     "deleted stale {} counters, {} gauges, {} text readouts, {} histograms from "
                     "{} scopes",
                     counters, gauges, readouts, histograms, scopes);
+          // Runs in the main thread after the worker threads are done
+          // populating these lists. We clear the memory held by the
+          // captured containers here. This is because both the captured
+          // references to the containers may still be held by the worker
+          // threads. We want to make sure all stats are removed from the
+          // allocator in the main thread to avoid racing stats sink iteration
+          // in the MetricSnapshotImpl constructor.
+          evicted_metrics->clear();
         });
   }
 }
