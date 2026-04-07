@@ -1083,7 +1083,7 @@ private:
           peer_san = endpoint_peer->identity_;
         }
       }
-      // This won't work for sidecar/ingress -> ambient because of the CONNECT
+      // This won't work for sidecar/ingress -> ambient becuase of the CONNECT
       // tunnel.
       if (ssl_info && !ssl_info->uriSanLocalCertificate().empty()) {
         local_san = ssl_info->uriSanLocalCertificate()[0];

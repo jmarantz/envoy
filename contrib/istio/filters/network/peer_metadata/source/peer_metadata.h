@@ -54,7 +54,7 @@ PACKED_STRUCT(struct PeerMetadataHeader {
  * baggage header information from filter state (we expect TCP Proxy to
  * populate it), collect other details that are missing from the baggage, i.e.
  * the upstream peer principle, encode those details into a sequence of bytes
- * and will inject it downstream.
+ * and will inject it dowstream.
  */
 class Filter : public Network::Filter, Logger::Loggable<Logger::Id::filter> {
 public:
