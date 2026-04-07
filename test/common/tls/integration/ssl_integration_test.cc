@@ -79,7 +79,6 @@ BORINGSSL_TEST_P(SslIntegrationTest, UnknownSslAlert) {
   }
 
   const std::string counter_name = listenerStatPrefix("ssl.connection_error");
-  // OptRef<Stats::Counter> counter = test_server_->counter(counter_name);
   test_server_->waitForCounterGe(counter_name, 1);
   connection->close(Network::ConnectionCloseType::NoFlush);
 }
@@ -294,6 +293,7 @@ TEST_P(SslIntegrationTest, TestServerCipherPreference) {
 
   const std::string counter_name = listenerStatPrefix("ssl.ciphers.ECDHE-RSA-AES128-GCM-SHA256");
   OptRef<Stats::Counter> counter = test_server_->counter(counter_name);
+  ASSERT_TRUE(counter.has_value());
   EXPECT_EQ(1, counter->value());
 }
 
@@ -313,6 +313,7 @@ TEST_P(SslIntegrationTest, ClientCipherPreference) {
 
   const std::string counter_name = listenerStatPrefix("ssl.ciphers.ECDHE-RSA-AES256-GCM-SHA384");
   OptRef<Stats::Counter> counter = test_server_->counter(counter_name);
+  ASSERT_TRUE(counter.has_value());
   EXPECT_EQ(1, counter->value());
 }
 
@@ -838,6 +839,7 @@ TEST_P(SslCertficateIntegrationTest, ServerEcdsaClientRsaOnly) {
   const std::string counter_name = listenerStatPrefix("ssl.connection_error");
   OptRef<Stats::Counter> counter = test_server_->counter(counter_name);
   test_server_->waitForCounterGe(counter_name, 1);
+  ASSERT_TRUE(counter.has_value());
   EXPECT_EQ(1U, counter->value());
   counter->reset();
 }
@@ -907,6 +909,7 @@ TEST_P(SslCertficateIntegrationTest, ServerRsaClientEcdsaOnly) {
   const std::string counter_name = listenerStatPrefix("ssl.connection_error");
   OptRef<Stats::Counter> counter = test_server_->counter(counter_name);
   test_server_->waitForCounterGe(counter_name, 1);
+  ASSERT_TRUE(counter.has_value());
   EXPECT_EQ(1U, counter->value());
   counter->reset();
 }

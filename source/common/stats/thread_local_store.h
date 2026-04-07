@@ -191,7 +191,7 @@ public:
   bool iterateRef(const IterateRefFn<Histogram>& fn) const override {
     bool cont = true;
     forEachHistogram(nullptr, [fn, &cont](ParentHistogram& histogram) {
-      // Note: up-cases to Histogram, annoyingly.
+      // Note: up-casts to Histogram, annoyingly.
       cont = cont && fn(histogram);
     });
     return cont;

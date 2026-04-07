@@ -1214,7 +1214,6 @@ void ThreadLocalStoreImpl::evictUnused() {
           }
         },
         [evicted_metrics]() {
-          // main_thread_dispatcher_->post([evicted_metrics = std::move(evicted_metrics)]() {
           // We want to delete stale stats on the main thread since stat
           // destructors lock the stats allocator. Note that we might have
           // received fresh values on the stale cache-local stats after deleting them from the

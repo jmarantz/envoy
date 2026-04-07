@@ -444,6 +444,7 @@ void StatsAccessLog::emitLogForGauge(const Gauge& gauge, const Formatter::Contex
   Stats::Gauge::ImportMode import_mode = op == Gauge::OperationType::SET
                                              ? Stats::Gauge::ImportMode::NeverImport
                                              : Stats::Gauge::ImportMode::Accumulate;
+
   if (op == Gauge::OperationType::SET) {
     Stats::Gauge& gauge_stat =
         scope_->gaugeFromStatNameWithTags(gauge.stat_.name_, tags, import_mode);

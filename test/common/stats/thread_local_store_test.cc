@@ -341,7 +341,7 @@ TEST_F(StatsThreadLocalStoreTest, Tls) {
   EXPECT_EQ(1UL, Utility::countersMainThread(*store_).size());
 
   EXPECT_EQ(&c1, TestUtility::findCounter(*store_, "c1"));
-  // EXPECT_EQ(2L, TestUtility::findCounter(*store_, "c1")).use_count());
+  EXPECT_EQ(1L, TestUtility::findCounter(*store_, "c1")->use_count());
   EXPECT_EQ(1UL, Utility::gaugesMainThread(*store_).size());
   EXPECT_EQ(&g1, Utility::gaugesMainThread(*store_).front()); // front() ok when size()==1
   EXPECT_EQ(1L, Utility::gaugesMainThread(*store_).front()->use_count());
@@ -664,7 +664,7 @@ TEST_F(StatsThreadLocalStoreTest, ScopeDelete) {
   CounterSharedPtr c1 = TestUtility::findCounter(*store_, "scope1.c1");
   EXPECT_EQ("scope1.c1", c1->name());
 
-  EXPECT_CALL(main_thread_dispatcher_, post(_)).Times(testing::AtLeast(1));
+  EXPECT_CALL(main_thread_dispatcher_, post(_));
   EXPECT_CALL(tls_, runOnAllThreads(_, _)).Times(testing::AtLeast(1));
   scope1.reset();
   // The counter is gone from all scopes, but is still held in the local
@@ -2042,12 +2042,6 @@ TEST(ThreadLocalStoreThreadTest, ConstructDestruct) {
   ScopeSharedPtr scope1 = store.createScope("scope1.");
 }
 
-class OneWorkerThread : public ThreadLocalRealThreadsMixin, public testing::Test {
-protected:
-  static constexpr uint32_t NumThreads = 1;
-  OneWorkerThread() : ThreadLocalRealThreadsMixin(NumThreads) {}
-};
-
 // Histogram tests
 TEST_F(HistogramTest, BasicSingleHistogramMerge) {
   Histogram& h1 = scope_.histogramFromString("h1", Histogram::Unit::Unspecified);
@@ -2392,6 +2386,12 @@ TEST_F(HistogramTest, UnsinkedHistogramsAreMerged) {
   EXPECT_EQ(h2.used(), true);
 }
 
+class OneWorkerThread : public ThreadLocalRealThreadsMixin, public testing::Test {
+protected:
+  static constexpr uint32_t NumThreads = 1;
+  OneWorkerThread() : ThreadLocalRealThreadsMixin(NumThreads) {}
+};
+
 // Reproduces a race-condition between forEachScope and scope deletion. If we
 // replace the code in ThreadLocalStoreImpl::forEachScope with this:
 //
@@ -2483,9 +2483,7 @@ TEST_F(ClusterShutdownCleanupStarvationTest, TwelveThreadsWithBlockade) {
     tlsBlock();
 
     // Finally, wait for the final central-cache cleanup, which occurs on the main thread.
-    for (int i = 0; i < 10; ++i) {
-      mainDispatchBlock();
-    }
+    mainDispatchBlock();
 
     // Here we show that the counter cleanups have finished, because the use-count is 1.
     EXPECT_EQ(1, counter->use_count()) << "index=" << i;
@@ -2626,8 +2624,6 @@ TEST_F(HistogramThreadTest, ScopeOverlap) {
   scope2.reset();
   histograms.clear();
   mergeHistograms();
-  runOnMainBlocking([]() {});
-  runOnMainBlocking([]() {});
 
   EXPECT_EQ(0, Utility::histogramsMainThread(*store_).size());
   EXPECT_EQ(0, numTlsHistograms());

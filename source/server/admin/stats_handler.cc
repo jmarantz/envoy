@@ -51,8 +51,7 @@ StatsHandler::StatsHandler(Server::Instance& server) : HandlerContextBase(server
 
 Http::Code StatsHandler::handlerResetCounters(Http::ResponseHeaderMap&, Buffer::Instance& response,
                                               AdminStream&) {
-  Stats::StatFn<Stats::Counter> reset_fn = [](Stats::Counter& counter) { counter.reset(); };
-  server_.stats().forEachCounter(nullptr, reset_fn);
+  server_.stats().forEachCounter(nullptr, [](Stats::Counter& counter) { counter.reset(); });
   server_.stats().symbolTable().clearRecentLookups();
   response.add("OK\n");
   return Http::Code::OK;
@@ -172,7 +171,6 @@ Http::Code StatsHandler::prometheusFlushAndRender(const StatsParams& params,
   if (server_.statsConfig().flushOnAdmin()) {
     server_.flushStats();
   }
-
   prometheusRender(server_.stats(), server_.api().customStatNamespaces(), server_.clusterManager(),
                    params, request_headers, response_headers, response);
   return Http::Code::OK;
