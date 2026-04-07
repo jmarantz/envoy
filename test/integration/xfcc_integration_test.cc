@@ -458,7 +458,7 @@ TEST_P(XfccIntegrationTest, TagExtractedNameGenerationTest) {
   // std::cout << "};" << std::endl;
   // std::cout << "tag_extracted_gauge_map = {";
   // first = true;
-  // test_server_->forEachGauges(nullptr, [](Stats::Gauge& gauge) {
+  // test_server_->forEachGauge(nullptr, [](Stats::Gauge& gauge) {
   //   if (first) }
   //     first = false;
   //   } else {
@@ -928,14 +928,16 @@ TEST_P(XfccIntegrationTest, TagExtractedNameGenerationTest) {
     }
   };
 
-  for (Stats::Counter* counter : Stats::Utility::countersMainThread(test_server_->statStore())) {
-    test_name_against_mapping(tag_extracted_counter_map, *counter);
-  }
+  test_server_->statStore().forEachCounter(
+      nullptr, [&test_name_against_mapping, &tag_extracted_counter_map](Stats::Counter& counter) {
+        test_name_against_mapping(tag_extracted_counter_map, counter);
+      });
   EXPECT_EQ(tag_extracted_counter_map, MetricMap{});
 
-  for (Stats::Gauge* gauge : Stats::Utility::gaugesMainThread(test_server_->statStore())) {
-    test_name_against_mapping(tag_extracted_gauge_map, *gauge);
-  }
+  test_server_->statStore().forEachGauge(
+      nullptr, [&test_name_against_mapping, &tag_extracted_counter_map](Stats::Gauge& gauge) {
+        test_name_against_mapping(tag_extracted_gauge_map, gauge);
+      });
   EXPECT_EQ(tag_extracted_gauge_map, MetricMap{});
 }
 } // namespace Xfcc

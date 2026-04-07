@@ -374,10 +374,6 @@ public:
   bool iterateRef(const IterateRefFn<TextReadout>& fn) const override {
     return store_.iterateRef(fn);
   }
-  /*bool iterate(const IterateFn<Counter>& fn) const override { return store_.iterate(fn); }
-  bool iterate(const IterateFn<Gauge>& fn) const override { return store_.iterate(fn); }
-  bool iterate(const IterateFn<Histogram>& fn) const override { return store_.iterate(fn); }
-  bool iterate(const IterateFn<TextReadout>& fn) const override { return store_.iterate(fn); }*/
   void extractAndAppendTags(StatName, StatNamePool&, StatNameTagVector&) override {};
   void extractAndAppendTags(absl::string_view, StatNamePool&, StatNameTagVector&) override {};
   const Stats::TagVector& fixedTags() override { CONSTRUCT_ON_FIRST_USE(Stats::TagVector); }
